@@ -16,6 +16,10 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 
+# ...but DO keep the per-environment configuration that is intentionally
+# version-controlled (contains no secrets, only IDs and sizing).
+!**/envs/*.tfvars
+
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
 override.tf
