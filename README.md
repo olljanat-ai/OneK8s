@@ -14,20 +14,24 @@ Operator and per-tenant workload identities.
 │   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
 │   └── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 ├── modules/
-│   └── tenant-namespace/   # Reusable, cloud-aware tenant module
+│   └── tenant-namespace/   # Reusable tenant module — cloud is a variable
+│       ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp, unified outputs
 │       ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
 │       ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
 │       ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
 │       └── gcp/            #   GSA + WI binding + IAM condition
-├── tenants/                # Tenant instantiations — deployed independently
-│   ├── azure/  aws/  gcp/  #   per-env tfvars define the tenant roster
+├── tenants/                # ONE stack for all clouds — deployed independently
+│   ├── envs/               #   <cloud>-<env>.tfvars: cloud is a parameter in the file
+│   └── backend/            #   <cloud>-<env>.hcl state configs (shared state home)
 ├── .github/workflows/      # PR validation + OIDC deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
 ```
 
-Each stack supports **dev / staging / prod** via `envs/<env>.tfvars` +
-`backend/<env>.hcl`. Tenants depend on foundation remote-state outputs;
-foundations never depend on tenants.
+Foundations support **dev / staging / prod** via `envs/<env>.tfvars` +
+`backend/<env>.hcl`; the single tenants stack targets a cloud and
+environment via `envs/<cloud>-<env>.tfvars` (the file sets `cloud = "..."`)
+— tenant definition syntax is identical on every cloud. Tenants depend on
+foundation remote-state outputs; foundations never depend on tenants.
 
 ## Security model (short version)
 
@@ -47,9 +51,9 @@ cd foundations/aws
 terraform init -backend-config=backend/dev.hcl
 terraform apply -var-file=envs/dev.tfvars
 
-cd ../../tenants/aws
-terraform init -backend-config=backend/dev.hcl
-terraform apply -var-file=envs/dev.tfvars       # onboards the tenant roster
+cd ../../tenants                                # same stack for every cloud
+terraform init -backend-config=backend/aws-dev.hcl
+terraform apply -var-file=envs/aws-dev.tfvars   # cloud = "aws" set in the file
 ```
 
 Full setup (state bootstrap, GitHub OIDC, environment protection):

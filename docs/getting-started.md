@@ -22,9 +22,12 @@ Create the state stores and put their coordinates into each stack's
 Create a deploy identity per cloud, trusted for this repository via OIDC:
 
 - **Azure**: an Entra app (or UAMI) with federated credentials for
-  `repo:<org>/<repo>:environment:azure-<env>` (and `:pull_request` if PR
-  plans should run). Grant it Contributor + RBAC-admin rights scoped to the
-  platform subscription.
+  `repo:<org>/<repo>:environment:<cloud>-<env>` (and `:pull_request` if PR
+  plans should run). Note: **all nine** `<cloud>-<env>` environments need a
+  federated credential, not just the `azure-*` ones — the unified tenants
+  stack keeps its state in Azure Storage, so AWS/GCP tenant deploys also
+  authenticate to Azure for state access. Grant the app Contributor +
+  RBAC-admin rights scoped to the platform subscription.
 - **AWS**: an IAM role trusting `token.actions.githubusercontent.com` with
   `sub` conditions for this repo. Grant it the rights to manage the
   foundation + tenant resources.
@@ -58,7 +61,10 @@ Or via Actions: **Deploy Foundations** → cloud `aws`, environment `dev`.
 
 ## 4. Onboard tenants
 
-Edit `tenants/aws/envs/dev.tfvars` and add a tenant:
+There is one tenants stack for all clouds; the target cloud is just the
+`cloud = "..."` parameter inside the env file. Edit
+`tenants/envs/aws-dev.tfvars` and add a tenant — the syntax is identical on
+every cloud:
 
 ```hcl
 tenants = {
@@ -72,10 +78,13 @@ tenants = {
 Then:
 
 ```bash
-cd tenants/aws
-terraform init -backend-config=backend/dev.hcl
-terraform apply -var-file=envs/dev.tfvars
+cd tenants
+terraform init -backend-config=backend/aws-dev.hcl
+terraform apply -var-file=envs/aws-dev.tfvars
 ```
+
+(Azure credentials are needed too — tenant state lives in the Azure Storage
+state home regardless of cloud; use `az login` or ARM_* env vars.)
 
 Or via Actions: **Deploy Tenants** → cloud `aws`, environment `dev`.
 
@@ -95,6 +104,7 @@ prefix fails at the cloud IAM layer.
 ## Environment promotion
 
 dev → staging → prod is data-driven: the same code reads a different
-`envs/<env>.tfvars` + `backend/<env>.hcl`. Merges to `main` roll dev
-automatically; staging and prod are explicit `workflow_dispatch` runs gated
-by their GitHub environments.
+`envs/<env>.tfvars` + `backend/<env>.hcl` (foundations) or
+`envs/<cloud>-<env>.tfvars` + `backend/<cloud>-<env>.hcl` (tenants).
+Merges to `main` roll dev automatically; staging and prod are explicit
+`workflow_dispatch` runs gated by their GitHub environments.

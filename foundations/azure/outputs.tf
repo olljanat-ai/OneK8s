@@ -1,4 +1,4 @@
-# Everything tenants/azure needs is exported here and consumed through
+# Everything the tenants stack needs is exported here and consumed through
 # terraform_remote_state — the dependency direction is strictly
 # foundations -> tenants.
 output "resource_group_name" {
