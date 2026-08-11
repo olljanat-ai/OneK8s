@@ -21,6 +21,14 @@ on:
         description: "dev | staging | prod"
         required: true
         type: string
+      config:
+        description: >-
+          File stem for backend/<config>.hcl and envs/<config>.tfvars.
+          Defaults to the environment name; the unified tenants stack passes
+          "<cloud>-<environment>".
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -32,11 +40,12 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.cloud }}-${{ inputs.environment }}
     concurrency:
-      # One writer per stack+environment; never cancel a running apply.
-      group: ${{ inputs.stack }}-${{ inputs.environment }}
+      # One writer per stack+config; never cancel a running apply.
+      group: ${{ inputs.stack }}-${{ inputs.config || inputs.environment }}
       cancel-in-progress: false
     env:
       TF_IN_AUTOMATION: "true"
+      TF_CONFIG: ${{ inputs.config || inputs.environment }}
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -73,11 +82,11 @@ jobs:
 
       - name: terraform init
         working-directory: ${{ inputs.stack }}
-        run: terraform init -backend-config=backend/${{ inputs.environment }}.hcl
+        run: terraform init -backend-config=backend/${TF_CONFIG}.hcl
 
       - name: terraform plan
         working-directory: ${{ inputs.stack }}
-        run: terraform plan -var-file=envs/${{ inputs.environment }}.tfvars -input=false -out=tfplan
+        run: terraform plan -var-file=envs/${TF_CONFIG}.tfvars -input=false -out=tfplan
 
       - name: terraform apply
         working-directory: ${{ inputs.stack }}
