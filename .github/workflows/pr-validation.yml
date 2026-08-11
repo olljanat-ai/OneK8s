@@ -1,0 +1,135 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write # OIDC for cloud plans
+  pull-requests: write
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.15.8"
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  fmt:
+    name: terraform fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive -diff
+
+  validate:
+    name: validate (${{ matrix.stack }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stack:
+          - foundations/azure
+          - foundations/aws
+          - foundations/gcp
+          - tenants/azure
+          - tenants/aws
+          - tenants/gcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: terraform validate
+        working-directory: ${{ matrix.stack }}
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+  tflint:
+    name: tflint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: latest
+      - run: tflint --init
+      - run: tflint --recursive --format compact
+
+  security:
+    name: checkov (static security scan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          framework: terraform
+          quiet: true
+          # Findings are reported but do not fail the PR; tighten by removing
+          # soft_fail once the baseline is clean.
+          soft_fail: true
+
+  # Plans run against the dev environment of each cloud. They require the
+  # OIDC roles/apps referenced below to exist, so they are gated behind a
+  # repository variable to keep PR checks green on a fresh fork/clone:
+  # set ENABLE_CLOUD_PLANS=true once cloud credentials are configured.
+  plan:
+    name: plan ${{ matrix.stack }} (dev)
+    if: vars.ENABLE_CLOUD_PLANS == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - stack: foundations/azure
+            cloud: azure
+          - stack: foundations/aws
+            cloud: aws
+          - stack: foundations/gcp
+            cloud: gcp
+          - stack: tenants/azure
+            cloud: azure
+          - stack: tenants/aws
+            cloud: aws
+          - stack: tenants/gcp
+            cloud: gcp
+    env:
+      # azurerm/azapi providers pick these up directly and use GitHub OIDC.
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_USE_OIDC: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials (OIDC)
+        if: matrix.cloud == 'aws'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Authenticate to GCP (OIDC)
+        if: matrix.cloud == 'gcp'
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - name: terraform plan
+        working-directory: ${{ matrix.stack }}
+        run: |
+          terraform init -backend-config=backend/dev.hcl
+          terraform plan -var-file=envs/dev.tfvars -lock=false -input=false -no-color
