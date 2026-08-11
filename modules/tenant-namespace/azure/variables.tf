@@ -67,3 +67,25 @@ variable "managed_namespace_api_version" {
   type        = string
   default     = "2025-05-02-preview"
 }
+
+variable "network_policy" {
+  description = "Default tenant NetworkPolicy (Azure managed-namespace vocabulary: AllowAll, AllowSameNamespace, DenyAll)."
+  type = object({
+    ingress = optional(string, "AllowSameNamespace")
+    egress  = optional(string, "AllowAll")
+  })
+  default = {}
+}
+
+variable "limit_range" {
+  description = "Per-container default resource requests/limits and optional maximums for the tenant namespace."
+  type = object({
+    default_cpu_request    = optional(string, "100m")
+    default_memory_request = optional(string, "128Mi")
+    default_cpu_limit      = optional(string, "500m")
+    default_memory_limit   = optional(string, "512Mi")
+    max_cpu                = optional(string)
+    max_memory             = optional(string)
+  })
+  default = {}
+}

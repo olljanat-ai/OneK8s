@@ -14,6 +14,8 @@ module "azure" {
   key_vault_id         = var.foundation.key_vault_id
   key_vault_uri        = var.foundation.key_vault_uri
   quota                = var.quota
+  network_policy       = var.network_policy
+  limit_range          = var.limit_range
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
 }
@@ -30,6 +32,8 @@ module "aws" {
   account_id           = var.foundation.account_id
   secrets_kms_key_arn  = var.foundation.secrets_kms_key_arn
   quota                = var.quota
+  network_policy       = var.network_policy
+  limit_range          = var.limit_range
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
 }
@@ -45,6 +49,8 @@ module "gcp" {
   cluster_name         = var.foundation.cluster_name
   cluster_location     = var.foundation.cluster_location
   quota                = var.quota
+  network_policy       = var.network_policy
+  limit_range          = var.limit_range
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
 }

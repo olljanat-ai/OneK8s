@@ -31,8 +31,8 @@ resource "azapi_resource" "managed_namespace" {
         memoryLimit   = var.quota.memory_limits
       }
       defaultNetworkPolicy = {
-        ingress = "AllowSameNamespace"
-        egress  = "AllowAll"
+        ingress = var.network_policy.ingress
+        egress  = var.network_policy.egress
       }
       adoptionPolicy = "Never"
       deletePolicy   = "Delete"
@@ -88,6 +88,7 @@ module "common" {
   tenant_name      = var.tenant_name
   namespace        = local.namespace
   create_namespace = false # provided by the managed namespace above
+  limit_range      = var.limit_range
 
   service_account_name = var.service_account_name
   service_account_annotations = {

@@ -40,5 +40,7 @@ module "tenant" {
   foundation  = local.foundation
 
   quota            = each.value.quota
+  limit_range      = each.value.limit_range
+  network_policy   = each.value.network_policy
   namespace_labels = each.value.labels
 }

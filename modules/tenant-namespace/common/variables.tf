@@ -38,6 +38,46 @@ variable "quota" {
   default = {}
 }
 
+variable "network_policy" {
+  description = <<-EOT
+    Default tenant NetworkPolicy, expressed with the same vocabulary as the
+    Azure managed-namespace defaultNetworkPolicy (AllowAll, AllowSameNamespace,
+    DenyAll) so tenant definitions stay identical on every cloud. Only applied
+    when create_namespace is true; on Azure the managed namespace enforces it.
+  EOT
+  type = object({
+    ingress = optional(string, "AllowSameNamespace")
+    egress  = optional(string, "AllowAll")
+  })
+  default = {}
+
+  validation {
+    condition = alltrue([
+      contains(["AllowAll", "AllowSameNamespace", "DenyAll"], var.network_policy.ingress),
+      contains(["AllowAll", "AllowSameNamespace", "DenyAll"], var.network_policy.egress),
+    ])
+    error_message = "network_policy.ingress and network_policy.egress must each be one of: AllowAll, AllowSameNamespace, DenyAll."
+  }
+}
+
+variable "limit_range" {
+  description = <<-EOT
+    Per-container default resource requests/limits (applied when a container
+    omits them) and optional per-container maximums. Without these defaults the
+    ResourceQuota's limits.* entries would reject any pod that does not declare
+    explicit limits.
+  EOT
+  type = object({
+    default_cpu_request    = optional(string, "100m")
+    default_memory_request = optional(string, "128Mi")
+    default_cpu_limit      = optional(string, "500m")
+    default_memory_limit   = optional(string, "512Mi")
+    max_cpu                = optional(string)
+    max_memory             = optional(string)
+  })
+  default = {}
+}
+
 variable "service_account_name" {
   description = "Name of the tenant workload ServiceAccount."
   type        = string

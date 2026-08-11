@@ -12,7 +12,8 @@ hard, cloud-enforced secret isolation.
 │  foundations/<cloud>                          tenants/<cloud>                     │
 │  ┌─────────────────────────────┐              ┌─────────────────────────────┐     │
 │  │ Cluster (AKS/EKS/GKE)       │   remote     │ for each tenant:            │     │
-│  │  - workload identity/IRSA   │   state      │  - namespace (+quota,netpol)│     │
+│  │  - workload identity/IRSA   │   state      │  - namespace (quota, limits,│     │
+│  │                             │              │    network policy)          │     │
 │  │  - Cilium / Dataplane V2    │ ──outputs──▶ │  - cloud identity           │     │
 │  │  - External Secrets Operator│              │  - ServiceAccount           │     │
 │  │  - policy guardrails        │              │  - namespaced SecretStore   │     │
@@ -50,7 +51,7 @@ Azure credentials (state home) plus the selected cloud's credentials.
 | Pod-level cloud identity | Workload Identity (OIDC issuer + FIC) | IRSA (IAM OIDC provider) | Workload Identity (`<project>.svc.id.goog`) |
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager |
-| Tenant namespace | **Azure Managed Namespace** (azapi) | Namespace + quota + netpol | Namespace + quota + netpol |
+| Tenant namespace | **Azure Managed Namespace** (azapi: quota + netpol) + LimitRange | Namespace + quota + netpol + LimitRange | Namespace + quota + netpol + LimitRange |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 
 ## Secret isolation (the core security invariant)

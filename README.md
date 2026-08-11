@@ -16,7 +16,7 @@ Operator and per-tenant workload identities.
 ├── modules/
 │   └── tenant-namespace/   # Reusable tenant module — cloud is a variable
 │       ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp, unified outputs
-│       ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
+│       ├── common/         #   namespace, quota, limits, netpol, SA, namespaced SecretStore
 │       ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
 │       ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
 │       └── gcp/            #   GSA + WI binding + IAM condition

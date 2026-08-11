@@ -39,6 +39,22 @@ variable "tenants" {
       memory_limits   = optional(string, "16Gi")
       pods            = optional(string, "50")
     }), {})
+    # Per-container defaults applied when a workload omits resources, plus
+    # optional per-container maximums (LimitRange).
+    limit_range = optional(object({
+      default_cpu_request    = optional(string, "100m")
+      default_memory_request = optional(string, "128Mi")
+      default_cpu_limit      = optional(string, "500m")
+      default_memory_limit   = optional(string, "512Mi")
+      max_cpu                = optional(string)
+      max_memory             = optional(string)
+    }), {})
+    # Azure managed-namespace vocabulary on every cloud:
+    # AllowAll | AllowSameNamespace | DenyAll.
+    network_policy = optional(object({
+      ingress = optional(string, "AllowSameNamespace")
+      egress  = optional(string, "AllowAll")
+    }), {})
     labels = optional(map(string), {})
   }))
   default = {}

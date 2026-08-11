@@ -43,6 +43,41 @@ variable "quota" {
   default = {}
 }
 
+variable "network_policy" {
+  description = <<-EOT
+    Default tenant NetworkPolicy, using the Azure managed-namespace vocabulary
+    (AllowAll, AllowSameNamespace, DenyAll) on every cloud. On Azure it is
+    enforced by the managed namespace; on AWS/GCP by an equivalent in-cluster
+    NetworkPolicy.
+  EOT
+  type = object({
+    ingress = optional(string, "AllowSameNamespace")
+    egress  = optional(string, "AllowAll")
+  })
+  default = {}
+
+  validation {
+    condition = alltrue([
+      contains(["AllowAll", "AllowSameNamespace", "DenyAll"], var.network_policy.ingress),
+      contains(["AllowAll", "AllowSameNamespace", "DenyAll"], var.network_policy.egress),
+    ])
+    error_message = "network_policy.ingress and network_policy.egress must each be one of: AllowAll, AllowSameNamespace, DenyAll."
+  }
+}
+
+variable "limit_range" {
+  description = "Per-container default resource requests/limits (applied when a container omits them) and optional per-container maximums."
+  type = object({
+    default_cpu_request    = optional(string, "100m")
+    default_memory_request = optional(string, "128Mi")
+    default_cpu_limit      = optional(string, "500m")
+    default_memory_limit   = optional(string, "512Mi")
+    max_cpu                = optional(string)
+    max_memory             = optional(string)
+  })
+  default = {}
+}
+
 variable "namespace_labels" {
   description = "Extra labels for the namespace."
   type        = map(string)

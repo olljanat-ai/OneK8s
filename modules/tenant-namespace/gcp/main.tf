@@ -46,6 +46,8 @@ module "common" {
   create_namespace = true
   namespace_labels = var.namespace_labels
   quota            = var.quota
+  network_policy   = var.network_policy
+  limit_range      = var.limit_range
 
   service_account_name = var.service_account_name
   service_account_annotations = {

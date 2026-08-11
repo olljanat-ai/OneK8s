@@ -25,10 +25,33 @@ cloud's providers. All three delegate the Kubernetes-side work to `common`.
 | Concern | Azure | AWS | GCP |
 |---|---|---|---|
 | Namespace | **Azure Managed Namespace** (`azapi`, incl. default quota & network policy) | Namespace + ResourceQuota + NetworkPolicy | Namespace + ResourceQuota + NetworkPolicy |
+| Container limits | LimitRange (`common`) | LimitRange (`common`) | LimitRange (`common`) |
 | Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding |
 | K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` |
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` |
+
+## Resource limits and network policy
+
+Every tenant namespace gets three guardrails, configured with **identical
+syntax on every cloud**:
+
+- **`quota`** — namespace-wide ResourceQuota (CPU/memory requests+limits,
+  pod count). On Azure it is enforced by the managed namespace's
+  `defaultResourceQuota`; on AWS/GCP by an in-cluster `ResourceQuota`.
+- **`limit_range`** — per-container default requests/limits injected when a
+  workload omits them, plus optional per-container maximums. Created
+  in-cluster by `common` on **all** clouds (the Azure managed namespace has
+  no LimitRange concept). Without these defaults, the quota's `limits.*`
+  entries would reject any pod that does not declare explicit limits.
+- **`network_policy`** — `{ ingress, egress }`, each one of `AllowAll`,
+  `AllowSameNamespace` or `DenyAll` — the Azure managed-namespace
+  `defaultNetworkPolicy` vocabulary, reused verbatim for AWS/GCP where
+  `common` renders an equivalent in-cluster NetworkPolicy (enforced by
+  Cilium on EKS and Dataplane V2 on GKE, both set up by the foundations).
+  Defaults: ingress `AllowSameNamespace`, egress `AllowAll`. Note that
+  restricting egress also blocks DNS to `kube-system`, matching the literal
+  Azure semantics — pair it with a DNS allowance before using in anger.
 
 ## Isolation model
 
