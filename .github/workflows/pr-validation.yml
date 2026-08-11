@@ -38,9 +38,7 @@ jobs:
           - foundations/azure
           - foundations/aws
           - foundations/gcp
-          - tenants/azure
-          - tenants/aws
-          - tenants/gcp
+          - tenants
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -82,25 +80,33 @@ jobs:
   # repository variable to keep PR checks green on a fresh fork/clone:
   # set ENABLE_CLOUD_PLANS=true once cloud credentials are configured.
   plan:
-    name: plan ${{ matrix.stack }} (dev)
+    name: plan ${{ matrix.stack }} (${{ matrix.config }})
     if: vars.ENABLE_CLOUD_PLANS == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
+        # "config" is the backend/*.hcl + envs/*.tfvars file stem. The single
+        # tenants stack targets a cloud purely through that file.
         include:
           - stack: foundations/azure
             cloud: azure
+            config: dev
           - stack: foundations/aws
             cloud: aws
+            config: dev
           - stack: foundations/gcp
             cloud: gcp
-          - stack: tenants/azure
+            config: dev
+          - stack: tenants
             cloud: azure
-          - stack: tenants/aws
+            config: azure-dev
+          - stack: tenants
             cloud: aws
-          - stack: tenants/gcp
+            config: aws-dev
+          - stack: tenants
             cloud: gcp
+            config: gcp-dev
     env:
       # azurerm/azapi providers pick these up directly and use GitHub OIDC.
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -131,5 +137,5 @@ jobs:
       - name: terraform plan
         working-directory: ${{ matrix.stack }}
         run: |
-          terraform init -backend-config=backend/dev.hcl
-          terraform plan -var-file=envs/dev.tfvars -lock=false -input=false -no-color
+          terraform init -backend-config=backend/${{ matrix.config }}.hcl
+          terraform plan -var-file=envs/${{ matrix.config }}.tfvars -lock=false -input=false -no-color
