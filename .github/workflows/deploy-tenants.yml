@@ -1,0 +1,59 @@
+name: Deploy Tenants
+
+# Tenants deploy independently of foundations; they only consume foundation
+# remote-state outputs. Path filter includes the tenant module so module
+# changes roll out to tenants on merge.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "tenants/**"
+      - "modules/tenant-namespace/**"
+      - ".github/workflows/deploy-tenants.yml"
+      - ".github/workflows/_terraform-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Cloud to deploy"
+        required: true
+        default: "all"
+        type: choice
+        options: [all, azure, aws, gcp]
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  azure:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'azure'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: tenants/azure
+      cloud: azure
+      environment: ${{ inputs.environment || 'dev' }}
+    secrets: inherit
+
+  aws:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'aws'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: tenants/aws
+      cloud: aws
+      environment: ${{ inputs.environment || 'dev' }}
+    secrets: inherit
+
+  gcp:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'gcp'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: tenants/gcp
+      cloud: gcp
+      environment: ${{ inputs.environment || 'dev' }}
+    secrets: inherit

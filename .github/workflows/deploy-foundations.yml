@@ -1,0 +1,59 @@
+name: Deploy Foundations
+
+# Foundations (cluster + secret backend) deploy independently of tenants.
+#  - Merge to main touching foundations/** auto-deploys the dev environment.
+#  - staging/prod (and targeted clouds) deploy via workflow_dispatch, guarded
+#    by GitHub environment protection rules on "<cloud>-<environment>".
+on:
+  push:
+    branches: [main]
+    paths:
+      - "foundations/**"
+      - ".github/workflows/deploy-foundations.yml"
+      - ".github/workflows/_terraform-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      cloud:
+        description: "Cloud to deploy"
+        required: true
+        default: "all"
+        type: choice
+        options: [all, azure, aws, gcp]
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "dev"
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  azure:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'azure'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: foundations/azure
+      cloud: azure
+      environment: ${{ inputs.environment || 'dev' }}
+    secrets: inherit
+
+  aws:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'aws'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: foundations/aws
+      cloud: aws
+      environment: ${{ inputs.environment || 'dev' }}
+    secrets: inherit
+
+  gcp:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'gcp'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: foundations/gcp
+      cloud: gcp
+      environment: ${{ inputs.environment || 'dev' }}
+    secrets: inherit
