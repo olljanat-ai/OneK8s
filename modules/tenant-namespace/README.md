@@ -1,19 +1,24 @@
 # tenant-namespace module
 
 Reusable, cloud-aware Terraform module that onboards one tenant onto a
-cluster provisioned by `foundations/<cloud>`. It is a composite module:
+cluster provisioned by `foundations/<cloud>`. It has **one entry point for
+all clouds** — the cloud is just a variable:
 
 ```
 tenant-namespace/
+├── main.tf … # dispatcher: cloud = "azure" | "aws" | "gcp"
 ├── common/   # Kubernetes-side resources shared by all clouds
 ├── azure/    # AKS: Managed Namespace + UAMI + FIC + ABAC on Key Vault
 ├── aws/      # EKS: Namespace + IAM Role (IRSA) + prefix-scoped Secrets Manager
 └── gcp/      # GKE: Namespace + GSA + Workload Identity + IAM condition
 ```
 
-Callers use the cloud-specific entry point (`.../tenant-namespace/azure`,
-`.../aws`, `.../gcp`) so that each root only needs the providers for its own
-cloud. All three wrappers delegate the Kubernetes-side work to `common`.
+Callers use the module root and pass `cloud` plus the matching foundation's
+outputs object; the dispatcher instantiates exactly one cloud
+implementation and exposes identically-shaped outputs (`namespace`,
+`service_account_name`, `identity`, `secret_prefix`, `secret_store_name`).
+The cloud submodules remain callable directly if a root only wants one
+cloud's providers. All three delegate the Kubernetes-side work to `common`.
 
 ## What every tenant gets
 
@@ -45,23 +50,24 @@ the full rationale.
 
 ## Usage
 
-See `tenants/<cloud>/main.tf` for working examples. Sketch (AWS):
+See `tenants/main.tf` for the working example. Sketch:
 
 ```hcl
 module "tenant" {
-  source   = "../../modules/tenant-namespace/aws"
+  source   = "../modules/tenant-namespace"
   for_each = var.tenants
 
-  tenant_name         = each.key
-  environment         = var.environment
-  oidc_issuer_url     = data.terraform_remote_state.foundation.outputs.oidc_issuer_url
-  oidc_provider_arn   = data.terraform_remote_state.foundation.outputs.oidc_provider_arn
-  region              = data.terraform_remote_state.foundation.outputs.region
-  account_id          = data.terraform_remote_state.foundation.outputs.account_id
-  secrets_kms_key_arn = data.terraform_remote_state.foundation.outputs.secrets_kms_key_arn
-  quota               = each.value.quota
+  cloud       = var.cloud                 # "azure" | "aws" | "gcp"
+  tenant_name = each.key
+  environment = var.environment
+  foundation  = data.terraform_remote_state.foundation.outputs
+  quota       = each.value.quota
 }
 ```
+
+`foundation` is the whole outputs object of the matching
+`foundations/<cloud>` stack; the dispatcher picks the keys it needs for the
+selected cloud (see `variables.tf` for the per-cloud key list).
 
 ## Notes
 

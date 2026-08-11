@@ -26,14 +26,21 @@ hard, cloud-enforced secret isolation.
 
 | Layer | Stacks | State | Deploys |
 |---|---|---|---|
-| Foundations | `foundations/{azure,aws,gcp}` | `foundations/<cloud>/<env>` | independently |
-| Tenants | `tenants/{azure,aws,gcp}` | `tenants/<cloud>/<env>` | independently, **after** the foundation for that cloud+env exists |
+| Foundations | `foundations/{azure,aws,gcp}` | `foundations/<cloud>/<env>` in that cloud's backend | independently |
+| Tenants | `tenants/` (one stack, `cloud` is a tfvars parameter) | `tenants/<cloud>/<env>` in the Azure Storage state home | independently, **after** the foundation for that cloud+env exists |
 
 Tenants consume foundation outputs via `terraform_remote_state` only.
 Foundations never reference tenants — the dependency arrow points one way.
-Each of the six stacks × three environments (dev/staging/prod) has its own
-state file, selected with `-backend-config=backend/<env>.hcl` and
-`-var-file=envs/<env>.tfvars`.
+
+Foundations select an environment with `-backend-config=backend/<env>.hcl`
+and `-var-file=envs/<env>.tfvars`. The **single tenants stack** selects
+cloud *and* environment the same way, via `<cloud>-<env>` files —
+`envs/aws-dev.tfvars` contains `cloud = "aws"`, so the cloud is purely a
+parameter in the file and the tenant syntax is identical everywhere. Inside
+the stack, a dispatcher module (`modules/tenant-namespace`) instantiates
+exactly one cloud implementation, and providers for unselected clouds are
+configured inert (mock credentials, zero resources), so a run needs only
+Azure credentials (state home) plus the selected cloud's credentials.
 
 ## Cloud mapping
 
@@ -109,5 +116,11 @@ spec:
 - AKS uses cluster-local accounts for CI bootstrap (Helm/add-ons). Harden to
   Entra-only + `kubelogin` once your CI identity has an AAD admin group.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
+- A Terraform working directory supports one backend type, so unifying
+  tenants into a single stack means all tenant states — including AWS/GCP
+  ones — live in the Azure Storage state home. Every tenant deploy therefore
+  needs Azure credentials in addition to the target cloud's. If that
+  coupling is unacceptable, split tenants back into per-cloud roots that
+  call the same unified module.
 - Azure Managed Namespaces are a preview API surface, addressed via `azapi`
   by design (`managed_namespace_api_version` variable).
