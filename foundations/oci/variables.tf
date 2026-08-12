@@ -61,19 +61,19 @@ variable "api_allowed_cidr" {
 }
 
 variable "node_shape" {
-  description = "Compute shape of the default node pool."
+  description = "Compute shape of the default node pool. Flexible shapes (.Flex) additionally use node_ocpus/node_memory_gbs."
   type        = string
   default     = "VM.Standard.E5.Flex"
 }
 
 variable "node_ocpus" {
-  description = "OCPUs per node (flex shapes only)."
+  description = "OCPUs per node. Applied only to flexible shapes (name ending in .Flex); ignored for fixed shapes, which carry their own sizing."
   type        = number
   default     = 2
 }
 
 variable "node_memory_gbs" {
-  description = "Memory in GB per node (flex shapes only)."
+  description = "Memory in GB per node. Applied only to flexible shapes (name ending in .Flex); ignored for fixed shapes, which carry their own sizing."
   type        = number
   default     = 16
 }

@@ -71,9 +71,15 @@ resource "oci_containerengine_node_pool" "default" {
   node_shape         = var.node_shape
   freeform_tags      = local.tags
 
-  node_shape_config {
-    ocpus         = var.node_ocpus
-    memory_in_gbs = var.node_memory_gbs
+  # Only flexible shapes take an OCPU/memory configuration; fixed shapes
+  # (e.g. VM.Standard.E2.1) carry their own and the API rejects the block.
+  dynamic "node_shape_config" {
+    for_each = endswith(var.node_shape, ".Flex") ? [1] : []
+
+    content {
+      ocpus         = var.node_ocpus
+      memory_in_gbs = var.node_memory_gbs
+    }
   }
 
   node_source_details {
