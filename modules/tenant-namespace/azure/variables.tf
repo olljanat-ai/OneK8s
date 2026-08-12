@@ -63,19 +63,13 @@ variable "service_account_name" {
 }
 
 variable "redis_enabled" {
-  description = "Assign the tenant identity the default access policy on the shared Azure Managed Redis database."
+  description = "Copy the shared Managed Redis access key into this tenant's Key Vault secret prefix and deliver it via ESO."
   type        = bool
   default     = false
 }
 
-variable "redis_database_id" {
-  description = "Resource ID of the shared Managed Redis default database (from the foundation). Required when redis_enabled."
-  type        = string
-  default     = null
-}
-
 variable "redis_hostname" {
-  description = "Hostname of the shared Managed Redis instance (from the foundation)."
+  description = "Hostname of the shared Managed Redis instance (from the foundation). Required when redis_enabled."
   type        = string
   default     = null
 }
@@ -86,10 +80,11 @@ variable "redis_port" {
   default     = null
 }
 
-variable "redis_api_version" {
-  description = "azapi API version for Managed Redis access policy assignments."
+variable "redis_access_key" {
+  description = "Access key of the shared Managed Redis database (from the foundation). Required when redis_enabled."
   type        = string
-  default     = "2025-04-01"
+  default     = null
+  sensitive   = true
 }
 
 variable "managed_namespace_api_version" {

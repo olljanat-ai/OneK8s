@@ -21,10 +21,10 @@ module "azure" {
 
   # try(): foundations deployed before the Redis feature lack these outputs;
   # they are only required when redis_enabled = true (preconditions enforce it).
-  redis_enabled     = var.redis_enabled
-  redis_database_id = try(var.foundation.managed_redis_database_id, null)
-  redis_hostname    = try(var.foundation.managed_redis_hostname, null)
-  redis_port        = try(var.foundation.managed_redis_port, null)
+  redis_enabled    = var.redis_enabled
+  redis_hostname   = try(var.foundation.managed_redis_hostname, null)
+  redis_port       = try(var.foundation.managed_redis_port, null)
+  redis_access_key = try(var.foundation.managed_redis_primary_key, null)
 }
 
 module "aws" {
@@ -45,8 +45,6 @@ module "aws" {
   service_account_name = var.service_account_name
 
   redis_enabled          = var.redis_enabled
-  redis_arn              = try(var.foundation.redis_arn, null)
-  redis_name             = try(var.foundation.redis_name, null)
   redis_user_group_id    = try(var.foundation.redis_user_group_id, null)
   redis_endpoint_address = try(var.foundation.redis_endpoint_address, null)
   redis_endpoint_port    = try(var.foundation.redis_endpoint_port, null)
@@ -68,9 +66,8 @@ module "gcp" {
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
 
-  redis_enabled          = var.redis_enabled
-  redis_cluster_name     = try(var.foundation.redis_cluster_name, null)
-  redis_cluster_location = try(var.foundation.redis_cluster_location, null)
-  redis_host             = try(var.foundation.redis_host, null)
-  redis_port             = try(var.foundation.redis_port, null)
+  redis_enabled     = var.redis_enabled
+  redis_host        = try(var.foundation.redis_host, null)
+  redis_port        = try(var.foundation.redis_port, null)
+  redis_auth_string = try(var.foundation.redis_auth_string, null)
 }

@@ -28,12 +28,11 @@ variable "foundation" {
              secrets_kms_key_arn
       gcp:   project_id, project_number, cluster_name, cluster_location
     Additionally required when redis_enabled = true:
-      azure: managed_redis_database_id, managed_redis_hostname,
-             managed_redis_port
-      aws:   redis_arn, redis_name, redis_user_group_id,
-             redis_endpoint_address, redis_endpoint_port
-      gcp:   redis_cluster_name, redis_cluster_location, redis_host,
-             redis_port
+      azure: managed_redis_hostname, managed_redis_port,
+             managed_redis_primary_key
+      aws:   redis_user_group_id, redis_endpoint_address,
+             redis_endpoint_port
+      gcp:   redis_host, redis_port, redis_auth_string
   EOT
   type        = any
 }
@@ -87,11 +86,12 @@ variable "limit_range" {
 
 variable "redis_enabled" {
   description = <<-EOT
-    Delegate access to the foundation's shared managed Redis to this tenant's
-    workload identity: Azure Managed Redis access policy assignment (azure),
-    key-prefix-scoped IAM-auth ElastiCache user + elasticache:Connect (aws),
-    or cluster-scoped roles/redis.dbConnectUser on Memorystore (gcp). Also
-    drops a "redis-connection" ConfigMap into the tenant namespace.
+    Give this tenant access to the foundation's shared managed Redis. The
+    Redis AUTH secret is written into the shared vault under the tenant's
+    secret prefix (on AWS a per-tenant, key-prefix-scoped ElastiCache user is
+    created as well) and delivered into the namespace by an ExternalSecret
+    ("redis-auth"), next to a "redis-connection" ConfigMap with the endpoint —
+    so tenant apps need no cloud-specific code at all.
   EOT
   type        = bool
   default     = false

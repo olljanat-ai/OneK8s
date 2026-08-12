@@ -1,7 +1,8 @@
-# Demo app deployment for a OneK8s tenant namespace. Replace the image and
-# the per-cloud env values (marked CHANGEME), pick the CLOUD, and apply into
-# the tenant namespace. It runs as the tenant's "workload" ServiceAccount —
-# that is the whole credential story.
+# Demo app deployment for a OneK8s tenant namespace. Replace the image
+# (CHANGEME) and apply into the tenant namespace — nothing here is
+# cloud-specific: the redis-connection ConfigMap and the redis-auth Secret
+# are published by the platform (redis_enabled = true), and demo-secret is
+# synced by the ExternalSecret next to this file.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,9 +18,6 @@ spec:
     metadata:
       labels:
         app: demo-app
-        # Required on AKS for the workload-identity webhook to inject the
-        # federated token; harmless on EKS/GKE.
-        azure.workload.identity/use: "true"
     spec:
       serviceAccountName: workload
       containers:
@@ -28,27 +26,20 @@ spec:
           ports:
             - containerPort: 8080
           env:
-            - name: CLOUD
-              value: "azure" # azure | aws | gcp
             - name: TENANT_NAME
               value: "team-alpha"
             - name: ENVIRONMENT
               value: "dev"
-            # azure only — foundation output `key_vault_uri`:
-            - name: AZURE_KEY_VAULT_URI
-              value: "CHANGEME https://kv-....vault.azure.net/"
-            # aws only — cluster region (used by SDK + ElastiCache signing):
-            # - name: AWS_REGION
-            #   value: "eu-west-1"
-            # gcp only — foundation project:
-            # - name: GCP_PROJECT_ID
-            #   value: "onek8s-dev"
           envFrom:
-            # Published by the platform when the tenant has redis_enabled:
-            # REDIS_HOST/PORT/TLS/USERNAME (+ KEY_PREFIX/CACHE_NAME on AWS).
+            # REDIS_HOST/PORT/TLS (+ USERNAME/KEY_PREFIX on AWS):
             - configMapRef:
                 name: redis-connection
-                optional: true
+            # REDIS_PASSWORD, synced from the vault by the platform:
+            - secretRef:
+                name: redis-auth
+            # DEMO_SECRET, synced by k8s/externalsecret.yaml:
+            - secretRef:
+                name: demo-secret
           readinessProbe:
             httpGet:
               path: /healthz

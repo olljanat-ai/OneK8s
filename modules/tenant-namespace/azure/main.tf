@@ -82,31 +82,23 @@ resource "azurerm_role_assignment" "tenant_secrets" {
 }
 
 # --- Optional shared Redis delegation ----------------------------------------
-# Azure Managed Redis authenticates via Entra ID: assigning the built-in
-# "default" access policy to the tenant identity is the whole delegation.
-# It is a data-plane assignment on the shared database — the tenant gets
-# Redis access, never ARM control-plane rights. The Redis username is the
-# identity's object (principal) ID.
-resource "azapi_resource" "redis_access" {
+# The Managed Redis access key is copied into the shared Key Vault under
+# this tenant's secret prefix. Delivery to the workload then rides the
+# platform's normal chain: the tenant's prefix-scoped identity + namespaced
+# SecretStore + the "redis-auth" ExternalSecret created in common — no
+# cloud-specific code in the app.
+resource "azurerm_key_vault_secret" "redis_auth" {
   count = var.redis_enabled ? 1 : 0
 
-  type      = "Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments@${var.redis_api_version}"
-  name      = "tenant-${var.tenant_name}"
-  parent_id = var.redis_database_id
-
-  body = {
-    properties = {
-      accessPolicyName = "default"
-      user = {
-        objectId = azurerm_user_assigned_identity.tenant.principal_id
-      }
-    }
-  }
+  name         = "${var.tenant_name}-redis-auth"
+  value        = var.redis_access_key
+  key_vault_id = var.key_vault_id
+  content_type = "shared-redis access key"
 
   lifecycle {
     precondition {
-      condition     = var.redis_database_id != null
-      error_message = "redis_enabled = true but the foundation exports no managed_redis_database_id — deploy a foundation that includes Azure Managed Redis first."
+      condition     = var.redis_access_key != null && var.redis_hostname != null
+      error_message = "redis_enabled = true but the foundation exports no managed_redis_primary_key/managed_redis_hostname — deploy a foundation that includes Azure Managed Redis first."
     }
   }
 }
@@ -143,10 +135,8 @@ module "common" {
     REDIS_HOST = var.redis_hostname
     REDIS_PORT = tostring(var.redis_port)
     REDIS_TLS  = "true"
-    # Entra auth: username = the identity's object ID, password = an Entra
-    # access token acquired via workload identity.
-    REDIS_USERNAME = azurerm_user_assigned_identity.tenant.principal_id
   } : null
+  redis_auth_remote_key = var.redis_enabled ? "${var.tenant_name}-redis-auth" : null
 
   depends_on = [azapi_resource.managed_namespace]
 }

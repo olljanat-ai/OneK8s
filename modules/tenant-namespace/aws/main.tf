@@ -10,8 +10,7 @@ locals {
   # trust policy condition keys.
   oidc_issuer = replace(var.oidc_issuer_url, "https://", "")
 
-  # IAM-authenticated ElastiCache users must have user_id == user_name; the
-  # keyspace of the shared cache is sliced per tenant by ACL key pattern,
+  # The keyspace of the shared cache is sliced per tenant by ACL key pattern,
   # mirroring the secret-prefix model.
   redis_user_id    = "tenant-${var.tenant_name}-${var.environment}"
   redis_key_prefix = "${var.tenant_name}:"
@@ -83,10 +82,22 @@ resource "aws_iam_role_policy" "secrets" {
 }
 
 # --- Optional shared Redis delegation ----------------------------------------
-# Three pieces: an IAM-authenticated ElastiCache user whose ACL restricts it
-# to the tenant's "<tenant>:" key slice, membership in the foundation's user
-# group (which attaches it to the shared serverless cache), and
-# elasticache:Connect on the tenant role for both cache and user.
+# A per-tenant, password-authenticated ElastiCache user whose ACL restricts
+# it to the tenant's "<tenant>:" key slice, associated into the foundation's
+# user group (which attaches it to the shared serverless cache). The password
+# is stored in Secrets Manager under the tenant's secret prefix (encrypted
+# with the platform CMK the tenant may decrypt via Secrets Manager) and
+# reaches the workload through the "redis-auth" ExternalSecret created in
+# common — no cloud-specific code in the app.
+resource "random_password" "redis" {
+  count = var.redis_enabled ? 1 : 0
+
+  # ElastiCache passwords: 16-128 printable chars; stay alphanumeric to
+  # avoid the disallowed specials.
+  length  = 32
+  special = false
+}
+
 resource "aws_elasticache_user" "redis" {
   count = var.redis_enabled ? 1 : 0
 
@@ -96,13 +107,14 @@ resource "aws_elasticache_user" "redis" {
   access_string = "on ~${local.redis_key_prefix}* +@all -@admin -@dangerous"
 
   authentication_mode {
-    type = "iam"
+    type      = "password"
+    passwords = [random_password.redis[0].result]
   }
 
   lifecycle {
     precondition {
-      condition     = var.redis_user_group_id != null && var.redis_arn != null
-      error_message = "redis_enabled = true but the foundation exports no redis_user_group_id/redis_arn — deploy a foundation that includes the shared ElastiCache cache first."
+      condition     = var.redis_user_group_id != null
+      error_message = "redis_enabled = true but the foundation exports no redis_user_group_id — deploy a foundation that includes the shared ElastiCache cache first."
     }
   }
 }
@@ -114,25 +126,18 @@ resource "aws_elasticache_user_group_association" "redis" {
   user_id       = aws_elasticache_user.redis[0].user_id
 }
 
-data "aws_iam_policy_document" "redis_connect" {
+resource "aws_secretsmanager_secret" "redis_auth" {
   count = var.redis_enabled ? 1 : 0
 
-  statement {
-    sid     = "ConnectAsOwnRedisUserOnly"
-    actions = ["elasticache:Connect"]
-    resources = [
-      var.redis_arn,
-      "arn:aws:elasticache:${var.region}:${var.account_id}:user:${local.redis_user_id}",
-    ]
-  }
+  name       = "${local.secret_prefix}redis-auth"
+  kms_key_id = var.secrets_kms_key_arn
 }
 
-resource "aws_iam_role_policy" "redis_connect" {
+resource "aws_secretsmanager_secret_version" "redis_auth" {
   count = var.redis_enabled ? 1 : 0
 
-  name   = "tenant-redis-connect"
-  role   = aws_iam_role.tenant.id
-  policy = data.aws_iam_policy_document.redis_connect[0].json
+  secret_id     = aws_secretsmanager_secret.redis_auth[0].id
+  secret_string = random_password.redis[0].result
 }
 
 # --- Kubernetes-side resources (namespace, SA, namespaced SecretStore) -------
@@ -170,12 +175,10 @@ module "common" {
     REDIS_HOST = var.redis_endpoint_address
     REDIS_PORT = tostring(var.redis_endpoint_port)
     REDIS_TLS  = "true"
-    # IAM auth: username = the ElastiCache user, password = a SigV4-signed
-    # IAM auth token generated with the tenant role's credentials.
+    # RBAC: AUTH as the tenant's own ElastiCache user; the password arrives
+    # via the "redis-auth" ExternalSecret.
     REDIS_USERNAME   = local.redis_user_id
     REDIS_KEY_PREFIX = local.redis_key_prefix
-    # IAM auth tokens are SigV4-signed against the cache NAME, not its DNS
-    # endpoint, so clients need it alongside the host.
-    REDIS_CACHE_NAME = var.redis_name
   } : null
+  redis_auth_remote_key = var.redis_enabled ? "${local.secret_prefix}redis-auth" : null
 }

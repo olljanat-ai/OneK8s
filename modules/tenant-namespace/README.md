@@ -30,7 +30,7 @@ cloud's providers. All three delegate the Kubernetes-side work to `common`.
 | K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` |
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` |
-| Shared Redis (opt-in) | access policy assignment on Azure Managed Redis for the tenant UAMI | IAM-auth ElastiCache user with `~<tenant>:*` key ACL + `elasticache:Connect` | `roles/redis.dbConnectUser` with IAM condition pinned to the Memorystore cluster |
+| Shared Redis (opt-in) | access key copied to KV as `<tenant>-redis-auth` + `redis-auth` ExternalSecret | password ElastiCache user with `~<tenant>:*` key ACL, password at `<env>/<tenant>/redis-auth` + ExternalSecret | AUTH string copied to SM as `<tenant>-redis-auth` + ExternalSecret |
 
 ## Resource limits and network policy
 
@@ -56,31 +56,30 @@ syntax on every cloud**:
 
 ## Shared managed Redis (`redis_enabled`)
 
-Set `redis_enabled = true` on a tenant to delegate access to the shared
+Set `redis_enabled = true` on a tenant to give it access to the shared
 managed Redis deployed by the foundation (Azure Managed Redis, ElastiCache
-Serverless/Valkey, Memorystore for Redis Cluster). The delegation always
-targets the tenant's existing workload identity — there are no Redis
-passwords anywhere:
+Serverless/Valkey, Memorystore for Redis). The Redis AUTH secret is stored
+in the shared vault **under the tenant's secret prefix** and delivered via
+ESO, so tenant apps consume Redis with zero cloud-specific code:
 
-- **Azure** — data-plane access policy assignment (`default` policy) for
-  the tenant UAMI on the Managed Redis database; the database itself is
-  Entra-only (access keys disabled).
-- **AWS** — an IAM-authenticated ElastiCache user (`tenant-<name>-<env>`)
-  whose ACL is scoped to the `<tenant>:` key prefix, associated into the
-  foundation's user group, plus `elasticache:Connect` limited to that cache
-  and user on the tenant IAM role.
-- **GCP** — `roles/redis.dbConnectUser` for the tenant GSA with an IAM
-  condition pinned to the shared Memorystore cluster. Memorystore IAM auth
-  has no per-key scoping: enabled tenants share the keyspace.
+- **Azure** — the Managed Redis access key is written to Key Vault as
+  `<tenant>-redis-auth`.
+- **AWS** — a per-tenant password-authenticated ElastiCache user
+  (`tenant-<name>-<env>`) whose ACL is scoped to the `<tenant>:` key
+  prefix, associated into the foundation's user group; its generated
+  password is stored at `<env>/<tenant>/redis-auth` (platform CMK).
+- **GCP** — the Memorystore AUTH string is written to Secret Manager as
+  `<tenant>-redis-auth`. One AUTH string per instance: enabled tenants
+  share the keyspace.
 
 Enabled tenants get a `redis-connection` ConfigMap (`REDIS_HOST`,
-`REDIS_PORT`, `REDIS_TLS`, `REDIS_USERNAME`, and on AWS
-`REDIS_KEY_PREFIX` + `REDIS_CACHE_NAME` — IAM auth tokens are signed
-against the cache name) in their namespace, and the module exposes a unified
-`redis_endpoint` output (null when disabled). The foundation outputs the
-module needs for this are listed in `variables.tf`; enabling Redis against
-a foundation deployed before the Redis feature fails with an explicit
-precondition error.
+`REDIS_PORT`, `REDIS_TLS`, and on AWS `REDIS_USERNAME` +
+`REDIS_KEY_PREFIX`) plus a `redis-auth` ExternalSecret that syncs
+`REDIS_PASSWORD` into the namespace through the tenant's own SecretStore.
+The module exposes a unified `redis_endpoint` output (null when disabled).
+The foundation outputs the module needs are listed in `variables.tf`;
+enabling Redis against a foundation deployed before the Redis feature fails
+with an explicit precondition error.
 
 ## Isolation model
 

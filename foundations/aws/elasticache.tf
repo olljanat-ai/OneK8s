@@ -1,8 +1,10 @@
 # Shared ElastiCache Serverless (Valkey) for the cluster — AWS's managed
 # Redis-compatible offering. Consumed by tenants that opt in with
-# `redis_enabled = true`: each tenant gets an IAM-authenticated ElastiCache
-# user whose ACL is scoped to the "<tenant>:" key prefix, associated into the
-# user group below (see modules/tenant-namespace/aws).
+# `redis_enabled = true`: each tenant gets a password-authenticated
+# ElastiCache user whose ACL is scoped to the "<tenant>:" key prefix,
+# associated into the user group below; the password lands in Secrets
+# Manager under the tenant's prefix and reaches the workload via ESO
+# (see modules/tenant-namespace/aws and ADR-0002).
 resource "aws_security_group" "redis" {
   name        = "redis-${local.name}"
   description = "ElastiCache serverless access for cluster workloads"
@@ -20,7 +22,7 @@ resource "aws_security_group" "redis" {
 }
 
 # RBAC requires a user named "default" in every user group; this one is
-# disabled ("off" + no commands) so only tenant IAM users can authenticate.
+# disabled ("off" + no commands) so only tenant users can authenticate.
 resource "aws_elasticache_user" "redis_default" {
   user_id       = "onek8s-${var.environment}-default"
   user_name     = "default"

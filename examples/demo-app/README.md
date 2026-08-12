@@ -1,25 +1,29 @@
 # OneK8s demo app
 
-Minimal .NET 10 web app that proves the platform's two tenant delegations
-work end-to-end **with the workload identity only** — the app is configured
-with zero credentials:
+Minimal .NET 10 web app that proves a tenant workload can consume the
+platform's two shared services — the secret backend ("vault") and the
+managed Redis — **without a single cloud SDK, credential, or line of
+cloud-specific code**. Its only dependency is `StackExchange.Redis`; the
+same image runs unchanged on Azure, AWS and GCP.
 
-- **Vault** — reads the hardcoded secret `demo-secret` from the shared
-  backend (Key Vault / Secrets Manager / Secret Manager), using the
-  tenant naming contract: `<tenant>-demo-secret` on Azure/GCP,
-  `<env>/<tenant>/demo-secret` on AWS.
-- **Redis** — connects to the shared managed Redis (endpoint from the
-  platform's `redis-connection` ConfigMap), writes the hardcoded key
-  `demo-key` (`<tenant>:demo-key` on AWS, where the ACL enforces the
-  prefix) and reads it back. AUTH uses an Entra token (Azure), a SigV4 IAM
-  token (AWS) or an ADC access token (GCP).
+The cloud work happens in the platform, authenticated by the tenant's
+workload identity:
+
+- **Vault** — the hardcoded secret `demo-secret` is synced from the shared
+  backend into a Kubernetes Secret by an `ExternalSecret`
+  (`k8s/externalsecret.yaml`) through the tenant's prefix-scoped
+  `tenant-store`. The app just reads env `DEMO_SECRET`.
+- **Redis** — the endpoint comes from the platform's `redis-connection`
+  ConfigMap and the AUTH password from the platform's `redis-auth`
+  ExternalSecret (both created by `redis_enabled = true`). The app reads
+  env `REDIS_HOST/PORT/TLS/PASSWORD` (+ `REDIS_USERNAME`/`REDIS_KEY_PREFIX`
+  on AWS, where each tenant has its own ACL user pinned to the
+  `<tenant>:` key slice), writes the hardcoded key `demo-key` and reads it
+  back.
 
 Both the secret value and the Redis key/value are rendered **as plain text
 in the UI** — deliberately, to make the demo obvious. Never do that in a
 real app.
-
-The same image runs on every cloud; `CLOUD=azure|aws|gcp` selects the
-implementation.
 
 ## Prerequisites
 
@@ -46,9 +50,9 @@ docker push <registry>/onek8s-demo:latest
 
 ## Deploy
 
-Edit `k8s/deployment.yaml`: set the image, set `CLOUD`, and fill in the one
-cloud-specific variable (`AZURE_KEY_VAULT_URI`, `AWS_REGION` or
-`GCP_PROJECT_ID`). Then:
+Set the image in `k8s/deployment.yaml`; on AWS also change the
+`remoteRef.key` in `k8s/externalsecret.yaml` to the AWS naming contract
+(`dev/team-alpha/demo-secret`). Then:
 
 ```bash
 kubectl -n team-alpha apply -f k8s/
@@ -57,24 +61,16 @@ open http://localhost:8080
 ```
 
 The page shows the secret name/value and the Redis key/value, or the exact
-error per probe if a delegation is missing.
+error per probe if something is missing (e.g. the tenant isn't
+`redis_enabled`, or the ExternalSecret hasn't synced —
+`kubectl -n team-alpha describe externalsecret` tells you why).
 
-## How auth works per cloud
+## Notes
 
-| | Vault | Redis |
-|---|---|---|
-| Azure | `DefaultAzureCredential` → federated token of the tenant UAMI | `Microsoft.Azure.StackExchangeRedis` Entra auth against Azure Managed Redis (access keys are disabled platform-side) |
-| AWS | IRSA picked up by the AWS SDK default chain | Hand-signed SigV4 presigned URL (`Action=connect&User=<user>`) as password for the tenant's IAM-auth ElastiCache user |
-| GCP | Workload Identity → ADC | GSA access token as password (`AUTH default <token>`) against Memorystore IAM auth |
-
-Notes:
-
-- Negative test: point `TENANT_NAME` (or the secret/key names) at another
-  tenant's prefix and watch the cloud deny it — that is the isolation
-  boundary working.
-- The GCP branch skips Redis server-cert validation (cluster-private CA)
-  to stay minimal; fetch the CA via `clusters.getCertificateAuthority`
-  and trust it properly in real code.
-- The app opens a fresh Redis connection per request so short-lived AUTH
-  tokens never go stale mid-demo; real apps share a multiplexer and
-  refresh credentials.
+- Negative test: point the ExternalSecret's `remoteRef.key` at another
+  tenant's prefix and watch the sync fail — that is the platform's
+  isolation boundary working in the cloud IAM plane.
+- Why no cloud SDKs: the Redis AUTH secret is deliberately a vault secret
+  under the tenant's prefix, so both demos ride the exact same ESO +
+  workload-identity chain. See ADR-0002 for the trade-off (static Redis
+  credential vs. cloud-free apps) and what rotation looks like.

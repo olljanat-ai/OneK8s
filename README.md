@@ -47,12 +47,12 @@ in the cloud IAM plane, not just in Kubernetes.
 Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
 
 Each foundation also ships a **shared managed Redis** (Azure Managed Redis,
-ElastiCache Serverless/Valkey, Memorystore for Redis Cluster). A tenant opts
-in with `redis_enabled = true`, which delegates access to the tenant's
-workload identity — Entra access policy on Azure, key-prefix-scoped
-IAM-authenticated ElastiCache user on AWS, cluster-pinned
-`roles/redis.dbConnectUser` on GCP. No Redis passwords exist anywhere.
-Details: [ADR-0002](docs/adr/0002-shared-managed-redis-with-identity-delegations.md).
+ElastiCache Serverless/Valkey, Memorystore for Redis). A tenant opts in with
+`redis_enabled = true`, which stores the Redis AUTH secret in the vault
+under the tenant's prefix (on AWS as a per-tenant, key-prefix-scoped
+ElastiCache user) and delivers it into the namespace via ESO — so tenant
+apps consume Redis and vault secrets with **zero cloud-specific code**.
+Details: [ADR-0002](docs/adr/0002-shared-managed-redis-with-vault-delivered-auth.md).
 
 ## Quick start
 

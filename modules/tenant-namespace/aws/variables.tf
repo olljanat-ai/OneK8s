@@ -34,21 +34,9 @@ variable "secrets_kms_key_arn" {
 }
 
 variable "redis_enabled" {
-  description = "Create an IAM-authenticated, key-prefix-scoped ElastiCache user for this tenant and allow elasticache:Connect."
+  description = "Create a password-authenticated, key-prefix-scoped ElastiCache user for this tenant and store the password under the tenant's Secrets Manager prefix."
   type        = bool
   default     = false
-}
-
-variable "redis_arn" {
-  description = "ARN of the shared ElastiCache serverless cache (from the foundation). Required when redis_enabled."
-  type        = string
-  default     = null
-}
-
-variable "redis_name" {
-  description = "Name of the shared ElastiCache serverless cache (from the foundation); IAM auth tokens are signed against it."
-  type        = string
-  default     = null
 }
 
 variable "redis_user_group_id" {

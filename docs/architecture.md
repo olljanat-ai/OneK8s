@@ -52,8 +52,8 @@ Azure credentials (state home) plus the selected cloud's credentials.
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager |
 | Tenant namespace | **Azure Managed Namespace** (azapi: quota + netpol) + LimitRange | Namespace + quota + netpol + LimitRange | Namespace + quota + netpol + LimitRange |
-| Shared tenant Redis | **Azure Managed Redis** (Entra-only, azapi) | ElastiCache **Serverless** (Valkey) | **Memorystore for Redis Cluster** (IAM auth, PSC) |
-| Redis delegation | access policy assignment for the tenant UAMI | IAM-auth ElastiCache user (key-prefix ACL) + `elasticache:Connect` | `roles/redis.dbConnectUser`, IAM condition pinned to the cluster |
+| Shared tenant Redis | **Azure Managed Redis** (azapi) | ElastiCache **Serverless** (Valkey) | **Memorystore for Redis** |
+| Redis delegation | access key copied to KV as `<tenant>-redis-auth` | per-tenant password user (key-prefix ACL), password at `<env>/<tenant>/redis-auth` | AUTH string copied to SM as `<tenant>-redis-auth` |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 
 ## Secret isolation (the core security invariant)
@@ -107,28 +107,31 @@ tenants = {
 }
 ```
 
-The flag creates the cloud-side delegation for the tenant's **existing
-workload identity** — no passwords or connection strings are handed out:
+The flag stores the Redis AUTH secret in the shared vault **under the
+tenant's secret prefix** and delivers it through the platform's normal
+ESO + workload-identity chain — so applications consume Redis with zero
+cloud-specific code (see ADR-0002 for the trade-off):
 
-- **Azure** — the Managed Redis database is Entra-only (access keys
-  disabled); the tenant's UAMI gets a data-plane access policy assignment.
-  Workloads authenticate with `username = <identity object ID>`,
-  `password = <Entra access token>`.
-- **AWS** — the tenant gets an IAM-authenticated ElastiCache user whose ACL
-  is restricted to the `"<tenant>:"` key prefix (the Redis analogue of the
-  secret-prefix model), associated into the cache's user group, plus
-  `elasticache:Connect` on exactly that cache and user.
-- **GCP** — the tenant GSA gets `roles/redis.dbConnectUser` with an IAM
-  condition pinned to the shared Memorystore cluster. Note: Memorystore IAM
-  auth is per *cluster* — there is no per-key scoping, so tenants sharing
-  the instance share one keyspace.
+- **Azure** — the Managed Redis access key is copied to Key Vault as
+  `<tenant>-redis-auth`.
+- **AWS** — the tenant gets its *own* password-authenticated ElastiCache
+  user whose ACL is restricted to the `"<tenant>:"` key prefix (the Redis
+  analogue of the secret-prefix model), associated into the cache's user
+  group; the generated password lands at `<env>/<tenant>/redis-auth`,
+  encrypted with the platform CMK.
+- **GCP** — the Memorystore AUTH string is copied to Secret Manager as
+  `<tenant>-redis-auth`. Note: one AUTH string per instance, so opted-in
+  tenants share the keyspace.
 
 Enabled tenants receive a `redis-connection` ConfigMap (host, port, TLS,
-username hint) in their namespace; authentication always flows through the
-same workload-identity chain used for secrets.
+plus the ACL username/key prefix on AWS) and a `redis-auth` ExternalSecret
+that syncs `REDIS_PASSWORD` into the namespace. Reading the AUTH secret
+from the vault is gated by the same prefix-scoped identity boundaries as
+every other tenant secret.
 
-`examples/demo-app` is a .NET 10 app that exercises both delegations from a
-tenant namespace on any of the three clouds and renders the results.
+`examples/demo-app` is a .NET 10 app (StackExchange.Redis as its only
+dependency — no cloud SDKs) that exercises vault and Redis consumption
+from a tenant namespace, identically on all three clouds.
 
 ## CI/CD
 

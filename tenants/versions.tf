@@ -33,6 +33,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 6.15"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "~> 2.35"

@@ -41,11 +41,6 @@ output "managed_redis_id" {
   value       = azapi_resource.redis.id
 }
 
-output "managed_redis_database_id" {
-  description = "Resource ID of the Managed Redis default database (parent for tenant access policy assignments)."
-  value       = azapi_resource.redis_default_db.id
-}
-
 output "managed_redis_hostname" {
   description = "Hostname of the shared Azure Managed Redis instance."
   value       = azapi_resource.redis.output.properties.hostName
@@ -54,6 +49,12 @@ output "managed_redis_hostname" {
 output "managed_redis_port" {
   description = "TLS port of the Managed Redis default database."
   value       = azapi_resource.redis_default_db.output.properties.port
+}
+
+output "managed_redis_primary_key" {
+  description = "Primary access key of the Managed Redis default database; the tenant module copies it into each opted-in tenant's vault prefix."
+  value       = data.azapi_resource_action.redis_keys.output.primaryKey
+  sensitive   = true
 }
 
 output "environment" {

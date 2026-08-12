@@ -37,22 +37,16 @@ variable "node_count_per_zone" {
   default     = 1
 }
 
-variable "redis_shard_count" {
-  description = "Shard count of the shared Memorystore Redis cluster."
+variable "redis_tier" {
+  description = "Service tier of the shared Memorystore Redis instance (BASIC or STANDARD_HA)."
+  type        = string
+  default     = "BASIC"
+}
+
+variable "redis_memory_size_gb" {
+  description = "Memory size in GiB of the shared Memorystore Redis instance."
   type        = number
   default     = 1
-}
-
-variable "redis_replica_count" {
-  description = "Replicas per shard of the shared Memorystore Redis cluster."
-  type        = number
-  default     = 0
-}
-
-variable "redis_node_type" {
-  description = "Node type of the shared Memorystore Redis cluster."
-  type        = string
-  default     = "REDIS_SHARED_CORE_NANO"
 }
 
 variable "eso_chart_version" {

@@ -33,24 +33,20 @@ output "workload_identity_pool" {
   value       = "${var.project_id}.svc.id.goog"
 }
 
-output "redis_cluster_name" {
-  description = "Name of the shared Memorystore Redis cluster."
-  value       = google_redis_cluster.this.name
-}
-
-output "redis_cluster_location" {
-  description = "Location (region) of the shared Memorystore Redis cluster."
-  value       = google_redis_cluster.this.region
-}
-
 output "redis_host" {
-  description = "Discovery endpoint address of the shared Memorystore Redis cluster."
-  value       = google_redis_cluster.this.discovery_endpoints[0].address
+  description = "Host address of the shared Memorystore Redis instance."
+  value       = google_redis_instance.this.host
 }
 
 output "redis_port" {
-  description = "Discovery endpoint port of the shared Memorystore Redis cluster."
-  value       = google_redis_cluster.this.discovery_endpoints[0].port
+  description = "Port of the shared Memorystore Redis instance."
+  value       = google_redis_instance.this.port
+}
+
+output "redis_auth_string" {
+  description = "AUTH string of the shared Memorystore Redis instance; the tenant module copies it into each opted-in tenant's vault prefix."
+  value       = google_redis_instance.this.auth_string
+  sensitive   = true
 }
 
 output "environment" {

@@ -8,15 +8,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Azure: Key Vault + Entra ID auth for Azure Managed Redis -->
-    <PackageReference Include="Azure.Identity" Version="1.13.1" />
-    <PackageReference Include="Azure.Security.KeyVault.Secrets" Version="4.7.0" />
-    <PackageReference Include="Microsoft.Azure.StackExchangeRedis" Version="3.1.0" />
-    <!-- AWS: Secrets Manager (IRSA); ElastiCache IAM auth is hand-signed SigV4 -->
-    <PackageReference Include="AWSSDK.SecretsManager" Version="3.7.400" />
-    <!-- GCP: Secret Manager + ADC access tokens for Memorystore IAM auth -->
-    <PackageReference Include="Google.Cloud.SecretManager.V1" Version="2.5.0" />
-    <PackageReference Include="Google.Apis.Auth" Version="1.68.0" />
+    <!-- Deliberately the ONLY dependency: all cloud specifics (vault access,
+         Redis AUTH secret delivery) are handled by the platform via External
+         Secrets Operator, so the app is identical on Azure, AWS and GCP. -->
     <PackageReference Include="StackExchange.Redis" Version="2.8.16" />
   </ItemGroup>
 

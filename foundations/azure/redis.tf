@@ -1,8 +1,10 @@
 # Shared Azure Managed Redis for the cluster: one instance per cluster,
 # consumed by tenants that opt in with `redis_enabled = true`. Data-plane
-# access is Entra ID only (access keys disabled); per-tenant delegation is an
-# access policy assignment for the tenant's managed identity
-# (see modules/tenant-namespace/azure).
+# auth is the database access key; the tenant module copies it into the
+# shared Key Vault under each opted-in tenant's secret prefix, from where the
+# tenant's ESO SecretStore (workload identity, prefix-scoped) delivers it —
+# so tenant apps stay free of cloud-specific auth code
+# (see modules/tenant-namespace/azure and ADR-0002).
 #
 # Azure Managed Redis is the Microsoft.Cache/redisEnterprise resource type
 # with the new AMR SKUs (Balanced_*, MemoryOptimized_*, ...); azurerm has no
@@ -45,12 +47,19 @@ resource "azapi_resource" "redis_default_db" {
       # Single-endpoint mode: standard (non-cluster) Redis clients work.
       clusteringPolicy = "EnterpriseCluster"
       evictionPolicy   = "NoEviction"
-      # Entra ID only — no shared access keys to leak or rotate. Tenants
-      # authenticate with their workload identity via an access policy
-      # assignment created by the tenant module.
-      accessKeysAuthentication = "Disabled"
+      # Access-key auth: the key is distributed to opted-in tenants through
+      # the vault (prefix-scoped), keeping tenant apps cloud-agnostic.
+      accessKeysAuthentication = "Enabled"
     }
   }
 
   response_export_values = ["properties.port"]
+}
+
+data "azapi_resource_action" "redis_keys" {
+  type                   = "Microsoft.Cache/redisEnterprise/databases@${var.managed_redis_api_version}"
+  resource_id            = azapi_resource.redis_default_db.id
+  action                 = "listKeys"
+  method                 = "POST"
+  response_export_values = ["primaryKey"]
 }

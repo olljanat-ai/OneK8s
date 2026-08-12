@@ -106,3 +106,9 @@ variable "redis_connection" {
   type        = map(string)
   default     = null
 }
+
+variable "redis_auth_remote_key" {
+  description = "Vault name of this tenant's Redis AUTH secret; synced into the namespace as Secret \"redis-auth\" (key REDIS_PASSWORD) by an ExternalSecret. null = tenant has no Redis access."
+  type        = string
+  default     = null
+}

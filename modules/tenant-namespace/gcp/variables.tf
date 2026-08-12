@@ -29,33 +29,28 @@ variable "cluster_location" {
 }
 
 variable "redis_enabled" {
-  description = "Grant the tenant GSA roles/redis.dbConnectUser scoped to the shared Memorystore Redis cluster."
+  description = "Copy the shared Memorystore AUTH string into this tenant's Secret Manager prefix and deliver it via ESO."
   type        = bool
   default     = false
 }
 
-variable "redis_cluster_name" {
-  description = "Name of the shared Memorystore Redis cluster (from the foundation). Required when redis_enabled."
-  type        = string
-  default     = null
-}
-
-variable "redis_cluster_location" {
-  description = "Location (region) of the shared Memorystore Redis cluster (from the foundation). Required when redis_enabled."
-  type        = string
-  default     = null
-}
-
 variable "redis_host" {
-  description = "Discovery endpoint address of the shared Memorystore Redis cluster (from the foundation)."
+  description = "Host address of the shared Memorystore Redis instance (from the foundation)."
   type        = string
   default     = null
 }
 
 variable "redis_port" {
-  description = "Discovery endpoint port of the shared Memorystore Redis cluster (from the foundation)."
+  description = "Port of the shared Memorystore Redis instance (from the foundation)."
   type        = number
   default     = null
+}
+
+variable "redis_auth_string" {
+  description = "AUTH string of the shared Memorystore Redis instance (from the foundation). Required when redis_enabled."
+  type        = string
+  default     = null
+  sensitive   = true
 }
 
 variable "quota" {

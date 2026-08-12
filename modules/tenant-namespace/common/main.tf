@@ -178,3 +178,41 @@ resource "kubernetes_manifest" "secret_store" {
     kubernetes_service_account_v1.workload,
   ]
 }
+
+# The Redis AUTH secret is an ordinary vault secret under the tenant's
+# prefix, so its delivery is just another ExternalSecret through the
+# tenant-store — the same identity chain as every other secret. Workloads
+# read env REDIS_PASSWORD from Secret "redis-auth" and stay cloud-agnostic.
+resource "kubernetes_manifest" "redis_auth" {
+  count = var.redis_auth_remote_key != null ? 1 : 0
+
+  manifest = {
+    apiVersion = "external-secrets.io/v1"
+    kind       = "ExternalSecret"
+    metadata = {
+      name      = "redis-auth"
+      namespace = local.namespace
+      labels    = local.labels
+    }
+    spec = {
+      refreshInterval = "1h"
+      secretStoreRef = {
+        kind = "SecretStore"
+        name = "tenant-store"
+      }
+      target = {
+        name = "redis-auth"
+      }
+      data = [
+        {
+          secretKey = "REDIS_PASSWORD"
+          remoteRef = {
+            key = var.redis_auth_remote_key
+          }
+        }
+      ]
+    }
+  }
+
+  depends_on = [kubernetes_manifest.secret_store]
+}
