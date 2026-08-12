@@ -1,5 +1,6 @@
-# Authentication: GitHub Actions assumes an IAM role via OIDC
-# (aws-actions/configure-aws-credentials); locally use your AWS profile.
+# Authentication: GitHub Actions uses IAM user access keys from GitHub
+# secrets (aws-actions/configure-aws-credentials); locally use your AWS
+# profile.
 provider "aws" {
   region = var.region
 

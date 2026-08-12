@@ -17,31 +17,35 @@ Create the state stores and put their coordinates into each stack's
   `use_lockfile`)
 - **GCP**: GCS bucket (versioned)
 
-## 2. Configure GitHub OIDC (no long-lived secrets)
+## 2. Configure GitHub credentials (secrets)
 
-Create a deploy identity per cloud, trusted for this repository via OIDC:
+Create a deploy identity per cloud and store its credentials as GitHub
+secrets:
 
-- **Azure**: an Entra app (or UAMI) with federated credentials for
-  `repo:<org>/<repo>:environment:<cloud>-<env>` (and `:pull_request` if PR
-  plans should run). Note: **all nine** `<cloud>-<env>` environments need a
-  federated credential, not just the `azure-*` ones — the unified tenants
-  stack keeps its state in Azure Storage, so AWS/GCP tenant deploys also
-  authenticate to Azure for state access. Grant the app Contributor +
-  RBAC-admin rights scoped to the platform subscription.
-- **AWS**: an IAM role trusting `token.actions.githubusercontent.com` with
-  `sub` conditions for this repo. Grant it the rights to manage the
-  foundation + tenant resources.
-- **GCP**: a Workload Identity Pool + provider for GitHub, and a deploy
-  service account the pool can impersonate.
+- **Azure**: an Entra app (service principal) with a client secret. Note:
+  the Azure secrets are needed by **all** deploy jobs, not just the Azure
+  ones — the unified tenants stack keeps its state in Azure Storage, so
+  AWS/GCP tenant deploys also authenticate to Azure for state access.
+  Grant the app Contributor + RBAC-admin rights scoped to the platform
+  subscription.
+- **AWS**: an IAM user with an access key. Grant it the rights to manage
+  the foundation + tenant resources.
+- **GCP**: a deploy service account with a JSON key.
 
-Then set repository **variables** (Settings → Secrets and variables →
-Actions → Variables):
+Then set repository **secrets** (Settings → Secrets and variables →
+Actions → Secrets):
+
+| Secret | Used by |
+|---|---|
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_SECRET` | azurerm/azapi providers + azurerm state backend |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | aws-actions/configure-aws-credentials |
+| `GCP_CREDENTIALS_JSON` | google-github-actions/auth (service account key JSON) |
+
+And repository **variables**:
 
 | Variable | Used by |
 |---|---|
-| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | azurerm/azapi OIDC |
-| `AWS_ROLE_ARN`, `AWS_REGION` | aws-actions/configure-aws-credentials |
-| `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | google-github-actions/auth |
+| `AWS_REGION` | aws-actions/configure-aws-credentials |
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
 
 Create GitHub **environments** `azure-dev`, `azure-staging`, `azure-prod`,

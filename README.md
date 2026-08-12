@@ -23,7 +23,7 @@ Operator and per-tenant workload identities.
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <cloud>-<env>.tfvars: cloud is a parameter in the file
 │   └── backend/            #   <cloud>-<env>.hcl state configs (shared state home)
-├── .github/workflows/      # PR validation + OIDC deploy pipelines
+├── .github/workflows/      # PR validation + deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
 ```
 
@@ -56,7 +56,7 @@ terraform init -backend-config=backend/aws-dev.hcl
 terraform apply -var-file=envs/aws-dev.tfvars   # cloud = "aws" set in the file
 ```
 
-Full setup (state bootstrap, GitHub OIDC, environment protection):
+Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
 Design and trade-offs: [docs/architecture.md](docs/architecture.md).
 Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-namespace/README.md).
@@ -64,10 +64,11 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 ## CI/CD
 
 - **PR validation** — fmt, validate (all 6 stacks), tflint, checkov, and
-  optional OIDC dev plans (`ENABLE_CLOUD_PLANS=true`).
+  optional cloud dev plans (`ENABLE_CLOUD_PLANS=true`).
 - **Deploy Foundations / Deploy Tenants** — separate pipelines; dev deploys
   on merge to `main`, staging/prod via `workflow_dispatch`, all gated by
-  GitHub environments `<cloud>-<env>` and authenticated with OIDC only.
+  GitHub environments `<cloud>-<env>` and authenticated with cloud
+  credentials stored as GitHub secrets.
 
 ## License
 

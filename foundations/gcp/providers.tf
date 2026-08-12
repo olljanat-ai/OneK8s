@@ -1,5 +1,6 @@
-# Authentication: GitHub Actions uses google-github-actions/auth with
-# Workload Identity Federation; locally use `gcloud auth application-default login`.
+# Authentication: GitHub Actions uses google-github-actions/auth with a
+# service account key stored in GitHub secrets; locally use
+# `gcloud auth application-default login`.
 provider "google" {
   project = var.project_id
   region  = var.region
