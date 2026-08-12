@@ -14,28 +14,28 @@
 terraform {
   required_version = ">= 1.9.0"
 
-  backend "azurerm" {}
+  # backend "azurerm" {}
 
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.20"
+      version = "= 5.0.1"
     }
     azapi = {
       source  = "Azure/azapi"
-      version = "~> 2.3"
+      version = "= 2.12.0"
     }
     aws = {
       source  = "hashicorp/aws"
-      version = "~> 5.80"
+      version = "= 6.58.0"
     }
     google = {
       source  = "hashicorp/google"
-      version = "~> 6.15"
+      version = "= 7.44.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"
-      version = "~> 2.35"
+      version = "= 3.2.1"
     }
   }
 }
