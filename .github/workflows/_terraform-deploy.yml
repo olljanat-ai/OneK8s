@@ -1,5 +1,6 @@
 # Reusable plan+apply workflow used by deploy-foundations and deploy-tenants.
-# Authentication is OIDC-only for all three clouds — no long-lived secrets.
+# Authentication uses long-lived credentials stored as GitHub secrets
+# (Azure client secret, AWS access keys, GCP service account key).
 #
 # The job binds to the GitHub environment "<cloud>-<environment>"
 # (e.g. azure-prod), so approvals/wait timers are configured per cloud and
@@ -32,7 +33,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   deploy:
@@ -46,10 +46,12 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_CONFIG: ${{ inputs.config || inputs.environment }}
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ARM_USE_OIDC: "true"
+      # Azure credentials are needed on every cloud: the unified tenants
+      # stack keeps its state in Azure Storage.
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,19 +59,19 @@ jobs:
         with:
           terraform_version: "1.15.8"
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         if: inputs.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Authenticate to GCP (OIDC)
+      - name: Authenticate to GCP
         if: inputs.cloud == 'gcp'
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
       # The AWS and GCP tenant stacks shell out for cluster tokens
       # (aws eks get-token / gke auth); both CLIs are preinstalled on

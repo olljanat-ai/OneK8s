@@ -1,6 +1,7 @@
 # Authentication: use environment variables (ARM_CLIENT_ID, ARM_TENANT_ID,
-# ARM_SUBSCRIPTION_ID, ARM_USE_OIDC=true) so that GitHub Actions can log in
-# with OIDC and no long-lived secrets. Locally, `az login` works too.
+# ARM_SUBSCRIPTION_ID, ARM_CLIENT_SECRET) so that GitHub Actions can log in
+# with a service principal stored in GitHub secrets. Locally, `az login`
+# works too.
 provider "azurerm" {
   features {
     key_vault {

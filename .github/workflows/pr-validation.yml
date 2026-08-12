@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write # OIDC for cloud plans
   pull-requests: write
 
 concurrency:
@@ -75,10 +74,11 @@ jobs:
           # soft_fail once the baseline is clean.
           soft_fail: true
 
-  # Plans run against the prototype environment of each cloud. They require the
-  # OIDC roles/apps referenced below to exist, so they are gated behind a
-  # repository variable to keep PR checks green on a fresh fork/clone:
-  # set ENABLE_CLOUD_PLANS=true once cloud credentials are configured.
+  # Plans run against the prototype environment of each cloud. They require
+  # the cloud credential secrets referenced below to exist, so they are gated
+  # behind a repository variable to keep PR checks green on a fresh
+  # fork/clone: set ENABLE_CLOUD_PLANS=true once cloud credentials are
+  # configured.
   plan:
     name: plan ${{ matrix.stack }} (${{ matrix.config }})
     if: vars.ENABLE_CLOUD_PLANS == 'true'
@@ -108,11 +108,13 @@ jobs:
             cloud: gcp
             config: gcp-prototype
     env:
-      # azurerm/azapi providers pick these up directly and use GitHub OIDC.
-      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      ARM_USE_OIDC: "true"
+      # azurerm/azapi providers (and the azurerm state backend) pick these up
+      # directly. Azure credentials are needed on every cloud: the unified
+      # tenants stack keeps its state in Azure Storage.
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@v4
 
@@ -120,19 +122,19 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
-      - name: Configure AWS credentials (OIDC)
+      - name: Configure AWS credentials
         if: matrix.cloud == 'aws'
         uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Authenticate to GCP (OIDC)
+      - name: Authenticate to GCP
         if: matrix.cloud == 'gcp'
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
       - name: terraform plan
         working-directory: ${{ matrix.stack }}

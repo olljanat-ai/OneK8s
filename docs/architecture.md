@@ -95,17 +95,18 @@ spec:
 ## CI/CD
 
 - `pr-validation.yml` — fmt, per-stack validate, tflint, checkov, and (once
-  `ENABLE_CLOUD_PLANS=true`) OIDC-authenticated dev plans for all six stacks.
+  `ENABLE_CLOUD_PLANS=true`) credentialed dev plans for all six stacks.
 - `deploy-foundations.yml` / `deploy-tenants.yml` — independent pipelines;
   merge to `main` auto-deploys dev on path changes, staging/prod go through
   `workflow_dispatch`. Both delegate to the reusable
   `_terraform-deploy.yml`, which binds each run to the GitHub environment
   `<cloud>-<env>` so protection rules (required reviewers, wait timers)
   gate production applies.
-- Authentication is OIDC everywhere (azurerm `ARM_USE_OIDC`,
-  `aws-actions/configure-aws-credentials`, `google-github-actions/auth`);
-  the repo stores no cloud secrets. See `docs/getting-started.md` for the
-  identities and repository variables to create.
+- Authentication uses long-lived cloud credentials stored as GitHub secrets
+  (azurerm `ARM_CLIENT_SECRET`, AWS access keys via
+  `aws-actions/configure-aws-credentials`, a service account key via
+  `google-github-actions/auth`). See `docs/getting-started.md` for the
+  identities and repository secrets/variables to create.
 
 ## Known trade-offs
 
