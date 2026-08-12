@@ -56,6 +56,9 @@ variable "tenants" {
       egress  = optional(string, "AllowAll")
     }), {})
     labels = optional(map(string), {})
+    # Delegate access to the foundation's shared managed Redis (Azure Managed
+    # Redis / ElastiCache / Memorystore) to this tenant's workload identity.
+    redis_enabled = optional(bool, false)
   }))
   default = {}
 }

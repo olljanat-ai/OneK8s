@@ -18,6 +18,13 @@ module "azure" {
   limit_range          = var.limit_range
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  # try(): foundations deployed before the Redis feature lack these outputs;
+  # they are only required when redis_enabled = true (preconditions enforce it).
+  redis_enabled     = var.redis_enabled
+  redis_database_id = try(var.foundation.managed_redis_database_id, null)
+  redis_hostname    = try(var.foundation.managed_redis_hostname, null)
+  redis_port        = try(var.foundation.managed_redis_port, null)
 }
 
 module "aws" {
@@ -36,6 +43,12 @@ module "aws" {
   limit_range          = var.limit_range
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  redis_enabled          = var.redis_enabled
+  redis_arn              = try(var.foundation.redis_arn, null)
+  redis_user_group_id    = try(var.foundation.redis_user_group_id, null)
+  redis_endpoint_address = try(var.foundation.redis_endpoint_address, null)
+  redis_endpoint_port    = try(var.foundation.redis_endpoint_port, null)
 }
 
 module "gcp" {
@@ -53,4 +66,10 @@ module "gcp" {
   limit_range          = var.limit_range
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  redis_enabled          = var.redis_enabled
+  redis_cluster_name     = try(var.foundation.redis_cluster_name, null)
+  redis_cluster_location = try(var.foundation.redis_cluster_location, null)
+  redis_host             = try(var.foundation.redis_host, null)
+  redis_port             = try(var.foundation.redis_port, null)
 }

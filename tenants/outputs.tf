@@ -12,6 +12,7 @@ output "tenants" {
       identity        = t.identity
       secret_prefix   = t.secret_prefix
       secret_store    = t.secret_store_name
+      redis_endpoint  = t.redis_endpoint
     }
   }
 }

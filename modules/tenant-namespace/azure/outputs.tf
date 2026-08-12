@@ -27,3 +27,8 @@ output "secret_store_name" {
   description = "Name of the tenant's namespaced SecretStore."
   value       = module.common.secret_store_name
 }
+
+output "redis_endpoint" {
+  description = "host:port of the shared Managed Redis, or null when the tenant has no Redis access."
+  value       = var.redis_enabled ? "${var.redis_hostname}:${var.redis_port}" : null
+}

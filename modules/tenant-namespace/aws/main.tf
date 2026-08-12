@@ -9,6 +9,12 @@ locals {
   # "https://oidc.eks.<region>.amazonaws.com/id/XXXX" -> hostname/path used in
   # trust policy condition keys.
   oidc_issuer = replace(var.oidc_issuer_url, "https://", "")
+
+  # IAM-authenticated ElastiCache users must have user_id == user_name; the
+  # keyspace of the shared cache is sliced per tenant by ACL key pattern,
+  # mirroring the secret-prefix model.
+  redis_user_id    = "tenant-${var.tenant_name}-${var.environment}"
+  redis_key_prefix = "${var.tenant_name}:"
 }
 
 # --- Tenant identity: IAM role trusted via IRSA ------------------------------
@@ -76,6 +82,59 @@ resource "aws_iam_role_policy" "secrets" {
   policy = data.aws_iam_policy_document.secrets.json
 }
 
+# --- Optional shared Redis delegation ----------------------------------------
+# Three pieces: an IAM-authenticated ElastiCache user whose ACL restricts it
+# to the tenant's "<tenant>:" key slice, membership in the foundation's user
+# group (which attaches it to the shared serverless cache), and
+# elasticache:Connect on the tenant role for both cache and user.
+resource "aws_elasticache_user" "redis" {
+  count = var.redis_enabled ? 1 : 0
+
+  user_id       = local.redis_user_id
+  user_name     = local.redis_user_id
+  engine        = "valkey"
+  access_string = "on ~${local.redis_key_prefix}* +@all -@admin -@dangerous"
+
+  authentication_mode {
+    type = "iam"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.redis_user_group_id != null && var.redis_arn != null
+      error_message = "redis_enabled = true but the foundation exports no redis_user_group_id/redis_arn — deploy a foundation that includes the shared ElastiCache cache first."
+    }
+  }
+}
+
+resource "aws_elasticache_user_group_association" "redis" {
+  count = var.redis_enabled ? 1 : 0
+
+  user_group_id = var.redis_user_group_id
+  user_id       = aws_elasticache_user.redis[0].user_id
+}
+
+data "aws_iam_policy_document" "redis_connect" {
+  count = var.redis_enabled ? 1 : 0
+
+  statement {
+    sid     = "ConnectAsOwnRedisUserOnly"
+    actions = ["elasticache:Connect"]
+    resources = [
+      var.redis_arn,
+      "arn:aws:elasticache:${var.region}:${var.account_id}:user:${local.redis_user_id}",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "redis_connect" {
+  count = var.redis_enabled ? 1 : 0
+
+  name   = "tenant-redis-connect"
+  role   = aws_iam_role.tenant.id
+  policy = data.aws_iam_policy_document.redis_connect[0].json
+}
+
 # --- Kubernetes-side resources (namespace, SA, namespaced SecretStore) -------
 module "common" {
   source = "../common"
@@ -106,4 +165,14 @@ module "common" {
       }
     }
   }
+
+  redis_connection = var.redis_enabled ? {
+    REDIS_HOST = var.redis_endpoint_address
+    REDIS_PORT = tostring(var.redis_endpoint_port)
+    REDIS_TLS  = "true"
+    # IAM auth: username = the ElastiCache user, password = a SigV4-signed
+    # IAM auth token generated with the tenant role's credentials.
+    REDIS_USERNAME   = local.redis_user_id
+    REDIS_KEY_PREFIX = local.redis_key_prefix
+  } : null
 }

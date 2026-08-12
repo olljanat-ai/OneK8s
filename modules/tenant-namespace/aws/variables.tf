@@ -33,6 +33,36 @@ variable "secrets_kms_key_arn" {
   type        = string
 }
 
+variable "redis_enabled" {
+  description = "Create an IAM-authenticated, key-prefix-scoped ElastiCache user for this tenant and allow elasticache:Connect."
+  type        = bool
+  default     = false
+}
+
+variable "redis_arn" {
+  description = "ARN of the shared ElastiCache serverless cache (from the foundation). Required when redis_enabled."
+  type        = string
+  default     = null
+}
+
+variable "redis_user_group_id" {
+  description = "ElastiCache user group to associate the tenant user into (from the foundation). Required when redis_enabled."
+  type        = string
+  default     = null
+}
+
+variable "redis_endpoint_address" {
+  description = "Endpoint address of the shared ElastiCache serverless cache (from the foundation)."
+  type        = string
+  default     = null
+}
+
+variable "redis_endpoint_port" {
+  description = "Endpoint port of the shared ElastiCache serverless cache (from the foundation)."
+  type        = number
+  default     = null
+}
+
 variable "quota" {
   description = "ResourceQuota limits for the tenant namespace."
   type = object({

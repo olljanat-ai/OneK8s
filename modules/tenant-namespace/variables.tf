@@ -27,6 +27,13 @@ variable "foundation" {
       aws:   oidc_issuer_url, oidc_provider_arn, region, account_id,
              secrets_kms_key_arn
       gcp:   project_id, project_number, cluster_name, cluster_location
+    Additionally required when redis_enabled = true:
+      azure: managed_redis_database_id, managed_redis_hostname,
+             managed_redis_port
+      aws:   redis_arn, redis_user_group_id, redis_endpoint_address,
+             redis_endpoint_port
+      gcp:   redis_cluster_name, redis_cluster_location, redis_host,
+             redis_port
   EOT
   type        = any
 }
@@ -76,6 +83,18 @@ variable "limit_range" {
     max_memory             = optional(string)
   })
   default = {}
+}
+
+variable "redis_enabled" {
+  description = <<-EOT
+    Delegate access to the foundation's shared managed Redis to this tenant's
+    workload identity: Azure Managed Redis access policy assignment (azure),
+    key-prefix-scoped IAM-auth ElastiCache user + elasticache:Connect (aws),
+    or cluster-scoped roles/redis.dbConnectUser on Memorystore (gcp). Also
+    drops a "redis-connection" ConfigMap into the tenant namespace.
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "namespace_labels" {

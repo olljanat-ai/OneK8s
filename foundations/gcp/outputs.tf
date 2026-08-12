@@ -33,6 +33,26 @@ output "workload_identity_pool" {
   value       = "${var.project_id}.svc.id.goog"
 }
 
+output "redis_cluster_name" {
+  description = "Name of the shared Memorystore Redis cluster."
+  value       = google_redis_cluster.this.name
+}
+
+output "redis_cluster_location" {
+  description = "Location (region) of the shared Memorystore Redis cluster."
+  value       = google_redis_cluster.this.region
+}
+
+output "redis_host" {
+  description = "Discovery endpoint address of the shared Memorystore Redis cluster."
+  value       = google_redis_cluster.this.discovery_endpoints[0].address
+}
+
+output "redis_port" {
+  description = "Discovery endpoint port of the shared Memorystore Redis cluster."
+  value       = google_redis_cluster.this.discovery_endpoints[0].port
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment

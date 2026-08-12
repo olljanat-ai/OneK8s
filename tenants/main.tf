@@ -43,4 +43,5 @@ module "tenant" {
   limit_range      = each.value.limit_range
   network_policy   = each.value.network_policy
   namespace_labels = each.value.labels
+  redis_enabled    = each.value.redis_enabled
 }

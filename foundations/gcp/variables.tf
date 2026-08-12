@@ -37,6 +37,24 @@ variable "node_count_per_zone" {
   default     = 1
 }
 
+variable "redis_shard_count" {
+  description = "Shard count of the shared Memorystore Redis cluster."
+  type        = number
+  default     = 1
+}
+
+variable "redis_replica_count" {
+  description = "Replicas per shard of the shared Memorystore Redis cluster."
+  type        = number
+  default     = 0
+}
+
+variable "redis_node_type" {
+  description = "Node type of the shared Memorystore Redis cluster."
+  type        = string
+  default     = "REDIS_SHARED_CORE_NANO"
+}
+
 variable "eso_chart_version" {
   description = "External Secrets Operator Helm chart version."
   type        = string

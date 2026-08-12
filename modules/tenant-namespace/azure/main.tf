@@ -81,6 +81,36 @@ resource "azurerm_role_assignment" "tenant_secrets" {
   EOT
 }
 
+# --- Optional shared Redis delegation ----------------------------------------
+# Azure Managed Redis authenticates via Entra ID: assigning the built-in
+# "default" access policy to the tenant identity is the whole delegation.
+# It is a data-plane assignment on the shared database — the tenant gets
+# Redis access, never ARM control-plane rights. The Redis username is the
+# identity's object (principal) ID.
+resource "azapi_resource" "redis_access" {
+  count = var.redis_enabled ? 1 : 0
+
+  type      = "Microsoft.Cache/redisEnterprise/databases/accessPolicyAssignments@${var.redis_api_version}"
+  name      = "tenant-${var.tenant_name}"
+  parent_id = var.redis_database_id
+
+  body = {
+    properties = {
+      accessPolicyName = "default"
+      user = {
+        objectId = azurerm_user_assigned_identity.tenant.principal_id
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.redis_database_id != null
+      error_message = "redis_enabled = true but the foundation exports no managed_redis_database_id — deploy a foundation that includes Azure Managed Redis first."
+    }
+  }
+}
+
 # --- Kubernetes-side resources (SA + namespaced SecretStore) -----------------
 module "common" {
   source = "../common"
@@ -108,6 +138,15 @@ module "common" {
       }
     }
   }
+
+  redis_connection = var.redis_enabled ? {
+    REDIS_HOST = var.redis_hostname
+    REDIS_PORT = tostring(var.redis_port)
+    REDIS_TLS  = "true"
+    # Entra auth: username = the identity's object ID, password = an Entra
+    # access token acquired via workload identity.
+    REDIS_USERNAME = azurerm_user_assigned_identity.tenant.principal_id
+  } : null
 
   depends_on = [azapi_resource.managed_namespace]
 }

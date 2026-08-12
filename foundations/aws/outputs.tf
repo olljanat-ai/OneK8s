@@ -38,6 +38,26 @@ output "account_id" {
   value       = data.aws_caller_identity.current.account_id
 }
 
+output "redis_arn" {
+  description = "ARN of the shared ElastiCache serverless cache (for tenant elasticache:Connect policies)."
+  value       = aws_elasticache_serverless_cache.redis.arn
+}
+
+output "redis_user_group_id" {
+  description = "ElastiCache user group tenant users are associated into."
+  value       = aws_elasticache_user_group.redis_tenants.user_group_id
+}
+
+output "redis_endpoint_address" {
+  description = "Endpoint address of the shared ElastiCache serverless cache."
+  value       = aws_elasticache_serverless_cache.redis.endpoint[0].address
+}
+
+output "redis_endpoint_port" {
+  description = "Endpoint port of the shared ElastiCache serverless cache."
+  value       = aws_elasticache_serverless_cache.redis.endpoint[0].port
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment

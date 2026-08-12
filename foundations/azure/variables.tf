@@ -56,6 +56,18 @@ variable "eso_chart_version" {
   default     = "0.18.2"
 }
 
+variable "redis_sku" {
+  description = "Azure Managed Redis SKU (e.g. Balanced_B0, Balanced_B5, MemoryOptimized_M10)."
+  type        = string
+  default     = "Balanced_B0"
+}
+
+variable "managed_redis_api_version" {
+  description = "azapi API version for Azure Managed Redis (Microsoft.Cache/redisEnterprise)."
+  type        = string
+  default     = "2025-04-01"
+}
+
 variable "enable_baseline_policy" {
   description = "Assign the AKS pod security baseline policy initiative to the resource group."
   type        = bool

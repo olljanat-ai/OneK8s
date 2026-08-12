@@ -62,6 +62,36 @@ variable "service_account_name" {
   default     = "workload"
 }
 
+variable "redis_enabled" {
+  description = "Assign the tenant identity the default access policy on the shared Azure Managed Redis database."
+  type        = bool
+  default     = false
+}
+
+variable "redis_database_id" {
+  description = "Resource ID of the shared Managed Redis default database (from the foundation). Required when redis_enabled."
+  type        = string
+  default     = null
+}
+
+variable "redis_hostname" {
+  description = "Hostname of the shared Managed Redis instance (from the foundation)."
+  type        = string
+  default     = null
+}
+
+variable "redis_port" {
+  description = "TLS port of the shared Managed Redis database (from the foundation)."
+  type        = number
+  default     = null
+}
+
+variable "redis_api_version" {
+  description = "azapi API version for Managed Redis access policy assignments."
+  type        = string
+  default     = "2025-04-01"
+}
+
 variable "managed_namespace_api_version" {
   description = "azapi API version for AKS managed namespaces."
   type        = string

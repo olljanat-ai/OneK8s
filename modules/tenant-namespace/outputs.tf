@@ -35,6 +35,17 @@ output "secret_prefix" {
   )
 }
 
+# one(concat()) instead of coalesce(): the value is legitimately null when
+# the tenant has no Redis access.
+output "redis_endpoint" {
+  description = "host:port of the shared managed Redis, or null when redis_enabled is false."
+  value = one(concat(
+    module.azure[*].redis_endpoint,
+    module.aws[*].redis_endpoint,
+    module.gcp[*].redis_endpoint,
+  ))
+}
+
 output "secret_store_name" {
   description = "Name of the tenant's namespaced SecretStore."
   value = coalesce(

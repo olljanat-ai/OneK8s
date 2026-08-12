@@ -26,7 +26,9 @@ tenants = {
       ingress = "AllowSameNamespace"
       egress  = "AllowAll"
     }
-    labels = { "onek8s.io/cost-center" = "alpha-1001" }
+    # Opt in to the foundation's shared managed Redis.
+    redis_enabled = true
+    labels        = { "onek8s.io/cost-center" = "alpha-1001" }
   }
   team-beta = {}
 }

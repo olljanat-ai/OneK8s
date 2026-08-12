@@ -37,6 +37,33 @@ resource "google_project_iam_member" "secret_accessor" {
   }
 }
 
+# --- Optional shared Redis delegation ----------------------------------------
+# Memorystore's IAM auth is per cluster, not per key: the condition pins the
+# grant to the shared cluster, but inside it tenants share one keyspace —
+# unlike the AWS ACL key slice. Don't co-locate tenants with hostile trust
+# boundaries on the same Memorystore cluster. (IAM conditions reference the
+# project NUMBER, as with Secret Manager.)
+resource "google_project_iam_member" "redis_connect" {
+  count = var.redis_enabled ? 1 : 0
+
+  project = var.project_id
+  role    = "roles/redis.dbConnectUser"
+  member  = "serviceAccount:${google_service_account.tenant.email}"
+
+  condition {
+    title       = "tenant-${var.tenant_name}-redis"
+    description = "Restrict connect access to the shared Memorystore cluster ${var.redis_cluster_name}"
+    expression  = "resource.name.startsWith(\"projects/${var.project_number}/locations/${var.redis_cluster_location}/clusters/${var.redis_cluster_name}\")"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = var.redis_cluster_name != null && var.redis_cluster_location != null
+      error_message = "redis_enabled = true but the foundation exports no redis_cluster_name/redis_cluster_location — deploy a foundation that includes the shared Memorystore cluster first."
+    }
+  }
+}
+
 # --- Kubernetes-side resources (namespace, SA, namespaced SecretStore) -------
 module "common" {
   source = "../common"
@@ -53,6 +80,15 @@ module "common" {
   service_account_annotations = {
     "iam.gke.io/gcp-service-account" = google_service_account.tenant.email
   }
+
+  redis_connection = var.redis_enabled ? {
+    REDIS_HOST = var.redis_host
+    REDIS_PORT = tostring(var.redis_port)
+    REDIS_TLS  = "true"
+    # IAM auth: username = "default", password = an access token of the
+    # tenant GSA obtained through workload identity.
+    REDIS_USERNAME = "default"
+  } : null
 
   secret_store_provider = {
     gcpsm = {

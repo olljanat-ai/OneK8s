@@ -30,6 +30,7 @@ cloud's providers. All three delegate the Kubernetes-side work to `common`.
 | K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` |
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` |
+| Shared Redis (opt-in) | access policy assignment on Azure Managed Redis for the tenant UAMI | IAM-auth ElastiCache user with `~<tenant>:*` key ACL + `elasticache:Connect` | `roles/redis.dbConnectUser` with IAM condition pinned to the Memorystore cluster |
 
 ## Resource limits and network policy
 
@@ -52,6 +53,33 @@ syntax on every cloud**:
   Defaults: ingress `AllowSameNamespace`, egress `AllowAll`. Note that
   restricting egress also blocks DNS to `kube-system`, matching the literal
   Azure semantics — pair it with a DNS allowance before using in anger.
+
+## Shared managed Redis (`redis_enabled`)
+
+Set `redis_enabled = true` on a tenant to delegate access to the shared
+managed Redis deployed by the foundation (Azure Managed Redis, ElastiCache
+Serverless/Valkey, Memorystore for Redis Cluster). The delegation always
+targets the tenant's existing workload identity — there are no Redis
+passwords anywhere:
+
+- **Azure** — data-plane access policy assignment (`default` policy) for
+  the tenant UAMI on the Managed Redis database; the database itself is
+  Entra-only (access keys disabled).
+- **AWS** — an IAM-authenticated ElastiCache user (`tenant-<name>-<env>`)
+  whose ACL is scoped to the `<tenant>:` key prefix, associated into the
+  foundation's user group, plus `elasticache:Connect` limited to that cache
+  and user on the tenant IAM role.
+- **GCP** — `roles/redis.dbConnectUser` for the tenant GSA with an IAM
+  condition pinned to the shared Memorystore cluster. Memorystore IAM auth
+  has no per-key scoping: enabled tenants share the keyspace.
+
+Enabled tenants get a `redis-connection` ConfigMap (`REDIS_HOST`,
+`REDIS_PORT`, `REDIS_TLS`, `REDIS_USERNAME`, and on AWS
+`REDIS_KEY_PREFIX`) in their namespace, and the module exposes a unified
+`redis_endpoint` output (null when disabled). The foundation outputs the
+module needs for this are listed in `variables.tf`; enabling Redis against
+a foundation deployed before the Redis feature fails with an explicit
+precondition error.
 
 ## Isolation model
 

@@ -100,3 +100,9 @@ variable "secret_store_provider" {
   description = "The `spec.provider` object of the tenant's namespaced ESO SecretStore, as built by the cloud-specific wrapper module."
   type        = any
 }
+
+variable "redis_connection" {
+  description = "Connection details for the shared managed Redis, published as a \"redis-connection\" ConfigMap in the tenant namespace. null = tenant has no Redis access."
+  type        = map(string)
+  default     = null
+}

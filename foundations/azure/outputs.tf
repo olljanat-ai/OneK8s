@@ -36,6 +36,26 @@ output "key_vault_uri" {
   value       = azurerm_key_vault.this.vault_uri
 }
 
+output "managed_redis_id" {
+  description = "Resource ID of the shared Azure Managed Redis cluster."
+  value       = azapi_resource.redis.id
+}
+
+output "managed_redis_database_id" {
+  description = "Resource ID of the Managed Redis default database (parent for tenant access policy assignments)."
+  value       = azapi_resource.redis_default_db.id
+}
+
+output "managed_redis_hostname" {
+  description = "Hostname of the shared Azure Managed Redis instance."
+  value       = azapi_resource.redis.output.properties.hostName
+}
+
+output "managed_redis_port" {
+  description = "TLS port of the Managed Redis default database."
+  value       = azapi_resource.redis_default_db.output.properties.port
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment

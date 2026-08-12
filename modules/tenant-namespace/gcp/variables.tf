@@ -28,6 +28,36 @@ variable "cluster_location" {
   type        = string
 }
 
+variable "redis_enabled" {
+  description = "Grant the tenant GSA roles/redis.dbConnectUser scoped to the shared Memorystore Redis cluster."
+  type        = bool
+  default     = false
+}
+
+variable "redis_cluster_name" {
+  description = "Name of the shared Memorystore Redis cluster (from the foundation). Required when redis_enabled."
+  type        = string
+  default     = null
+}
+
+variable "redis_cluster_location" {
+  description = "Location (region) of the shared Memorystore Redis cluster (from the foundation). Required when redis_enabled."
+  type        = string
+  default     = null
+}
+
+variable "redis_host" {
+  description = "Discovery endpoint address of the shared Memorystore Redis cluster (from the foundation)."
+  type        = string
+  default     = null
+}
+
+variable "redis_port" {
+  description = "Discovery endpoint port of the shared Memorystore Redis cluster (from the foundation)."
+  type        = number
+  default     = null
+}
+
 variable "quota" {
   description = "ResourceQuota limits for the tenant namespace."
   type = object({

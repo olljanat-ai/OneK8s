@@ -14,6 +14,8 @@ resource "google_project_service" "required" {
     "secretmanager.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "redis.googleapis.com",
+    "networkconnectivity.googleapis.com",
   ])
 
   service            = each.value

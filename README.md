@@ -10,9 +10,9 @@ Operator and per-tenant workload identities.
 
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
-│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy) + Key Vault (RBAC/ABAC)
-│   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
-│   └── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
+│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy) + Key Vault (RBAC/ABAC) + Azure Managed Redis
+│   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK + ElastiCache Serverless (Valkey)
+│   └── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager + Memorystore (Redis Cluster)
 ├── modules/
 │   └── tenant-namespace/   # Reusable tenant module — cloud is a variable
 │       ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp, unified outputs
@@ -43,6 +43,14 @@ with Key Vault **ABAC** conditions, IAM **ARN prefixes** (+ `kms:ViaService`)
 and Secret Manager **IAM conditions**. Cross-tenant secret access is blocked
 in the cloud IAM plane, not just in Kubernetes.
 Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
+
+Each foundation also ships a **shared managed Redis** (Azure Managed Redis,
+ElastiCache Serverless/Valkey, Memorystore for Redis Cluster). A tenant opts
+in with `redis_enabled = true`, which delegates access to the tenant's
+workload identity — Entra access policy on Azure, key-prefix-scoped
+IAM-authenticated ElastiCache user on AWS, cluster-pinned
+`roles/redis.dbConnectUser` on GCP. No Redis passwords exist anywhere.
+Details: [ADR-0002](docs/adr/0002-shared-managed-redis-with-identity-delegations.md).
 
 ## Quick start
 

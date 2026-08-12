@@ -52,6 +52,8 @@ Azure credentials (state home) plus the selected cloud's credentials.
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager |
 | Tenant namespace | **Azure Managed Namespace** (azapi: quota + netpol) + LimitRange | Namespace + quota + netpol + LimitRange | Namespace + quota + netpol + LimitRange |
+| Shared tenant Redis | **Azure Managed Redis** (Entra-only, azapi) | ElastiCache **Serverless** (Valkey) | **Memorystore for Redis Cluster** (IAM auth, PSC) |
+| Redis delegation | access policy assignment for the tenant UAMI | IAM-auth ElastiCache user (key-prefix ACL) + `elasticache:Connect` | `roles/redis.dbConnectUser`, IAM condition pinned to the cluster |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 
 ## Secret isolation (the core security invariant)
@@ -92,6 +94,38 @@ spec:
       remoteRef:
         key: team-alpha-db-password   # Azure/GCP; "dev/team-alpha/db-password" on AWS
 ```
+
+## Shared managed Redis (opt-in per tenant)
+
+Each foundation also deploys one shared managed Redis instance — Azure
+Managed Redis, ElastiCache Serverless (Valkey) or Memorystore for Redis
+Cluster. A tenant opts in with a single flag:
+
+```hcl
+tenants = {
+  team-alpha = { redis_enabled = true }
+}
+```
+
+The flag creates the cloud-side delegation for the tenant's **existing
+workload identity** — no passwords or connection strings are handed out:
+
+- **Azure** — the Managed Redis database is Entra-only (access keys
+  disabled); the tenant's UAMI gets a data-plane access policy assignment.
+  Workloads authenticate with `username = <identity object ID>`,
+  `password = <Entra access token>`.
+- **AWS** — the tenant gets an IAM-authenticated ElastiCache user whose ACL
+  is restricted to the `"<tenant>:"` key prefix (the Redis analogue of the
+  secret-prefix model), associated into the cache's user group, plus
+  `elasticache:Connect` on exactly that cache and user.
+- **GCP** — the tenant GSA gets `roles/redis.dbConnectUser` with an IAM
+  condition pinned to the shared Memorystore cluster. Note: Memorystore IAM
+  auth is per *cluster* — there is no per-key scoping, so tenants sharing
+  the instance share one keyspace.
+
+Enabled tenants receive a `redis-connection` ConfigMap (host, port, TLS,
+username hint) in their namespace; authentication always flows through the
+same workload-identity chain used for secrets.
 
 ## CI/CD
 

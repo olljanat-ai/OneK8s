@@ -137,6 +137,24 @@ resource "kubernetes_service_account_v1" "workload" {
   depends_on = [kubernetes_namespace_v1.this]
 }
 
+# --- Shared Redis connection details -----------------------------------------
+# Published only for tenants whose Redis delegation exists, so workloads can
+# mount/env-inject the endpoint without hardcoding it. Credentials are never
+# in here — authentication is via the tenant's workload identity.
+resource "kubernetes_config_map_v1" "redis_connection" {
+  count = var.redis_connection != null ? 1 : 0
+
+  metadata {
+    name      = "redis-connection"
+    namespace = local.namespace
+    labels    = local.labels
+  }
+
+  data = var.redis_connection
+
+  depends_on = [kubernetes_namespace_v1.this]
+}
+
 # --- Namespaced SecretStore --------------------------------------------------
 # Deliberately a SecretStore (not ClusterSecretStore): it lives in the tenant
 # namespace, can only be referenced by ExternalSecrets in that namespace, and

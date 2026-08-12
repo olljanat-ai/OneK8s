@@ -50,6 +50,18 @@ variable "node_max_size" {
   default     = 4
 }
 
+variable "redis_max_storage_gb" {
+  description = "Cost ceiling for the shared ElastiCache serverless cache: maximum data storage in GB."
+  type        = number
+  default     = 10
+}
+
+variable "redis_max_ecpu_per_second" {
+  description = "Cost ceiling for the shared ElastiCache serverless cache: maximum ECPUs per second."
+  type        = number
+  default     = 5000
+}
+
 variable "eso_chart_version" {
   description = "External Secrets Operator Helm chart version."
   type        = string
