@@ -4,27 +4,27 @@ name: Deploy Tenants
 # remote-state outputs. Path filter includes the tenant module so module
 # changes roll out to tenants on merge.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "tenants/**"
-      - "modules/tenant-namespace/**"
-      - ".github/workflows/deploy-tenants.yml"
-      - ".github/workflows/_terraform-deploy.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "tenants/**"
+  #     - "modules/tenant-namespace/**"
+  #     - ".github/workflows/deploy-tenants.yml"
+  #     - ".github/workflows/_terraform-deploy.yml"
   workflow_dispatch:
     inputs:
       cloud:
         description: "Cloud to deploy"
         required: true
-        default: "all"
+        default: "azure"
         type: choice
         options: [all, azure, aws, gcp]
       environment:
         description: "Environment to deploy"
         required: true
-        default: "dev"
+        default: "prototype"
         type: choice
-        options: [dev, staging, prod]
+        options: [prototype, dev, staging, prod]
 
 permissions:
   contents: read
@@ -37,8 +37,8 @@ jobs:
     with:
       stack: tenants
       cloud: azure
-      environment: ${{ inputs.environment || 'dev' }}
-      config: azure-${{ inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment || 'prototype' }}
+      config: azure-${{ inputs.environment || 'prototype' }}
     secrets: inherit
 
   aws:
@@ -47,8 +47,8 @@ jobs:
     with:
       stack: tenants
       cloud: aws
-      environment: ${{ inputs.environment || 'dev' }}
-      config: aws-${{ inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment || 'prototype' }}
+      config: aws-${{ inputs.environment || 'prototype' }}
     secrets: inherit
 
   gcp:
@@ -57,6 +57,6 @@ jobs:
     with:
       stack: tenants
       cloud: gcp
-      environment: ${{ inputs.environment || 'dev' }}
-      config: gcp-${{ inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment || 'prototype' }}
+      config: gcp-${{ inputs.environment || 'prototype' }}
     secrets: inherit

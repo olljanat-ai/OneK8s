@@ -1,30 +1,30 @@
 name: Deploy Foundations
 
 # Foundations (cluster + secret backend) deploy independently of tenants.
-#  - Merge to main touching foundations/** auto-deploys the dev environment.
+#  - Merge to main touching foundations/** auto-deploys the prototype environment.
 #  - staging/prod (and targeted clouds) deploy via workflow_dispatch, guarded
 #    by GitHub environment protection rules on "<cloud>-<environment>".
 on:
-  push:
-    branches: [main]
-    paths:
-      - "foundations/**"
-      - ".github/workflows/deploy-foundations.yml"
-      - ".github/workflows/_terraform-deploy.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "foundations/**"
+  #     - ".github/workflows/deploy-foundations.yml"
+  #     - ".github/workflows/_terraform-deploy.yml"
   workflow_dispatch:
     inputs:
       cloud:
         description: "Cloud to deploy"
         required: true
-        default: "all"
+        default: "azure"
         type: choice
         options: [all, azure, aws, gcp]
       environment:
         description: "Environment to deploy"
         required: true
-        default: "dev"
+        default: "prototype"
         type: choice
-        options: [dev, staging, prod]
+        options: [prototype, dev, staging, prod]
 
 permissions:
   contents: read
@@ -37,7 +37,7 @@ jobs:
     with:
       stack: foundations/azure
       cloud: azure
-      environment: ${{ inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment || 'prototype' }}
     secrets: inherit
 
   aws:
@@ -46,7 +46,7 @@ jobs:
     with:
       stack: foundations/aws
       cloud: aws
-      environment: ${{ inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment || 'prototype' }}
     secrets: inherit
 
   gcp:
@@ -55,5 +55,5 @@ jobs:
     with:
       stack: foundations/gcp
       cloud: gcp
-      environment: ${{ inputs.environment || 'dev' }}
+      environment: ${{ inputs.environment || 'prototype' }}
     secrets: inherit

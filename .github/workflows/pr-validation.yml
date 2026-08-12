@@ -75,7 +75,7 @@ jobs:
           # soft_fail once the baseline is clean.
           soft_fail: true
 
-  # Plans run against the dev environment of each cloud. They require the
+  # Plans run against the prototype environment of each cloud. They require the
   # OIDC roles/apps referenced below to exist, so they are gated behind a
   # repository variable to keep PR checks green on a fresh fork/clone:
   # set ENABLE_CLOUD_PLANS=true once cloud credentials are configured.
@@ -91,22 +91,22 @@ jobs:
         include:
           - stack: foundations/azure
             cloud: azure
-            config: dev
+            config: prototype
           - stack: foundations/aws
             cloud: aws
-            config: dev
+            config: prototype
           - stack: foundations/gcp
             cloud: gcp
-            config: dev
+            config: prototype
           - stack: tenants
             cloud: azure
-            config: azure-dev
+            config: azure-prototype
           - stack: tenants
             cloud: aws
-            config: aws-dev
+            config: aws-prototype
           - stack: tenants
             cloud: gcp
-            config: gcp-dev
+            config: gcp-prototype
     env:
       # azurerm/azapi providers pick these up directly and use GitHub OIDC.
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
