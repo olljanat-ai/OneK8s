@@ -1,0 +1,5 @@
+{
+    "git.terminalAuthentication": false,
+    "github.gitAuthentication": false,
+    "git.requireGitUserConfig": false
+}
