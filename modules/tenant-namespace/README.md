@@ -6,11 +6,12 @@ all clouds** — the cloud is just a variable:
 
 ```
 tenant-namespace/
-├── main.tf … # dispatcher: cloud = "azure" | "aws" | "gcp"
+├── main.tf … # dispatcher: cloud = "azure" | "aws" | "gcp" | "oci"
 ├── common/   # Kubernetes-side resources shared by all clouds
 ├── azure/    # AKS: Managed Namespace + UAMI + FIC + ABAC on Key Vault
 ├── aws/      # EKS: Namespace + IAM Role (IRSA) + prefix-scoped Secrets Manager
-└── gcp/      # GKE: Namespace + GSA + Workload Identity + IAM condition
+├── gcp/      # GKE: Namespace + GSA + Workload Identity + IAM condition
+└── oci/      # OKE: Namespace + workload-identity policy + secret-name prefix
 ```
 
 Callers use the module root and pass `cloud` plus the matching foundation's
@@ -18,17 +19,22 @@ outputs object; the dispatcher instantiates exactly one cloud
 implementation and exposes identically-shaped outputs (`namespace`,
 `service_account_name`, `identity`, `secret_prefix`, `secret_store_name`).
 The cloud submodules remain callable directly if a root only wants one
-cloud's providers. All three delegate the Kubernetes-side work to `common`.
+cloud's providers. All four delegate the Kubernetes-side work to `common`.
+
+Because the OCI submodule needs the home-region provider alias (`oci.home`)
+and aliased configurations are never inherited, callers must pass a
+`providers` block — and since that disables default inheritance, it has to
+list every provider, not just the OCI ones. See `tenants/main.tf`.
 
 ## What every tenant gets
 
-| Concern | Azure | AWS | GCP |
-|---|---|---|---|
-| Namespace | **Azure Managed Namespace** (`azapi`, incl. default quota & network policy) | Namespace + ResourceQuota + NetworkPolicy | Namespace + ResourceQuota + NetworkPolicy |
-| Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding |
-| K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` |
-| ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity |
-| Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` |
+| Concern | Azure | AWS | GCP | OCI |
+|---|---|---|---|---|
+| Namespace | **Azure Managed Namespace** (`azapi`, incl. default quota & network policy) | Namespace + ResourceQuota + NetworkPolicy | Namespace + ResourceQuota + NetworkPolicy | Namespace + ResourceQuota + NetworkPolicy |
+| Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding | none to create — OKE asserts the (cluster, namespace, SA) tuple itself |
+| K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` | no annotation needed |
+| ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` |
+| Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` |
 
 ## Isolation model
 
@@ -57,7 +63,7 @@ module "tenant" {
   source   = "../modules/tenant-namespace"
   for_each = var.tenants
 
-  cloud       = var.cloud                 # "azure" | "aws" | "gcp"
+  cloud       = var.cloud                 # "azure" | "aws" | "gcp" | "oci"
   tenant_name = each.key
   environment = var.environment
   foundation  = data.terraform_remote_state.foundation.outputs
@@ -77,3 +83,8 @@ selected cloud (see `variables.tf` for the per-cloud key list).
   intended dependency direction.
 - The Azure managed namespace API is still in preview; bump
   `managed_namespace_api_version` as Azure promotes it.
+- OKE Workload Identity requires an **enhanced** OKE cluster; the OCI
+  foundation creates one (`type = "ENHANCED_CLUSTER"`).
+- The OCI policy grants reads of named secrets, not listing, so ESO's
+  `dataFrom.find` is unavailable there — that restriction is what keeps a
+  tenant from enumerating the compartment.

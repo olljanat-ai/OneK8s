@@ -6,7 +6,7 @@
 ## Context
 
 All tenants on a cluster share one secret backend (Azure Key Vault, AWS
-Secrets Manager, GCP Secret Manager). External Secrets Operator (ESO)
+Secrets Manager, GCP Secret Manager, OCI Vault). External Secrets Operator (ESO)
 synchronizes secrets into the cluster. ESO offers two store types:
 
 1. **`ClusterSecretStore`** — cluster-scoped, one shared credential,
@@ -32,9 +32,15 @@ name/prefix slice** of the shared backend:
 - GCP: Google Service Account + Workload Identity binding;
   `roles/secretmanager.secretAccessor` with an IAM condition
   `resource.name.startsWith("projects/<num>/secrets/<tenant>-")`.
+- OCI: OKE Workload Identity, which has no identity object at all — the
+  principal *is* the (cluster, namespace, service account) tuple, matched in
+  an IAM policy that also carries the prefix condition
+  `target.secret.name = /<tenant>-*/`.
 
-The federation subject is always pinned to
-`system:serviceaccount:<tenant-ns>:<sa>`.
+The federation subject is always pinned to that tenant's namespace and
+ServiceAccount: `system:serviceaccount:<tenant-ns>:<sa>` on Azure, AWS and
+GCP, and the equivalent `request.principal.namespace` /
+`request.principal.service_account` conditions on OCI.
 
 ## Rationale
 
@@ -58,9 +64,9 @@ The federation subject is always pinned to
 - **Cloud-side enforcement & audit** — access decisions land in Azure
   Activity Logs / CloudTrail / Cloud Audit Logs with the *tenant's* identity
   as principal, giving per-tenant audit trails for free.
-- **Symmetric across clouds** — ABAC prefixes, IAM ARN prefixes and IAM
-  conditions express the same rule, so the tenant contract ("you own
-  `<prefix>*`") is identical on AKS, EKS and GKE.
+- **Symmetric across clouds** — ABAC prefixes, IAM ARN prefixes, IAM
+  conditions and OCI policy conditions express the same rule, so the tenant
+  contract ("you own `<prefix>*`") is identical on AKS, EKS, GKE and OKE.
 - **Clean offboarding** — deleting the tenant module instance deletes the
   identity and role bindings; no shared credential to rotate.
 
@@ -68,10 +74,16 @@ The federation subject is always pinned to
 
 - One cloud identity + role binding per tenant: more objects to manage, and
   cloud limits apply at very high tenant counts (e.g. Azure role assignments
-  per subscription). Acceptable for the intended scale; mitigate with one
-  vault/cluster pair per environment.
+  per subscription, OCI policies per compartment). Acceptable for the
+  intended scale; mitigate with one vault/cluster pair per environment.
+  OCI is the cheapest of the four here — it creates a policy per tenant and
+  no identity object.
 - Secret naming conventions become a hard contract; renaming a tenant means
   migrating its secrets under a new prefix.
+- Prefix conditions bind to a *named* secret, so bulk enumeration is not
+  granted. On OCI this is visible as a functional limit: ESO's
+  `dataFrom.find` cannot list a tenant's secrets, only `extract`/`key`
+  lookups work.
 - ESO runs without any cloud credentials of its own — the controller only
   exchanges tenant SA tokens. There is deliberately no ClusterSecretStore,
   and platform policy (Azure Policy / admission control) should forbid

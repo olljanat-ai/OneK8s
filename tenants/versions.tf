@@ -1,6 +1,6 @@
 # -----------------------------------------------------------------------------
 # Tenants: ONE stack for all clouds. The target cloud is just a parameter
-# (`cloud = "azure" | "aws" | "gcp"`) in the chosen env file:
+# (`cloud = "azure" | "aws" | "gcp" | "oci"`) in the chosen env file:
 #
 #   terraform init -backend-config=backend/aws-dev.hcl
 #   terraform apply -var-file=envs/aws-dev.tfvars
@@ -32,6 +32,10 @@ terraform {
     google = {
       source  = "hashicorp/google"
       version = "= 7.44.0"
+    }
+    oci = {
+      source  = "oracle/oci"
+      version = "= 8.26.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"

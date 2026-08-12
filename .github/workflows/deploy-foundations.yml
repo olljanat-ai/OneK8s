@@ -18,7 +18,7 @@ on:
         required: true
         default: "azure"
         type: choice
-        options: [all, azure, aws, gcp]
+        options: [all, azure, aws, gcp, oci]
       environment:
         description: "Environment to deploy"
         required: true
@@ -54,5 +54,14 @@ jobs:
     with:
       stack: foundations/gcp
       cloud: gcp
+      environment: ${{ inputs.environment || 'prototype' }}
+    secrets: inherit
+
+  oci:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'oci'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: foundations/oci
+      cloud: oci
       environment: ${{ inputs.environment || 'prototype' }}
     secrets: inherit
