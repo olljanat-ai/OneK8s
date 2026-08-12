@@ -127,6 +127,9 @@ Enabled tenants receive a `redis-connection` ConfigMap (host, port, TLS,
 username hint) in their namespace; authentication always flows through the
 same workload-identity chain used for secrets.
 
+`examples/demo-app` is a .NET 10 app that exercises both delegations from a
+tenant namespace on any of the three clouds and renders the results.
+
 ## CI/CD
 
 - `pr-validation.yml` — fmt, per-stack validate, tflint, checkov, and (once

@@ -46,6 +46,7 @@ module "aws" {
 
   redis_enabled          = var.redis_enabled
   redis_arn              = try(var.foundation.redis_arn, null)
+  redis_name             = try(var.foundation.redis_name, null)
   redis_user_group_id    = try(var.foundation.redis_user_group_id, null)
   redis_endpoint_address = try(var.foundation.redis_endpoint_address, null)
   redis_endpoint_port    = try(var.foundation.redis_endpoint_port, null)

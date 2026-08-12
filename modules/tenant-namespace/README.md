@@ -75,7 +75,8 @@ passwords anywhere:
 
 Enabled tenants get a `redis-connection` ConfigMap (`REDIS_HOST`,
 `REDIS_PORT`, `REDIS_TLS`, `REDIS_USERNAME`, and on AWS
-`REDIS_KEY_PREFIX`) in their namespace, and the module exposes a unified
+`REDIS_KEY_PREFIX` + `REDIS_CACHE_NAME` — IAM auth tokens are signed
+against the cache name) in their namespace, and the module exposes a unified
 `redis_endpoint` output (null when disabled). The foundation outputs the
 module needs for this are listed in `variables.tf`; enabling Redis against
 a foundation deployed before the Redis feature fails with an explicit

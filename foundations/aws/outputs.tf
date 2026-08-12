@@ -38,6 +38,11 @@ output "account_id" {
   value       = data.aws_caller_identity.current.account_id
 }
 
+output "redis_name" {
+  description = "Name of the shared ElastiCache serverless cache (clients sign IAM auth tokens against it)."
+  value       = aws_elasticache_serverless_cache.redis.name
+}
+
 output "redis_arn" {
   description = "ARN of the shared ElastiCache serverless cache (for tenant elasticache:Connect policies)."
   value       = aws_elasticache_serverless_cache.redis.arn

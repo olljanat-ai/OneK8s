@@ -23,6 +23,8 @@ Operator and per-tenant workload identities.
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <cloud>-<env>.tfvars: cloud is a parameter in the file
 │   └── backend/            #   <cloud>-<env>.hcl state configs (shared state home)
+├── examples/
+│   └── demo-app/           # .NET 10 app proving vault + Redis access via workload identity
 ├── .github/workflows/      # PR validation + OIDC deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
 ```

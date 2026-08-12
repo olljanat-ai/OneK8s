@@ -174,5 +174,8 @@ module "common" {
     # IAM auth token generated with the tenant role's credentials.
     REDIS_USERNAME   = local.redis_user_id
     REDIS_KEY_PREFIX = local.redis_key_prefix
+    # IAM auth tokens are SigV4-signed against the cache NAME, not its DNS
+    # endpoint, so clients need it alongside the host.
+    REDIS_CACHE_NAME = var.redis_name
   } : null
 }

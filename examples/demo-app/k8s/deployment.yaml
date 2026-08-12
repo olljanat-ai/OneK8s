@@ -1,0 +1,71 @@
+# Demo app deployment for a OneK8s tenant namespace. Replace the image and
+# the per-cloud env values (marked CHANGEME), pick the CLOUD, and apply into
+# the tenant namespace. It runs as the tenant's "workload" ServiceAccount —
+# that is the whole credential story.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  labels:
+    app: demo-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+        # Required on AKS for the workload-identity webhook to inject the
+        # federated token; harmless on EKS/GKE.
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: workload
+      containers:
+        - name: demo-app
+          image: CHANGEME.example.com/onek8s-demo:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CLOUD
+              value: "azure" # azure | aws | gcp
+            - name: TENANT_NAME
+              value: "team-alpha"
+            - name: ENVIRONMENT
+              value: "dev"
+            # azure only — foundation output `key_vault_uri`:
+            - name: AZURE_KEY_VAULT_URI
+              value: "CHANGEME https://kv-....vault.azure.net/"
+            # aws only — cluster region (used by SDK + ElastiCache signing):
+            # - name: AWS_REGION
+            #   value: "eu-west-1"
+            # gcp only — foundation project:
+            # - name: GCP_PROJECT_ID
+            #   value: "onek8s-dev"
+          envFrom:
+            # Published by the platform when the tenant has redis_enabled:
+            # REDIS_HOST/PORT/TLS/USERNAME (+ KEY_PREFIX/CACHE_NAME on AWS).
+            - configMapRef:
+                name: redis-connection
+                optional: true
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]

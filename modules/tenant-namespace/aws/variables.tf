@@ -45,6 +45,12 @@ variable "redis_arn" {
   default     = null
 }
 
+variable "redis_name" {
+  description = "Name of the shared ElastiCache serverless cache (from the foundation); IAM auth tokens are signed against it."
+  type        = string
+  default     = null
+}
+
 variable "redis_user_group_id" {
   description = "ElastiCache user group to associate the tenant user into (from the foundation). Required when redis_enabled."
   type        = string

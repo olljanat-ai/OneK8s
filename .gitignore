@@ -46,3 +46,6 @@ terraform.rc
 # Optional: ignore plan files saved before destroying Terraform configuration
 # Uncomment the line below if you want to ignore planout files.
 # planout
+# .NET build output (examples/demo-app)
+bin/
+obj/

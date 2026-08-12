@@ -30,8 +30,8 @@ variable "foundation" {
     Additionally required when redis_enabled = true:
       azure: managed_redis_database_id, managed_redis_hostname,
              managed_redis_port
-      aws:   redis_arn, redis_user_group_id, redis_endpoint_address,
-             redis_endpoint_port
+      aws:   redis_arn, redis_name, redis_user_group_id,
+             redis_endpoint_address, redis_endpoint_port
       gcp:   redis_cluster_name, redis_cluster_location, redis_host,
              redis_port
   EOT
