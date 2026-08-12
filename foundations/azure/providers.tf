@@ -3,6 +3,7 @@
 # with a service principal stored in GitHub secrets. Locally, `az login`
 # works too.
 provider "azurerm" {
+  resource_provider_registrations = "none"
   features {
     key_vault {
       # Never leave soft-deleted vaults behind in dev/test churn, but keep the

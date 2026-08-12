@@ -9,24 +9,24 @@
 terraform {
   required_version = ">= 1.9.0"
 
-  backend "azurerm" {}
+  # backend "azurerm" {}
 
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.20"
+      version = "= 5.0.1"
     }
     azapi = {
       source  = "Azure/azapi"
-      version = "~> 2.3"
+      version = "= 2.12.0"
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "~> 3.0"
+      version = "= 3.2.0"
     }
     random = {
       source  = "hashicorp/random"
-      version = "~> 3.6"
+      version = "= 3.9.0"
     }
   }
 }

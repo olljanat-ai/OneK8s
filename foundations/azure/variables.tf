@@ -1,17 +1,12 @@
 variable "environment" {
   description = "Environment name (dev, staging, prod). Used in resource names and secret prefixes."
   type        = string
-
-  validation {
-    condition     = contains(["dev", "staging", "prod"], var.environment)
-    error_message = "environment must be one of: dev, staging, prod."
-  }
 }
 
 variable "location" {
   description = "Azure region for all resources."
   type        = string
-  default     = "westeurope"
+  default     = "swedencentral"
 }
 
 variable "name_prefix" {

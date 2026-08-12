@@ -9,6 +9,10 @@ resource "azurerm_kubernetes_cluster" "this" {
   dns_prefix          = local.name
   kubernetes_version  = var.kubernetes_version
 
+  node_provisioning_profile {
+    mode = "Auto"
+  }
+
   oidc_issuer_enabled       = true
   workload_identity_enabled = true
   azure_policy_enabled      = true
