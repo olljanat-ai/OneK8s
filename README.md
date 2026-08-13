@@ -23,17 +23,19 @@ via External Secrets Operator and per-tenant workload identities.
 │       ├── gcp/            #   GSA + WI binding + IAM condition
 │       └── oci/            #   workload-identity IAM policy + secret-name prefix
 ├── tenants/                # ONE stack for all clouds — deployed independently
-│   ├── envs/               #   <cloud>-<env>.tfvars: cloud is a parameter in the file
-│   └── backend/            #   <cloud>-<env>.hcl state configs (Azure state home)
+│   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
+│   └── backend/            #   <env>.hcl state config (Azure state home)
 ├── .github/workflows/      # PR validation + deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
 ```
 
-Foundations support **dev / staging / prod** via `envs/<env>.tfvars` +
-`backend/<env>.hcl`; the single tenants stack targets a cloud and
-environment via `envs/<cloud>-<env>.tfvars` (the file sets `cloud = "..."`)
-— tenant definition syntax is identical on every cloud. Tenants depend on
-foundation remote-state outputs; foundations never depend on tenants.
+Foundations are per cloud and support **prototype / dev / staging / prod**
+via `envs/<env>.tfvars` + `backend/<env>.hcl`. The tenants stack has one
+state file per environment covering **all clouds at once**: the cloud is a
+per-tenant parameter, so a single `terraform apply` onboards tenants on
+azure, aws, gcp and oci, with identical tenant syntax everywhere. Tenants
+depend on foundation remote-state outputs; foundations never depend on
+tenants.
 
 ## Security model (short version)
 
@@ -54,14 +56,24 @@ cd foundations/aws
 terraform init -backend-config=backend/prototype.hcl
 terraform apply -var-file=envs/prototype.tfvars
 
-cd ../../tenants                                      # same stack for every cloud
-terraform init -backend-config=backend/aws-prototype.hcl
-terraform apply -var-file=envs/aws-prototype.tfvars   # cloud = "aws" set in the file
+cd ../../tenants                                # one stack, every cloud, one run
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars  # each tenant sets its own cloud
+```
+
+```hcl
+# tenants/envs/prototype.tfvars — the cloud is just a tenant attribute
+tenants = {
+  azure-team-alpha = { cloud = "azure", name = "team-alpha" }
+  aws-team-alpha   = { cloud = "aws",   name = "team-alpha" }
+}
 ```
 
 All state — every stack, every cloud — lives in one Azure Storage "state
 home", so Azure credentials are required for every deploy alongside the
-target cloud's.
+credentials of every cloud that has tenants. Clouds with no tenants are
+skipped entirely: no foundation state is read and their providers stay
+inert.
 
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
@@ -70,12 +82,13 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 8 stacks), tflint, checkov, and
-  optional cloud dev plans (`ENABLE_CLOUD_PLANS=true`).
-- **Deploy Foundations / Deploy Tenants** — separate pipelines; dev deploys
-  on merge to `main`, staging/prod via `workflow_dispatch`, all gated by
-  GitHub environments `<cloud>-<env>` and authenticated with cloud
-  credentials stored as GitHub secrets.
+- **PR validation** — fmt, validate (all 5 stacks), tflint, checkov, and
+  optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
+- **Deploy Foundations / Deploy Tenants** — separate pipelines; the
+  prototype environment deploys on merge to `main`, other environments via
+  `workflow_dispatch`, authenticated with cloud credentials stored as GitHub
+  secrets. Foundation jobs are gated by the GitHub environments
+  `<cloud>-<env>`, the all-clouds tenants job by `tenants-<env>`.
 
 ## License
 

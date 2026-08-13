@@ -26,6 +26,11 @@ and aliased configurations are never inherited, callers must pass a
 `providers` block — and since that disables default inheritance, it has to
 list every provider, not just the OCI ones. See `tenants/main.tf`.
 
+A single caller can onboard tenants across several clouds at once, but it
+needs one module block per cloud: provider configurations cannot be selected
+per `for_each` instance, so each block passes its own cluster's `kubernetes`
+provider. That is exactly what the `tenants` stack does.
+
 ## What every tenant gets
 
 | Concern | Azure | AWS | GCP | OCI |
@@ -59,14 +64,18 @@ the full rationale.
 See `tenants/main.tf` for the working example. Sketch:
 
 ```hcl
-module "tenant" {
-  source   = "../modules/tenant-namespace"
-  for_each = var.tenants
+module "tenants_aws" {
+  source = "../modules/tenant-namespace"
+  # One block per cloud: the tenants of that cloud, and that cluster's
+  # kubernetes provider.
+  for_each = { for k, t in var.tenants : k => t if t.cloud == "aws" }
 
-  cloud       = var.cloud                 # "azure" | "aws" | "gcp" | "oci"
-  tenant_name = each.key
+  providers = { kubernetes = kubernetes.aws, /* ...the full provider set... */ }
+
+  cloud       = "aws"                     # "azure" | "aws" | "gcp" | "oci"
+  tenant_name = coalesce(each.value.name, each.key)
   environment = var.environment
-  foundation  = data.terraform_remote_state.foundation.outputs
+  foundation  = data.terraform_remote_state.foundation["aws"].outputs
   quota       = each.value.quota
 }
 ```
