@@ -106,7 +106,10 @@ Because the prefix *is* the boundary, a tenant name is also a claim on a slice
 of the shared backend. `platform-` is reserved for the platform's own objects
 (the wildcard certificate and its ACME account key, see below) and must not be
 used as a tenant name — a tenant called `platform` would be granted exactly
-those.
+those. The same contract places the distributed wildcard certificate: it is
+the reserved `platform` tenant's secret on every cloud, so it is
+`platform-wildcard-onek8s-lol` on Azure, GCP and OCI, and
+`<env>/platform/wildcard-onek8s-lol` on AWS.
 
 Consuming a secret from a tenant workload:
 
@@ -159,6 +162,23 @@ spec:
   can afford to run daily: the certificate gets ~30 attempts inside its
   renewal window.
 
+  The same workflow's `distribute` mode copies that certificate to the other
+  three clouds, so a workload on EKS, GKE or OKE reads it from the backend it
+  already reads its tenant secrets from rather than reaching into Azure for
+  it. Key Vault stays the single source of truth and the other three hold
+  copies; a distribution run publishes whatever version the vault holds and
+  never contacts Let's Encrypt, which keeps issuance and replication
+  independently retryable. The targets are resolved the way the vault is —
+  out of each `foundations/<cloud>` state (`secrets_kms_key_arn` + `region`,
+  `project_id`, `vault_id` + `vault_key_id`) — so a cloud with no foundation
+  in that environment is skipped instead of failing the run, and there are no
+  per-cloud coordinates to keep in sync. The value written is one JSON object
+  holding `tls.crt` (leaf + chain) and `tls.key` (PKCS#8), so the key and its
+  certificate are always one atomic version and an `ExternalSecret` maps both
+  fields through `remoteRef.property`. The three writes are independent: one
+  cloud refusing the write leaves the other two on the current certificate
+  and fails the run at the end.
+
   The trade-off against the obvious alternative — cert-manager in-cluster
   with `ClusterIssuer` + workload identity — is that CI, not the cluster,
   holds the DNS-write permission, and the result lands in the secret backend
@@ -195,6 +215,17 @@ spec:
   source per backend type, count-gated on `var.cloud`.
 - Azure Managed Namespaces are a preview API surface, addressed via `azapi`
   by design (`managed_namespace_api_version` variable).
+- Distributing the wildcard certificate copies a private key out of Key Vault
+  into three more backends, so it exists in four places and a rotation is only
+  complete once every copy is refreshed — nothing reconciles them, and a
+  cluster reading a stale copy will not notice. It is also a single job
+  touching every cloud, which GitHub can bind to only one environment: it uses
+  `azure-<env>`, the environment that guards the vault the private key is read
+  from, and writes with the repository-level AWS/GCP/OCI credentials, so
+  `aws-prod`'s protection rules do not apply to it. The alternative — one job
+  per cloud, each bound to its own environment — would have to move the key
+  between jobs through a run artifact, which is a worse trade than the one
+  taken.
 - OCI IAM is global but writable only in the tenancy's **home region**, so
   both OCI stacks carry a second `oci.home` provider alias just for policies.
   Because passing any provider to a module disables default inheritance,

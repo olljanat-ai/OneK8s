@@ -201,6 +201,7 @@ would be granted read access to the certificate and the account key.
 
 ```
 Actions -> Renew Certificate -> Run workflow
+  mode             renew
   environment      prototype
   domains          *.onek8s.lol,onek8s.lol
   certificate_name platform-wildcard-onek8s-lol-staging
@@ -227,6 +228,67 @@ identity with *Key Vault Secrets User* on `platform-` the way
 identities cannot read it, by design. Nothing in the cluster is restarted
 when a new version is imported — whatever consumes the certificate is
 responsible for picking it up.
+
+### Distributing it to the other clouds
+
+Key Vault holds the certificate, but a workload on EKS, GKE or OKE reads its
+secrets from that cloud's own backend. The same workflow copies the vault's
+current certificate out to all three in `distribute` mode:
+
+```
+Actions -> Renew Certificate -> Run workflow
+  mode             distribute
+  environment      prototype
+  certificate_name platform-wildcard-onek8s-lol
+```
+
+`distribute` never contacts Let's Encrypt: it reads whatever version Key Vault
+holds right now and publishes it, so run it **after** a renewal (the schedule
+only renews). `domains`, `acme_server` and `force` are ignored.
+
+Each cloud's target is read out of its foundation state, the way the Key Vault
+is — so a cloud with no foundation in this environment is reported as skipped
+rather than failing the run, and the run needs no per-cloud coordinates:
+
+| Cloud | Target | Secret name |
+|---|---|---|
+| AWS | Secrets Manager, encrypted with the foundation CMK | `<env>/platform/wildcard-onek8s-lol` |
+| GCP | Secret Manager (automatic replication) | `platform-wildcard-onek8s-lol` |
+| OCI | the foundation's Vault, wrapped by its master key | `platform-wildcard-onek8s-lol` |
+
+The AWS name follows that cloud's `<env>/<tenant>/<name>` layout with the
+reserved `platform` tenant; GCP and OCI use the flat `<tenant>-<name>` form,
+so the Key Vault name carries over unchanged. All three are outside every
+tenant's prefix, so no tenant identity can read them.
+
+The value is one JSON object, so the key and the certificate it belongs to are
+always written and read as a single version:
+
+```json
+{ "tls.crt": "-----BEGIN CERTIFICATE-----\n…", "tls.key": "-----BEGIN PRIVATE KEY-----\n…" }
+```
+
+`tls.crt` is the leaf followed by its chain and `tls.key` is PKCS#8, which is
+what a Kubernetes TLS secret wants, so an `ExternalSecret` maps the two fields
+straight through:
+
+```yaml
+  data:
+    - secretKey: tls.crt
+      remoteRef:
+        key: platform-wildcard-onek8s-lol   # "prototype/platform/wildcard-onek8s-lol" on AWS
+        property: tls.crt
+    - secretKey: tls.key
+      remoteRef:
+        key: platform-wildcard-onek8s-lol
+        property: tls.key
+```
+
+The workflow reads the private key out of Key Vault, so it needs *Key Vault
+Secrets User* (covered by the Secrets Officer role the foundation already
+assigns), and write access to each target backend from the deploy identity of
+that cloud. A cloud that refuses the write fails the run but does not stop the
+other two — check the run summary, which lists every target and its result.
 
 ## Troubleshooting
 
