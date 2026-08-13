@@ -2,9 +2,14 @@
 #  - Workload Identity (tenant KSAs impersonate Google Service Accounts)
 #  - Dataplane V2 (eBPF/Cilium-based) for networking + NetworkPolicy
 resource "google_container_cluster" "this" {
-  name                     = "gke-${local.name}"
-  location                 = var.region
-  desired_emulated_version = var.kubernetes_version
+  name     = "gke-${local.name}"
+  location = var.region
+
+  # The floor for the control plane, not a pin: GKE auto-upgrades within the
+  # release channel, so master_version can move past it. (Not
+  # desired_emulated_version — that one completes a rollback-safe upgrade and
+  # does not select the version the cluster runs.)
+  min_master_version = var.kubernetes_version
 
   network    = google_compute_network.this.id
   subnetwork = google_compute_subnetwork.gke.id
