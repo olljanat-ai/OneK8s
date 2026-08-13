@@ -1,15 +1,16 @@
 # -----------------------------------------------------------------------------
-# Tenants: ONE stack for all clouds. The target cloud is just a parameter
-# (`cloud = "azure" | "aws" | "gcp" | "oci"`) in the chosen env file:
+# Tenants: ONE stack, ONE state file per environment, all clouds in one run.
+# The target cloud is a per-tenant parameter (`cloud = "azure" | "aws" | "gcp"
+# | "oci"`), so an environment is deployed with a single:
 #
-#   terraform init -backend-config=backend/aws-prototype.hcl
-#   terraform apply -var-file=envs/aws-prototype.tfvars
+#   terraform init -backend-config=backend/prototype.hcl
+#   terraform apply -var-file=envs/prototype.tfvars
 #
 # ALL state (every stack, every cloud, every environment) lives in the Azure
-# Storage "state home" under distinct keys — tenants/<cloud>/<env>.tfstate
-# here, foundations/<cloud>/<env>.tfstate for the foundations this stack
-# reads. Azure credentials (ARM_* env vars / az login) are therefore required
-# for every deploy, plus the credentials of the selected cloud.
+# Storage "state home" under distinct keys — tenants/<env>.tfstate here,
+# foundations/<cloud>/<env>.tfstate for the foundations this stack reads.
+# Azure credentials (ARM_* env vars / az login) are therefore required for
+# every deploy, plus the credentials of every cloud that has tenants.
 # -----------------------------------------------------------------------------
 terraform {
   required_version = ">= 1.9.0"

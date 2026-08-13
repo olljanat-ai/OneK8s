@@ -1,32 +1,42 @@
-variable "cloud" {
-  description = "Which cloud these tenants land on: azure, aws, gcp or oci."
-  type        = string
-
-  validation {
-    condition     = contains(["azure", "aws", "gcp", "oci"], var.cloud)
-    error_message = "cloud must be one of: azure, aws, gcp, oci."
-  }
-}
-
 variable "environment" {
-  description = "Environment name (dev, staging, prod); must match the foundation environment."
+  description = "Environment name (prototype, dev, staging, prod); must match the environment the foundations were deployed for."
   type        = string
 }
 
-variable "foundation_state" {
+variable "state_home" {
   description = <<-EOT
-    Backend location of the foundations/<cloud> state for this environment.
-    Every foundation stores its state in the Azure Storage state home, so the
-    keys are the azurerm backend's on every cloud — only the blob key differs:
-      resource_group_name, storage_account_name, container_name, key
-    They must match foundations/<cloud>/backend/<env>.hcl.
+    Coordinates of the Azure Storage "state home" that holds every stack's
+    state on every cloud. The foundation state this stack reads back is not
+    configured key by key: the key is derived from the convention
+    "foundations/<cloud>/<environment>.tfstate", which is exactly what
+    foundations/<cloud>/backend/<environment>.hcl writes. Keep the account,
+    container and environment aligned and the keys cannot drift apart.
   EOT
-  type        = any
+  type = object({
+    resource_group_name  = string
+    storage_account_name = string
+    container_name       = string
+  })
 }
 
 variable "tenants" {
-  description = "Tenants to onboard on this cluster, keyed by tenant name. Identical syntax for every cloud."
+  description = <<-EOT
+    Every tenant of this environment, on every cloud, keyed by a unique id.
+    The target cloud is a per-tenant parameter, so one apply onboards tenants
+    across azure, aws, gcp and oci; the tenant syntax is identical everywhere.
+
+    Map keys must be unique, so onboarding the same tenant name on more than
+    one cloud means giving each entry its own key plus an explicit "name":
+
+      azure-team-alpha = { cloud = "azure", name = "team-alpha" }
+      aws-team-alpha   = { cloud = "aws",   name = "team-alpha" }
+
+    "name" defaults to the key and is what the namespace, the cloud identity
+    and the secret prefix are derived from.
+  EOT
   type = map(object({
+    cloud = string
+    name  = optional(string)
     quota = optional(object({
       cpu_requests    = optional(string, "4")
       cpu_limits      = optional(string, "8")
@@ -37,4 +47,9 @@ variable "tenants" {
     labels = optional(map(string), {})
   }))
   default = {}
+
+  validation {
+    condition     = alltrue([for t in var.tenants : contains(["azure", "aws", "gcp", "oci"], t.cloud)])
+    error_message = "Every tenant's cloud must be one of: azure, aws, gcp, oci."
+  }
 }
