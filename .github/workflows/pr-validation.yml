@@ -15,6 +15,9 @@ concurrency:
 env:
   TF_VERSION: "1.15.8"
   TF_IN_AUTOMATION: "true"
+  # Plans run against the prototype environment: backend/prototype.hcl +
+  # envs/prototype.tfvars in every stack.
+  TF_ENVIRONMENT: "prototype"
 
 jobs:
   fmt:
@@ -81,39 +84,26 @@ jobs:
   # fork/clone: set ENABLE_CLOUD_PLANS=true once cloud credentials are
   # configured.
   plan:
-    name: plan ${{ matrix.stack }} (${{ matrix.config }})
+    name: plan ${{ matrix.stack }} (${{ matrix.cloud }})
     if: vars.ENABLE_CLOUD_PLANS == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # "config" is the backend/*.hcl + envs/*.tfvars file stem. The single
-        # tenants stack targets a cloud purely through that file.
+        # "cloud" only selects which credentials and CLIs the job sets up; the
+        # backend/*.hcl + envs/*.tfvars stem is the environment name. The single
+        # tenants stack covers every cloud in one plan, so it needs them all.
         include:
           - stack: foundations/azure
             cloud: azure
-            config: prototype
           - stack: foundations/aws
             cloud: aws
-            config: prototype
           - stack: foundations/gcp
             cloud: gcp
-            config: prototype
           - stack: foundations/oci
             cloud: oci
-            config: prototype
           - stack: tenants
-            cloud: azure
-            config: azure-prototype
-          - stack: tenants
-            cloud: aws
-            config: aws-prototype
-          - stack: tenants
-            cloud: gcp
-            config: gcp-prototype
-          - stack: tenants
-            cloud: oci
-            config: oci-prototype
+            cloud: all
     env:
       # azurerm/azapi providers (and the azurerm state backend) pick these up
       # directly. Azure credentials are needed on every cloud: every stack —
@@ -142,7 +132,7 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - name: Configure AWS credentials
-        if: matrix.cloud == 'aws'
+        if: matrix.cloud == 'aws' || matrix.cloud == 'all'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
@@ -150,7 +140,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Authenticate to GCP
-        if: matrix.cloud == 'gcp'
+        if: matrix.cloud == 'gcp' || matrix.cloud == 'all'
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
@@ -158,7 +148,7 @@ jobs:
       # Planning an already-deployed OCI stack mints a cluster token with the
       # OCI CLI (the helm and kubernetes providers exec it).
       - name: Install OCI CLI
-        if: matrix.cloud == 'oci'
+        if: matrix.cloud == 'oci' || matrix.cloud == 'all'
         run: |
           curl -sSfL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh \
             | bash -s -- --accept-all-defaults
@@ -167,5 +157,5 @@ jobs:
       - name: terraform plan
         working-directory: ${{ matrix.stack }}
         run: |
-          terraform init -backend-config=backend/${{ matrix.config }}.hcl
-          terraform plan -var-file=envs/${{ matrix.config }}.tfvars -lock=false -input=false -no-color
+          terraform init -backend-config=backend/${{ env.TF_ENVIRONMENT }}.hcl
+          terraform plan -var-file=envs/${{ env.TF_ENVIRONMENT }}.tfvars -lock=false -input=false -no-color
