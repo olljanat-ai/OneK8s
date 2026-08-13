@@ -1,7 +1,7 @@
 locals {
   # The hub is fixed: Argo CD runs on the AKS cluster foundations/azure builds,
   # so "azure" is never a spoke. These are the clouds that can be one.
-  spoke_clouds = ["aws", "gcp"]
+  spoke_clouds = ["aws", "gcp", "oci"]
 
   # var.spokes is keyed by cloud, and it is regrouped here for the same reason
   # the tenants stack groups its tenants: a module's providers are static, so
@@ -119,6 +119,27 @@ module "spoke_gcp" {
   cloud       = "gcp"
   environment = var.environment
   foundation  = local.foundation.gcp
+  hub         = local.hub
+
+  name              = each.value.name
+  namespaces        = each.value.namespaces
+  cluster_resources = each.value.cluster_resources
+  project           = each.value.project
+  labels            = each.value.labels
+}
+
+module "spoke_oci" {
+  source   = "../modules/argocd-spoke"
+  for_each = local.spokes_by_cloud.oci
+
+  providers = {
+    kubernetes     = kubernetes.oci
+    kubernetes.hub = kubernetes.azure
+  }
+
+  cloud       = "oci"
+  environment = var.environment
+  foundation  = local.foundation.oci
   hub         = local.hub
 
   name              = each.value.name

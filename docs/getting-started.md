@@ -309,6 +309,7 @@ environment, with the cloud as a key of `var.spokes`:
 spokes = {
   aws = {}   # unrestricted; or { namespaces = [...], cluster_resources = false }
   gcp = {}
+  oci = {}
 }
 ```
 
@@ -327,9 +328,11 @@ credentials of the clouds actually registered.
 
 Creating a ClusterRole is a privileged act, so each cloud's deploy identity
 needs cluster-admin rights on its own spoke **for this run only** — an EKS
-access entry mapping to a cluster admin, `roles/container.admin` on GCP.
-Everything Argo CD does afterwards uses the `argocd-manager` token instead,
-never those credentials.
+access entry mapping to a cluster admin, `roles/container.admin` on GCP,
+`manage cluster-family` on OCI. Everything Argo CD does afterwards uses the
+`argocd-manager` token instead, never those credentials. The OCI spoke also
+needs the `oci` CLI on `PATH`, the way the tenants stack does: it is what
+mints the cluster token.
 
 Each spoke gets an `argocd-manager` ServiceAccount and a ClusterRole on its
 own cluster, and the hub gets a labelled `cluster` Secret carrying that

@@ -86,3 +86,32 @@ provider "kubernetes" {
   cluster_ca_certificate = try(base64decode(local.foundation.gcp.cluster_ca_certificate), null)
   token                  = try(data.google_client_config.spoke[0].access_token, null)
 }
+
+# No "oci" provider block, and no oracle/oci in versions.tf: unlike the tenants
+# stack this one creates nothing in OCI itself — the endpoint and CA come out
+# of the foundation's state and the API token comes from the OCI CLI, which
+# reads the same OCI_* environment variables the provider would. The tenancy's
+# home-region alias is likewise unnecessary here, since no IAM policy is
+# written.
+provider "kubernetes" {
+  alias = "oci"
+
+  host                   = try(local.foundation.oci.cluster_endpoint, null)
+  cluster_ca_certificate = try(base64decode(local.foundation.oci.cluster_ca_certificate), null)
+
+  # OCI has no Terraform-native cluster token source (no equivalent of
+  # aws_eks_cluster_auth), so the OCI CLI mints one. Requires `oci` on PATH.
+  dynamic "exec" {
+    for_each = local.wired.oci ? [1] : []
+
+    content {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "oci"
+      args = [
+        "ce", "cluster", "generate-token",
+        "--cluster-id", local.foundation.oci.cluster_id,
+        "--region", local.foundation.oci.region,
+      ]
+    }
+  }
+}

@@ -47,7 +47,7 @@ variable "spokes" {
   default = {}
 
   validation {
-    condition     = alltrue([for c in keys(var.spokes) : contains(["aws", "gcp"], c)])
-    error_message = "Spokes are keyed by cloud, and the supported spokes today are: aws, gcp. (azure is the hub and registers itself.)"
+    condition     = alltrue([for c in keys(var.spokes) : contains(["aws", "gcp", "oci"], c)])
+    error_message = "Spokes are keyed by cloud, and the supported spokes are: aws, gcp, oci. (azure is the hub and registers itself.)"
   }
 }

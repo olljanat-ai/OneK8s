@@ -23,4 +23,5 @@ state_home = {
 spokes = {
   aws = {}
   gcp = {}
+  oci = {}
 }

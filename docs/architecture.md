@@ -88,7 +88,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
-| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | — |
+| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
 
 ## Ingress
 
@@ -212,8 +212,8 @@ That AKS cluster is the **hub**. The other clouds' clusters are registered
 with it as **spokes** by the `gitops/` stack, so there is one delivery plane
 for all four clouds rather than one Argo CD per cloud — the same "one stack,
 all clouds" shape the tenants layer has, with the cloud as a key of
-`var.spokes` instead of a per-tenant attribute. EKS and GKE are registered
-today; OKE is not yet.
+`var.spokes` instead of a per-tenant attribute. All three — EKS, GKE and OKE
+— are registered.
 
 Registration is a `cluster`-labelled Secret in the hub's `argocd` namespace
 whose credential is a `argocd-manager` ServiceAccount token minted on the
@@ -461,8 +461,10 @@ spec:
   whole run. The trade buys a single source of truth for who is onboarded
   where, and one run instead of four.
 - OCI has no Terraform-native cluster-token source (no equivalent of
-  `aws_eks_cluster_auth`), so the tenants stack shells out to
-  `oci ce cluster generate-token`; the OCI CLI must be on `PATH`.
+  `aws_eks_cluster_auth`), so the tenants and gitops stacks shell out to
+  `oci ce cluster generate-token`; the OCI CLI must be on `PATH`. The gitops
+  stack needs nothing else from OCI — it creates no OCI resources — so it is
+  the one stack that configures no `oci` provider at all.
 - Deleting an OCI Vault is a *scheduled* operation with a mandatory 7-30 day
   waiting period, so `terraform destroy` schedules the deletion rather than
   completing it, and the vault name stays taken until it elapses.

@@ -208,7 +208,7 @@ where.
 |---|---|---|---|
 | `aws` | EKS, `foundations/aws` | Secret `cluster-aws` in `argocd` | registered by `gitops/` |
 | `gcp` | GKE, `foundations/gcp` | Secret `cluster-gcp` in `argocd` | registered by `gitops/` |
-| `oci` | OKE, `foundations/oci` | — | not yet |
+| `oci` | OKE, `foundations/oci` | Secret `cluster-oci` in `argocd` | registered by `gitops/` |
 
 The spokes stay plain clusters: no Argo CD components on EKS/GKE/OKE and no
 per-cloud GitOps stack to keep in sync.
@@ -288,13 +288,21 @@ bearer token against the same Kubernetes API:
 |---|---|---|
 | `aws` | complete `https://` URL | `aws_eks_cluster_auth` token (EKS access entries / `aws-auth`) |
 | `gcp` | bare host, prefixed with `https://` | `google_client_config` access token of the deploy service account |
+| `oci` | complete `https://` URL | `oci ce cluster generate-token`, exec'd by the provider — the OCI CLI must be on `PATH` |
 
 The deploy identity therefore needs cluster-admin-ish rights on the spoke for
 that one run — on GKE the deploy service account needs
 `roles/container.admin` (or at least the ability to create ClusterRoles), on
-AWS it needs an access entry that maps to a cluster admin. Argo CD itself
-never uses those credentials: everything after registration goes through the
-`argocd-manager` token.
+AWS it needs an access entry that maps to a cluster admin, on OCI it needs
+`manage cluster-family` in the compartment. Argo CD itself never uses those
+credentials: everything after registration goes through the `argocd-manager`
+token.
+
+OCI is the one cloud whose Terraform provider this stack does not configure
+at all. Nothing is created in OCI itself — the endpoint and CA come from the
+foundation's state and the token from the CLI — so there is no `oci` provider
+and no home-region alias here, unlike in the tenants stack where per-tenant
+IAM policies force both.
 
 ### Scoping a spoke
 
