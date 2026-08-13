@@ -55,7 +55,8 @@ resource "azurerm_kubernetes_cluster" "this" {
   # "argocd.onek8s.lol" is pointed at the ingress load balancer by hand — so
   # no zone is delegated to the add-on's external-dns and the list is empty.
   web_app_routing {
-    dns_zone_ids = []
+    // FixMe: Move this to config
+    dns_zone_ids = ["/subscriptions/54e30869-75a2-47ed-8b32-1057e61707f0/resourceGroups/rg-onek8s-argocd/providers/Microsoft.Network/dnsZones/onek8s.lol"]
   }
 
   network_profile {

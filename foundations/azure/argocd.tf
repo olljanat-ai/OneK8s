@@ -43,6 +43,39 @@ locals {
   # environment can override any of these without editing this file.
   argocd_configuration = merge(
     {
+      # Authentication
+      "azure.workloadIdentity.clientId"         = "eca6aad4-fd01-4c67-acb9-95b33d89c53b"
+      "azure.workloadIdentity.enabled"          = "true"
+      "azure.workloadIdentity.entraSSOClientId" = "6598a87b-227b-4f20-9f3b-dbdd74604492"
+      "configs.cm.oidc\\.config"                = <<-EOT
+                name: Azure
+                issuer: https://login.microsoftonline.com/d9007062-1aae-4619-abb0-320699664975/v2.0
+                clientID: 6598a87b-227b-4f20-9f3b-dbdd74604492
+                azure:
+                  useWorkloadIdentity: true
+                requestedIDTokenClaims:
+                  groups:
+                    essential: true
+                requestedScopes:
+                  - openid
+                  - profile
+                  - email
+EOT
+      "configs.params.application\\.namespaces" = null
+      # Look: https://github.com/argoproj/argo-cd/blob/master/assets/builtin-policy.csv
+      "configs.rbac.policy\\.csv"     = <<-EOT
+                p, role:org-admin, applications, *, */*, allow
+                p, role:org-admin, clusters, get, *, allow
+                p, role:org-admin, repositories, get, *, allow
+                p, role:org-admin, repositories, create, *, allow
+                p, role:org-admin, repositories, update, *, allow
+                p, role:org-admin, repositories, delete, *, allow
+                g, "46a1d986-c8a7-42d3-b2a4-a88f789f7ecc", role:admin
+                g, "59a92e0b-f653-4d5d-bdba-473eb331a5be", role:org-admin
+                g, "4301eb89-fc3d-4836-95d1-41b497f102ad", role:readonly
+EOT
+      "configs.rbac.policy\\.default" = "role:readonly"
+
       # Redis HA is the extension's default and needs four nodes; the
       # prototype runs one.
       "redis-ha.enabled" = tostring(var.argocd_high_availability)

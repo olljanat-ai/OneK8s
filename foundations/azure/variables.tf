@@ -90,7 +90,7 @@ variable "argocd_high_availability" {
 variable "argocd_application_namespaces" {
   description = "Namespaces besides 'argocd' in which Application/ApplicationSet objects are honoured ('applications in any namespace'). Empty keeps them argocd-only."
   type        = list(string)
-  default     = []
+  default     = ["default"]
 }
 
 variable "argocd_extra_configuration" {
