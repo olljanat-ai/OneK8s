@@ -1,29 +1,47 @@
 name: Renew Certificate
 
-# Scheduled issuance and renewal of the platform wildcard certificate:
+# Issuance and renewal of the platform wildcard certificate:
 #
 #   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> AKS
+#
+# and, in "distribute" mode, the copy of that certificate out to the secret
+# backend of every other cloud:
+#
+#   Key Vault --> Secrets Manager (AWS) / Secret Manager (GCP) / Vault (OCI)
 #
 # The target vault is the one the Azure foundation created for the
 # environment — the same vault tenants read their secrets from — so the vault
 # name is not configuration here: it is read out of the foundation's remote
-# state, the way the tenants stack reads everything else.
+# state, the way the tenants stack reads everything else. Distribution reads
+# the other three foundations the same way, so the certificate lands in the
+# vault each cluster already reads from and there are still no per-cloud
+# coordinates to keep in sync.
 #
 # Key Vault is also the only state this workflow keeps. Nothing is carried
 # between runs on disk: the certificate already in the vault decides whether a
 # renewal is due, and the ACME account key sits next to it as a secret so
 # every run reuses the same Let's Encrypt account instead of registering a new
-# one. Both objects use the reserved "platform-" prefix, which no tenant may
-# claim — tenant identities are scoped to their own "<tenant>-" prefix by the
-# Key Vault ABAC conditions in modules/tenant-namespace/azure.
+# one. Distribution is likewise stateless — Key Vault is the source of truth
+# and the other clouds hold copies of it. Every object uses the reserved
+# "platform-" prefix, which no tenant may claim — tenant identities are scoped
+# to their own "<tenant>-" prefix by the Key Vault ABAC conditions in
+# modules/tenant-namespace/azure and by their equivalents on the other clouds.
 on:
   schedule:
-    # Daily. A run with nothing to renew exits before ACME is contacted, so
-    # the certificate gets ~30 attempts inside the renewal window and a bad
-    # day (Let's Encrypt outage, DNS hiccup) costs nothing.
+    # Daily, and always a renewal: distribution is a deliberate act, so it
+    # only ever runs from workflow_dispatch. A run with nothing to renew
+    # exits before ACME is contacted, so the certificate gets ~30 attempts
+    # inside the renewal window and a bad day (Let's Encrypt outage, DNS
+    # hiccup) costs nothing.
     - cron: "17 3 12 * *"
   workflow_dispatch:
     inputs:
+      mode:
+        description: "renew: issue/renew into Key Vault. distribute: copy the Key Vault certificate to AWS, GCP and OCI"
+        required: true
+        default: "renew"
+        type: choice
+        options: [renew, distribute]
       environment:
         description: "Environment whose foundation (and Key Vault) to renew for"
         required: true
@@ -31,7 +49,7 @@ on:
         type: choice
         options: [prototype, dev, staging, prod]
       domains:
-        description: "Comma-separated SANs; the first one names the certificate"
+        description: "Comma-separated SANs; the first one names the certificate (renew only)"
         required: false
         default: "*.onek8s.lol,onek8s.lol"
         type: string
@@ -41,13 +59,13 @@ on:
         default: "platform-wildcard-onek8s-lol"
         type: string
       acme_server:
-        description: "letsencrypt (trusted, rate-limited) or letsencrypt-staging (untrusted, for testing)"
+        description: "letsencrypt (trusted, rate-limited) or letsencrypt-staging (untrusted, for testing) (renew only)"
         required: false
         default: "letsencrypt"
         type: choice
         options: [letsencrypt, letsencrypt-staging]
       force:
-        description: "Renew even if the certificate in the vault is not due yet"
+        description: "Renew even if the certificate in the vault is not due yet (renew only)"
         required: false
         default: false
         type: boolean
@@ -57,6 +75,8 @@ permissions:
 
 jobs:
   renew:
+    # Scheduled runs pass no inputs, so the default is the renewal.
+    if: inputs.mode != 'distribute'
     name: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }} (${{ inputs.environment || 'prototype' }})
     runs-on: ubuntu-latest
     # Same GitHub environment as the Azure foundation deploys, so the vault's
@@ -303,6 +323,396 @@ jobs:
               echo "| Expires | ${{ steps.due.outputs.expires }} |"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of Azure
+        if: always()
+        run: az logout --output none || true
+
+  # Key Vault is the source of truth; the other three clouds hold copies, so
+  # that a workload on EKS, GKE or OKE reads the platform certificate out of
+  # the same backend it already reads its tenant secrets from instead of
+  # reaching across clouds for it. Nothing here talks to Let's Encrypt: a
+  # distribution run publishes whatever version the vault currently holds.
+  distribute:
+    if: inputs.mode == 'distribute'
+    name: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }} -> AWS, GCP, OCI (${{ inputs.environment || 'prototype' }})
+    runs-on: ubuntu-latest
+    # The same environment the renewal binds to: the run's privileged input is
+    # the Azure Key Vault it reads the private key out of, and pinning both
+    # jobs to one environment keeps the vault's credentials configured in a
+    # single place. The credentials it writes with are the repository-level
+    # AWS/GCP/OCI ones — see docs/architecture.md, "Known trade-offs".
+    environment: azure-${{ inputs.environment || 'prototype' }}
+    concurrency:
+      # Deliberately the renewal's group: a distribution must not read the
+      # vault while an import is replacing the certificate in it.
+      group: renew-certificate-${{ inputs.environment || 'prototype' }}
+      cancel-in-progress: false
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_ENV: ${{ inputs.environment || 'prototype' }}
+      # Reads every foundation's state out of the Azure Storage state home and
+      # authenticates the az CLI against Key Vault. No DNS access is needed
+      # here — nothing solves a challenge in this job.
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      # The OCI CLI reads its credentials straight from the environment.
+      OCI_CLI_TENANCY: ${{ vars.OCI_TENANCY_OCID }}
+      OCI_CLI_USER: ${{ vars.OCI_USER_OCID }}
+      OCI_CLI_REGION: ${{ vars.OCI_REGION }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      CERT_NAME: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required configuration
+        run: |
+          missing=""
+          [ -n "$ARM_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "$ARM_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "$ARM_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "$ARM_CLIENT_SECRET" ] || missing="$missing AZURE_CLIENT_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository variables/secrets:$missing" >&2
+            echo "See docs/getting-started.md, 'Wildcard certificate renewal'." >&2
+            exit 1
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # Every coordinate this job needs comes out of a foundation state, so a
+      # cloud that has no foundation in this environment simply has no target
+      # and is skipped — and, because that is decided here, its credentials
+      # are never configured either. Azure is the exception: without it there
+      # is no certificate to distribute at all.
+      - name: Resolve the source vault and the targets
+        id: targets
+        run: |
+          set -euo pipefail
+          foundation_ready() {
+            [ -f "foundations/$1/backend/${TF_ENV}.hcl" ] &&
+              terraform -chdir="foundations/$1" init -input=false \
+                -backend-config="backend/${TF_ENV}.hcl" >/dev/null 2>&1
+          }
+          read_output() {
+            terraform -chdir="foundations/$1" output -raw "$2" 2>/dev/null || true
+          }
+
+          if ! foundation_ready azure; then
+            echo "::error::cannot read the foundations/azure state for ${TF_ENV}" >&2
+            exit 1
+          fi
+          uri="$(read_output azure key_vault_uri)"
+          if [ -z "$uri" ]; then
+            echo "::error::foundations/azure has no key_vault_uri output for ${TF_ENV}; there is nothing to distribute" >&2
+            exit 1
+          fi
+          # https://<name>.vault.azure.net/ -> <name>
+          vault="${uri#https://}"
+          vault="${vault%%.*}"
+          echo "vault=$vault" >> "$GITHUB_OUTPUT"
+          echo "Source: Key Vault $vault ($uri)"
+
+          aws_region=""; aws_kms=""
+          if foundation_ready aws; then
+            aws_region="$(read_output aws region)"
+            aws_kms="$(read_output aws secrets_kms_key_arn)"
+          fi
+          if [ -z "$aws_region" ] || [ -z "$aws_kms" ]; then
+            echo "::warning::foundations/aws is not deployed for ${TF_ENV}; skipping AWS."
+            aws_region=""; aws_kms=""
+          else
+            echo "AWS: Secrets Manager in $aws_region"
+          fi
+          {
+            echo "aws_region=$aws_region"
+            echo "aws_kms=$aws_kms"
+            # Secrets Manager names are hierarchical ("<env>/<tenant>/<name>"),
+            # and the platform is the reserved "platform" tenant, so the
+            # certificate keeps the same place in that layout as everything
+            # else in the vault.
+            echo "aws_secret=${TF_ENV}/platform/${CERT_NAME#platform-}"
+          } >> "$GITHUB_OUTPUT"
+
+          gcp_project=""
+          if foundation_ready gcp; then
+            gcp_project="$(read_output gcp project_id)"
+          fi
+          if [ -z "$gcp_project" ]; then
+            echo "::warning::foundations/gcp is not deployed for ${TF_ENV}; skipping GCP."
+          else
+            echo "GCP: Secret Manager in project $gcp_project"
+          fi
+          echo "gcp_project=$gcp_project" >> "$GITHUB_OUTPUT"
+
+          oci_vault=""; oci_key=""; oci_compartment=""; oci_region=""
+          if foundation_ready oci; then
+            oci_vault="$(read_output oci vault_id)"
+            oci_key="$(read_output oci vault_key_id)"
+            oci_compartment="$(read_output oci compartment_id)"
+            oci_region="$(read_output oci region)"
+          fi
+          if [ -z "$oci_vault" ] || [ -z "$oci_key" ] || [ -z "$oci_compartment" ]; then
+            echo "::warning::foundations/oci is not deployed for ${TF_ENV}; skipping OCI."
+            oci_vault=""; oci_key=""; oci_compartment=""; oci_region=""
+          else
+            echo "OCI: Vault $oci_vault in $oci_region"
+          fi
+          {
+            echo "oci_vault=$oci_vault"
+            echo "oci_key=$oci_key"
+            echo "oci_compartment=$oci_compartment"
+            echo "oci_region=$oci_region"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Configure AWS credentials
+        if: steps.targets.outputs.aws_region != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ steps.targets.outputs.aws_region }}
+
+      - name: Authenticate to GCP
+        if: steps.targets.outputs.gcp_project != ''
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
+
+      - name: Set up gcloud
+        if: steps.targets.outputs.gcp_project != ''
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Install OCI CLI
+        if: steps.targets.outputs.oci_vault != ''
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh \
+            | bash -s -- --accept-all-defaults
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+
+      - name: Log in to Azure
+        run: |
+          set -euo pipefail
+          az login --service-principal \
+            --username "$ARM_CLIENT_ID" \
+            --password "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID" \
+            --output none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      # Everything below the vault handles a private key, so it stays in files
+      # under RUNNER_TEMP — outside the workspace, and out of step outputs and
+      # the log. The AWS and GCP CLIs read it from that file directly; the OCI
+      # CLI has no file form for secret content, so there alone it is passed
+      # as an argument.
+      - name: Fetch the certificate from Key Vault
+        id: fetch
+        env:
+          VAULT: ${{ steps.targets.outputs.vault }}
+        run: |
+          set -euo pipefail
+          raw="$RUNNER_TEMP/secret.raw"
+          if ! az keyvault secret download \
+                --vault-name "$VAULT" --name "$CERT_NAME" \
+                --file "$raw" --encoding utf-8 \
+                --only-show-errors 2>/tmp/kv-err; then
+            if grep -qiE 'not found|SecretNotFound|CertificateNotFound' /tmp/kv-err; then
+              echo "::error::no certificate $CERT_NAME in $VAULT; run this workflow in renew mode first" >&2
+            fi
+            cat /tmp/kv-err >&2
+            exit 1
+          fi
+
+          # A certificate imported as PEM comes back as PEM; one imported as
+          # PKCS#12 comes back as the base64 of the .pfx. Sniff the content
+          # rather than trusting contentType, and end up with one bundle
+          # either way.
+          bundle="$RUNNER_TEMP/bundle.pem"
+          if grep -q -- '-----BEGIN' "$raw"; then
+            cp "$raw" "$bundle"
+          else
+            base64 -d < "$raw" > "$RUNNER_TEMP/bundle.pfx"
+            openssl pkcs12 -in "$RUNNER_TEMP/bundle.pfx" -passin pass: -nodes -out "$bundle"
+          fi
+
+          crt="$RUNNER_TEMP/tls.crt"
+          key="$RUNNER_TEMP/tls.key"
+          # Keep the whole chain, in order, and drop everything that is not a
+          # certificate: the private key, and the bag attributes openssl
+          # writes ahead of each PKCS#12 entry.
+          awk '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/' "$bundle" > "$crt"
+          # PKCS#8, whatever the vault handed back. A bundle with no private
+          # key in it leaves the file empty, which the check below reports.
+          openssl pkey -in "$bundle" -out "$key" || true
+          if [ ! -s "$crt" ] || [ ! -s "$key" ]; then
+            echo "::error::$CERT_NAME in $VAULT holds no certificate/key pair" >&2
+            exit 1
+          fi
+
+          # A key and a leaf that do not belong together would break TLS on
+          # three clouds at once, so they are checked before anything is
+          # published rather than after.
+          if [ "$(openssl x509 -in "$crt" -noout -pubkey)" != "$(openssl pkey -in "$key" -pubout)" ]; then
+            echo "::error::the private key of $CERT_NAME does not match its certificate" >&2
+            exit 1
+          fi
+
+          # One JSON object per cloud, so the key and the certificate it
+          # belongs to are written — and read — as a single atomic version.
+          # The field names are Kubernetes' TLS secret keys, so an
+          # ExternalSecret maps them straight through with remoteRef.property.
+          jq -n --rawfile crt "$crt" --rawfile key "$key" \
+            '{"tls.crt": $crt, "tls.key": $key}' > "$RUNNER_TEMP/payload.json"
+
+          expires="$(openssl x509 -in "$crt" -noout -enddate | cut -d= -f2)"
+          echo "expires=$(date -u -d "$expires" +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "subject=$(openssl x509 -in "$crt" -noout -subject | sed 's/^subject=[[:space:]]*//')" >> "$GITHUB_OUTPUT"
+          openssl x509 -in "$crt" -noout -subject -ext subjectAltName -enddate
+
+      # The three pushes are independent: one cloud refusing the write must
+      # not keep the other two on a stale certificate, so each is allowed to
+      # fail on its own and the job is failed at the end by the outcome check.
+      - name: Push to AWS Secrets Manager
+        id: aws
+        if: steps.targets.outputs.aws_region != ''
+        continue-on-error: true
+        env:
+          REGION: ${{ steps.targets.outputs.aws_region }}
+          KMS_KEY: ${{ steps.targets.outputs.aws_kms }}
+          SECRET: ${{ steps.targets.outputs.aws_secret }}
+        run: |
+          set -euo pipefail
+          # Encrypted with the foundation's CMK, the same key the tenant
+          # secrets in this account use.
+          if aws secretsmanager describe-secret \
+                --secret-id "$SECRET" --region "$REGION" >/dev/null 2>&1; then
+            aws secretsmanager put-secret-value \
+              --secret-id "$SECRET" --region "$REGION" \
+              --secret-string "file://$RUNNER_TEMP/payload.json" \
+              --query VersionId --output text
+          else
+            aws secretsmanager create-secret \
+              --name "$SECRET" --region "$REGION" \
+              --kms-key-id "$KMS_KEY" \
+              --description "OneK8s platform wildcard certificate (${TF_ENV})" \
+              --secret-string "file://$RUNNER_TEMP/payload.json" \
+              --query ARN --output text
+          fi
+
+      - name: Push to GCP Secret Manager
+        id: gcp
+        if: steps.targets.outputs.gcp_project != ''
+        continue-on-error: true
+        env:
+          PROJECT: ${{ steps.targets.outputs.gcp_project }}
+        run: |
+          set -euo pipefail
+          if gcloud secrets describe "$CERT_NAME" --project "$PROJECT" >/dev/null 2>&1; then
+            gcloud secrets versions add "$CERT_NAME" --project "$PROJECT" \
+              --data-file="$RUNNER_TEMP/payload.json"
+          else
+            gcloud secrets create "$CERT_NAME" --project "$PROJECT" \
+              --replication-policy=automatic \
+              --data-file="$RUNNER_TEMP/payload.json"
+          fi
+
+      - name: Push to OCI Vault
+        id: oci
+        if: steps.targets.outputs.oci_vault != ''
+        continue-on-error: true
+        env:
+          VAULT_ID: ${{ steps.targets.outputs.oci_vault }}
+          KEY_ID: ${{ steps.targets.outputs.oci_key }}
+          COMPARTMENT: ${{ steps.targets.outputs.oci_compartment }}
+          REGION: ${{ steps.targets.outputs.oci_region }}
+        run: |
+          set -euo pipefail
+          # OCI takes secret content base64-encoded, and a name is unique per
+          # vault: an existing secret gets a new version, it is not recreated.
+          content="$(base64 -w0 "$RUNNER_TEMP/payload.json")"
+          existing="$(oci vault secret list \
+            --compartment-id "$COMPARTMENT" --vault-id "$VAULT_ID" \
+            --name "$CERT_NAME" --region "$REGION" --all \
+            --query "data[?\"lifecycle-state\"!='DELETED'] | [0].id" \
+            --raw-output || true)"
+          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+            oci vault secret update-base64 \
+              --secret-id "$existing" --region "$REGION" \
+              --secret-content-content "$content" \
+              --query 'data.id' --raw-output
+          else
+            oci vault secret create-base64 \
+              --compartment-id "$COMPARTMENT" --vault-id "$VAULT_ID" \
+              --key-id "$KEY_ID" --secret-name "$CERT_NAME" --region "$REGION" \
+              --description "OneK8s platform wildcard certificate (${TF_ENV})" \
+              --secret-content-content "$content" \
+              --query 'data.id' --raw-output
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          VAULT: ${{ steps.targets.outputs.vault }}
+          SUBJECT: ${{ steps.fetch.outputs.subject }}
+          EXPIRES: ${{ steps.fetch.outputs.expires }}
+          AWS_SECRET: ${{ steps.targets.outputs.aws_secret }}
+          AWS_OUTCOME: ${{ steps.aws.outcome }}
+          GCP_OUTCOME: ${{ steps.gcp.outcome }}
+          OCI_OUTCOME: ${{ steps.oci.outcome }}
+          AWS_TARGET: ${{ steps.targets.outputs.aws_region }}
+          GCP_TARGET: ${{ steps.targets.outputs.gcp_project }}
+          OCI_TARGET: ${{ steps.targets.outputs.oci_vault }}
+        run: |
+          # A push that did not run has two quite different causes: the cloud
+          # has no foundation here, or the run failed before reaching it.
+          row() { # <cloud> <target> <secret name> <outcome> <resolved target>
+            case "$4" in
+              success) result="updated" ;;
+              failure) result="**failed** — see the \"Push to $2\" step" ;;
+              *) if [ -z "$5" ]; then
+                   result="skipped — no $1 foundation in \`${TF_ENV}\`"
+                 else
+                   result="not attempted — the run stopped earlier"
+                 fi ;;
+            esac
+            echo "| $2 | \`$3\` | $result |"
+          }
+          {
+            echo "### Wildcard certificate distribution — ${TF_ENV}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Source | Key Vault \`${VAULT}\` / \`${CERT_NAME}\` |"
+            echo "| Subject | \`${SUBJECT}\` |"
+            echo "| Expires | ${EXPIRES} |"
+            echo
+            echo "| Target | Secret | Result |"
+            echo "|---|---|---|"
+            row aws "AWS Secrets Manager" "${AWS_SECRET}" "$AWS_OUTCOME" "$AWS_TARGET"
+            row gcp "GCP Secret Manager" "${CERT_NAME}" "$GCP_OUTCOME" "$GCP_TARGET"
+            row oci "OCI Vault" "${CERT_NAME}" "$OCI_OUTCOME" "$OCI_TARGET"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Check the distribution
+        env:
+          AWS_OUTCOME: ${{ steps.aws.outcome }}
+          GCP_OUTCOME: ${{ steps.gcp.outcome }}
+          OCI_OUTCOME: ${{ steps.oci.outcome }}
+        run: |
+          failed=""
+          if [ "$AWS_OUTCOME" = "failure" ]; then failed="$failed AWS"; fi
+          if [ "$GCP_OUTCOME" = "failure" ]; then failed="$failed GCP"; fi
+          if [ "$OCI_OUTCOME" = "failure" ]; then failed="$failed OCI"; fi
+          if [ -n "$failed" ]; then
+            echo "::error::the certificate was not distributed to:$failed" >&2
+            exit 1
+          fi
+          echo "Distribution complete."
 
       - name: Log out of Azure
         if: always()
