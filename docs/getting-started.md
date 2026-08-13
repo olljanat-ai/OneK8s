@@ -130,10 +130,10 @@ Two things have to be true around it:
    order is: apply the foundation, run the renewal (it reads the vault out of
    the foundation's state), then let the ingress pick the certificate up
    within the hour — no second apply needed.
-2. **The name resolves.** On Azure, external-dns does it: list the zone in
-   `ingress_dns_zone_ids` and every published Ingress host gets its record.
-   On the other three clouds the record is manual — take the address from
-   the controller's Service and point an A (or CNAME, on AWS) record at it:
+2. **The name resolves.** No cluster writes DNS, on any cloud: take the
+   address from the controller's Service and point an A record (a CNAME on
+   AWS, where the load balancer has a hostname) at it, once per published
+   host.
 
    ```bash
    kubectl -n traefik get svc traefik \
@@ -144,16 +144,16 @@ Hostnames are one label deep — `*.onek8s.lol` covers
 `web-team-alpha.onek8s.lol`, not `web.team-alpha.onek8s.lol`.
 
 > **Migrating an Azure environment off the application routing add-on.**
-> Removing the add-on deletes its load balancer, so the ingress address
-> changes, and its external-dns owns the records it wrote. The replacement
-> uses a different owner ID and deliberately does not touch records it does
-> not own, so delete the stale ones once — the A record *and* its
-> `externaldns-`/TXT companion — and the new external-dns recreates them:
+> Removing the add-on deletes its load balancer *and* the external-dns that
+> came with it, so the records it kept are stale and now unmanaged. Repoint
+> the A record at the Traefik Service's address and delete the TXT record
+> that recorded the old controller's ownership:
 >
 > ```bash
-> az network dns record-set a delete -g <zone rg> -z onek8s.lol -n argocd
+> az network dns record-set a update -g <zone rg> -z onek8s.lol -n argocd \
+>   --set arecords[0].ipv4Address=<new address>
 > az network dns record-set txt list -g <zone rg> -z onek8s.lol \
->   --query "[?contains(name,'argocd')].name" -o tsv
+>   --query "[?contains(name,'argocd')].name" -o tsv     # then: ... txt delete
 > ```
 
 ### Argo CD on the Azure foundation
@@ -168,11 +168,10 @@ must be in place around it, none of which this stack owns:
    Vault — run the **Renew Certificate** workflow at least once first. The
    Argo CD Ingress names no certificate of its own; it is served the
    ingress' default one.
-2. **The DNS zone.** List it in `ingress_dns_zone_ids` and external-dns keeps
-   the record for every published Ingress host. The stack grants its identity
-   DNS Zone Contributor on each zone; if that grant already exists out of
-   band, import it (see [argocd.md](argocd.md)). Leave the list empty to
-   point records by hand instead.
+2. **The DNS record.** `argocd.onek8s.lol` is a record like any other tenant
+   host: point it at the ingress load balancer by hand (see **Ingress**
+   above). Nothing in the cluster maintains it, so it has to be repointed if
+   that load balancer is ever replaced.
 3. **The Entra objects.** A user-assigned managed identity for the Argo CD
    components, an app registration for sign-in with
    `https://<hostname>/auth/callback` as a redirect URI and the groups claim

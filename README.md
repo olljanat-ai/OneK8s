@@ -10,7 +10,7 @@ via External Secrets Operator and per-tenant workload identities.
 
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
-│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy, Argo CD, external-dns) + Key Vault (RBAC/ABAC)
+│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy, Argo CD) + Key Vault (RBAC/ABAC)
 │   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
@@ -99,8 +99,8 @@ spec:
 ```
 
 Names are one label deep, because that is what the wildcard covers. DNS is
-kept by external-dns on Azure (where the zone lives) and by hand on the other
-three. Turn the whole thing off per environment with `enable_ingress`.
+out of band on every cloud — point a record at `kubectl -n traefik get svc
+traefik`. Turn the whole thing off per environment with `enable_ingress`.
 
 ## GitOps
 

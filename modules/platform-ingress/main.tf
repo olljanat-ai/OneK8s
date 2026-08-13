@@ -39,9 +39,9 @@ locals {
     providers = {
       kubernetesIngress = {
         # Traefik writes its own Service's address into the status of every
-        # Ingress it serves. That is what makes an Ingress usable as an
-        # external-dns source, and it is how an operator finds the address to
-        # point a record at.
+        # Ingress it serves, so `kubectl get ingress` shows where to point the
+        # host's DNS record — which is a manual step on every cloud here — and
+        # an Ingress becomes usable as a source if external-dns is ever added.
         publishedService = {
           enabled = true
         }

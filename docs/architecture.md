@@ -82,7 +82,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Tenant namespace | **Azure Managed Namespace** (azapi) | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
-| Ingress DNS | external-dns on the `onek8s.lol` zone | manual records | manual records | manual records |
+| Ingress DNS | manual records | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) | — | — | — |
 
 ## Ingress
@@ -160,17 +160,18 @@ fields come out of `filterPEM` in the target template instead. Either way the
 certificate is referenced without a version, so renewals are picked up on the
 next hourly refresh and never by an apply.
 
-**DNS is Azure-only.** The `onek8s.lol` zone lives in Azure DNS, so the AKS
-foundation runs **external-dns** (workload identity, `DNS Zone Contributor`
-on the zones in `ingress_dns_zone_ids`) and every Ingress it serves gets its
-record. Doing the same from EKS/GKE/OKE would mean storing Azure credentials
-in three more clusters — the first stored cross-cloud credential on a
-platform that has none — so those three get a record pointed at their load
-balancer by hand:
+**DNS is out of band, on every cloud.** The `onek8s.lol` zone lives in Azure
+DNS, and no cluster writes it: a record is pointed at the ingress load
+balancer by hand, once per published host.
 
 ```bash
 kubectl -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0]}'
 ```
+
+Running external-dns would only ever have been symmetric on Azure — the three
+other clusters would need Azure credentials to write that zone, the first
+stored cross-cloud credential on a platform that has none — so no cluster
+runs it, and every cloud's hostnames are maintained the same way.
 
 A tenant namespace's NetworkPolicy allows the ingress namespace by its
 `kubernetes.io/metadata.name` label, on top of the "same namespace only" rule
@@ -345,11 +346,10 @@ spec:
   the certificate is now read by External Secrets, the component that already
   reads every tenant secret, with the same ABAC narrowing to one certificate,
   so the cluster carries no Azure-only add-on for either job. Two
-  consequences on an existing environment:
-  the load balancer address changes, and the add-on's external-dns owns the
-  records it created — the new external-dns uses a different owner ID and
-  will not touch them, so those A and TXT records have to be deleted once
-  before the new ones appear.
+  consequences on an existing environment: the load balancer address changes,
+  and the add-on's external-dns is gone with it, so the records it kept are
+  now stale and unmanaged — repoint the A record at the new address and
+  delete the `externaldns-` TXT record that recorded its ownership.
 - Reading the Key Vault certificate through External Secrets means the
   private key is fetched by a cluster component and written to a Kubernetes
   Secret, where the Secrets Store CSI driver would have had kubelet mount it
@@ -358,10 +358,12 @@ spec:
   is one Azure-only add-on for symmetry with the other three clouds, and a
   vault that has no certificate yet now leaves an unresolved `ExternalSecret`
   instead of a pod that cannot start.
-- external-dns runs on AKS only, so tenant hostnames on EKS, GKE and OKE are
-  manual records. The alternative — running it on all four against the
-  Azure-hosted zone — needs Azure credentials inside three clusters that
-  otherwise hold none.
+- No cluster manages DNS, so every published hostname — `argocd.onek8s.lol`
+  included — is a record someone creates by hand, and a load balancer that is
+  replaced (a destroy/apply of the ingress, a cloud-side reassignment) breaks
+  every host on that cluster until the records are repointed. Azure could run
+  external-dns against its own zone, but that would automate one cloud out of
+  four and leave the other three exactly as they are now.
 - The ingress' certificate is the platform wildcard and nothing else, so a
   tenant that needs its own certificate (its own domain, or a client-facing
   CA) has to bring an `Ingress` with a `tls:` section and a secret it

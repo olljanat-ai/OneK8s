@@ -1,6 +1,6 @@
 # AKS cluster with:
 #  - OIDC issuer + Workload Identity (tenant identities federate against it,
-#    and so do the platform's own: External Secrets and external-dns)
+#    and so does the platform's own ingress identity)
 #  - Azure CNI overlay with the Cilium data plane
 #  - Azure Policy add-on for guardrails
 #

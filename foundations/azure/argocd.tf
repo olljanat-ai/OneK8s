@@ -9,7 +9,7 @@
 # certificate that the Renew Certificate workflow keeps in this environment's
 # Key Vault:
 #
-#   argocd.onek8s.lol --(A record kept by external-dns, see dns.tf)-->
+#   argocd.onek8s.lol --(A record, pointed at the ingress by hand)-->
 #                     Traefik
 #                       --(default TLSStore)--> Key Vault cert via ESO
 #                       --(HTTP)--> argocd-server

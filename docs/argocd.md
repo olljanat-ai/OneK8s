@@ -8,8 +8,8 @@ publishes its UI on `https://argocd.onek8s.lol`.
 ```
                        ┌──────────────── AKS (foundations/azure) ───────────────┐
  argocd.onek8s.lol     │                                                        │
-  (A record kept by    │  Traefik ──HTTP──▶ argocd-server                       │
-   external-dns) ─────▶│      │                                                 │
+  (A record, out       │  Traefik ──HTTP──▶ argocd-server                       │
+   of band) ──────────▶│      │                                                 │
                        │      │ Ingress "argocd": a host and a backend,         │
                        │      │ no class and no TLS section                     │
                        │      ▼                                                 │
@@ -71,26 +71,14 @@ four lines a tenant writes. Its TLS is the ingress' business. The certificate
 is referenced without a version, so a renewal is picked up on the next
 rotation poll (default two minutes) with no Terraform apply.
 
-DNS is kept by **external-dns** (`dns.tf`), which runs with its own
-workload-identity federation and writes the zones listed in
-`var.ingress_dns_zone_ids` — one record per host of every Ingress it sees,
-`argocd.onek8s.lol` included, so the record is not maintained by hand.
-Listing a zone only tells external-dns to reconcile it; the stack also grants
-its identity **DNS Zone Contributor** on each zone. Leave the list empty to
-keep DNS out of the cluster's hands.
+DNS stays out of the cluster's hands: no cluster on any cloud writes the
+`onek8s.lol` zone, so `argocd.onek8s.lol` is an A record pointed at the
+Traefik Service's address by hand, like every tenant host.
 
-> If that grant was already made from the CLI or the portal, the first apply
-> fails with `RoleAssignmentExists`. Import it rather than deleting it:
->
-> ```bash
-> az role assignment list --scope "<zone id>" --role "DNS Zone Contributor" --query "[].id" -o tsv
-> terraform import 'azurerm_role_assignment.external_dns_zone_contributor["<zone id>"]' "<assignment id>"
-> ```
->
-> Records written by the **application routing add-on's** external-dns are a
-> different matter: they carry its owner ID, and the new controller will not
-> touch what it does not own. Delete the stale `argocd` A record and its TXT
-> companion once, and the record is recreated against the new load balancer.
+> Migrating off the application routing add-on: it took its own external-dns
+> with it, so the `argocd` record it used to keep is stale (the add-on's load
+> balancer is gone) and unmanaged. Repoint it at the new address and delete
+> the `externaldns-…-argocd` TXT record that recorded the old ownership.
 
 TLS terminates at Traefik and `configs.params.server.insecure` is `true`, so
 `argocd-server` speaks plain HTTP inside the cluster. Without it, the two
@@ -148,7 +136,7 @@ kubectl -n traefik get secret platform-wildcard-tls
 kubectl -n argocd get ingress argocd
 kubectl -n traefik get svc traefik
 
-# the record external-dns keeps for the ingress
+# the record for the ingress, which is maintained by hand
 az network dns record-set a show -g rg-onek8s-argocd -z onek8s.lol -n argocd
 
 # break-glass: the built-in admin account, when SSO is the thing that broke
