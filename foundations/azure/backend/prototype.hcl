@@ -1,4 +1,5 @@
-# Fill in with your state storage account (bootstrap it once, out of band).
+# The Azure Storage state home holds every stack's state, on every cloud.
+# Bootstrap the storage account once, out of band.
 resource_group_name  = "rg-onek8s-tfstate"
 storage_account_name = "onek8stfstate"
 container_name       = "tfstate"

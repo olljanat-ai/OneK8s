@@ -1,10 +1,11 @@
 # -----------------------------------------------------------------------------
 # Azure foundation: AKS cluster + Azure Key Vault ("vault") pair.
 #
-# State is stored in an Azure Storage Account. The backend block is left
-# partial on purpose: pass the per-environment settings at init time, e.g.
+# State is stored in the shared Azure Storage state home, which holds every
+# stack's state on every cloud. The backend block is left partial on purpose:
+# pass the per-environment settings at init time, e.g.
 #
-#   terraform init -backend-config=backend/dev.hcl
+#   terraform init -backend-config=backend/prototype.hcl
 # -----------------------------------------------------------------------------
 terraform {
   required_version = ">= 1.9.0"

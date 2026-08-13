@@ -1,43 +1,14 @@
 # Dependency direction: tenants read foundation outputs, never the reverse.
-# terraform_remote_state's backend type must be static, so one count-gated
-# data source exists per cloud; exactly one is active.
-data "terraform_remote_state" "azure" {
-  count = var.cloud == "azure" ? 1 : 0
-
+# Every foundation keeps its state in the Azure Storage state home whatever
+# cloud it provisions, so one azurerm read serves all four clouds — the cloud
+# only varies the key in var.foundation_state.
+data "terraform_remote_state" "foundation" {
   backend = "azurerm"
   config  = merge(var.foundation_state, { use_azuread_auth = true })
 }
 
-data "terraform_remote_state" "aws" {
-  count = var.cloud == "aws" ? 1 : 0
-
-  backend = "s3"
-  config  = var.foundation_state
-}
-
-data "terraform_remote_state" "gcp" {
-  count = var.cloud == "gcp" ? 1 : 0
-
-  backend = "gcs"
-  config  = var.foundation_state
-}
-
-# OCI Object Storage speaks the S3 API, so the OCI foundation's state is read
-# through the s3 backend with the compatibility flags in its backend/*.hcl.
-data "terraform_remote_state" "oci" {
-  count = var.cloud == "oci" ? 1 : 0
-
-  backend = "s3"
-  config  = var.foundation_state
-}
-
 locals {
-  foundation = one(concat(
-    data.terraform_remote_state.azure[*].outputs,
-    data.terraform_remote_state.aws[*].outputs,
-    data.terraform_remote_state.gcp[*].outputs,
-    data.terraform_remote_state.oci[*].outputs,
-  ))
+  foundation = data.terraform_remote_state.foundation.outputs
 }
 
 module "tenant" {

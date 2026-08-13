@@ -1,16 +1,17 @@
 # -----------------------------------------------------------------------------
 # OCI foundation: OKE cluster + OCI Vault ("vault") pair.
 #
-#   terraform init -backend-config=backend/prototype.hcl
+# State lives in the shared Azure Storage state home, not in OCI Object
+# Storage — see docs/architecture.md. Azure credentials are therefore needed
+# alongside the OCI ones. The backend block is left partial on purpose: pass
+# the per-environment settings at init time, e.g.
 #
-# State lives in OCI Object Storage through its S3-compatible endpoint, so the
-# stack uses the standard "s3" backend (see backend/*.hcl for the endpoint and
-# the compatibility flags it needs).
+#   terraform init -backend-config=backend/prototype.hcl
 # -----------------------------------------------------------------------------
 terraform {
   required_version = ">= 1.9.0"
 
-  backend "s3" {}
+  backend "azurerm" {}
 
   required_providers {
     oci = {

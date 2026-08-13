@@ -1,23 +1,13 @@
 cloud       = "oci"
 environment = "prototype"
 
-# OCI Object Storage via its S3-compatible endpoint. These coordinates must
-# match foundations/oci/backend/prototype.hcl — that is where the foundation
-# writes the state this stack reads.
+# Every foundation's state lives in the Azure Storage state home; only the
+# blob key is cloud-specific. Must match foundations/oci/backend/prototype.hcl.
 foundation_state = {
-  bucket = "onek8s-tfstate"
-  key    = "foundations/oci/prototype.tfstate"
-  region = "eu-stockholm-1"
-
-  endpoints = {
-    s3 = "https://ax9e2kehb4lc.compat.objectstorage.eu-stockholm-1.oraclecloud.com"
-  }
-
-  skip_region_validation      = true
-  skip_credentials_validation = true
-  skip_requesting_account_id  = true
-  skip_s3_checksum            = true
-  use_path_style              = true
+  resource_group_name  = "rg-onek8s-tfstate"
+  storage_account_name = "onek8stfstate"
+  container_name       = "tfstate"
+  key                  = "foundations/oci/prototype.tfstate"
 }
 
 # Example tenants — identical syntax on every cloud.

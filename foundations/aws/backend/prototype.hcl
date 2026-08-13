@@ -1,6 +1,7 @@
-# Fill in with your state bucket (bootstrap it once, out of band).
-bucket       = "onek8s-tfstate"
-key          = "foundations/aws/prototype.tfstate"
-region       = "eu-north-1"
-encrypt      = true
-use_lockfile = true
+# The Azure Storage state home holds every stack's state, on every cloud.
+# Bootstrap the storage account once, out of band.
+resource_group_name  = "rg-onek8s-tfstate"
+storage_account_name = "onek8stfstate"
+container_name       = "tfstate"
+key                  = "foundations/aws/prototype.tfstate"
+use_azuread_auth     = true

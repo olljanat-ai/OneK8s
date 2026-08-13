@@ -2,19 +2,19 @@
 # Tenants: ONE stack for all clouds. The target cloud is just a parameter
 # (`cloud = "azure" | "aws" | "gcp" | "oci"`) in the chosen env file:
 #
-#   terraform init -backend-config=backend/aws-dev.hcl
-#   terraform apply -var-file=envs/aws-dev.tfvars
+#   terraform init -backend-config=backend/aws-prototype.hcl
+#   terraform apply -var-file=envs/aws-prototype.tfvars
 #
-# A Terraform working directory supports exactly one backend type, so ALL
-# tenant states (every cloud, every environment) live in the Azure Storage
-# "state home" under distinct keys (tenants/<cloud>/<env>.tfstate). Azure
-# credentials (ARM_* env vars / az login) are therefore required for every
-# tenant deploy, plus the credentials of the selected cloud.
+# ALL state (every stack, every cloud, every environment) lives in the Azure
+# Storage "state home" under distinct keys — tenants/<cloud>/<env>.tfstate
+# here, foundations/<cloud>/<env>.tfstate for the foundations this stack
+# reads. Azure credentials (ARM_* env vars / az login) are therefore required
+# for every deploy, plus the credentials of the selected cloud.
 # -----------------------------------------------------------------------------
 terraform {
   required_version = ">= 1.9.0"
 
-  # backend "azurerm" {}
+  backend "azurerm" {}
 
   required_providers {
     azurerm = {

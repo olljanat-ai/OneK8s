@@ -1,9 +1,13 @@
 cloud       = "gcp"
 environment = "prototype"
 
+# Every foundation's state lives in the Azure Storage state home; only the
+# blob key is cloud-specific. Must match foundations/gcp/backend/prototype.hcl.
 foundation_state = {
-  bucket = "onek8s-tfstate"
-  prefix = "foundations/gcp/prototype"
+  resource_group_name  = "rg-onek8s-tfstate"
+  storage_account_name = "onek8stfstate"
+  container_name       = "tfstate"
+  key                  = "foundations/gcp/prototype.tfstate"
 }
 
 # Example tenants — identical syntax on every cloud.

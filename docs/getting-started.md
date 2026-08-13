@@ -10,19 +10,22 @@
 
 ## 1. Bootstrap state storage (once, out of band)
 
-Create the state stores and put their coordinates into each stack's
-`backend/*.hcl` and the tenants' `envs/*.tfvars` (`foundation_state`):
+There is a single **state home** for the whole monorepo: an Azure Storage
+account that holds the state of every stack on every cloud. Create a
+resource group + storage account + `tfstate` container (enable blob
+versioning), and put its coordinates into each stack's `backend/*.hcl` and
+the tenants' `envs/*.tfvars` (`foundation_state`). The keys are:
 
-- **Azure**: resource group + storage account + `tfstate` container
-- **AWS**: S3 bucket (versioned; native lockfile locking is enabled via
-  `use_lockfile`)
-- **GCP**: GCS bucket (versioned)
-- **OCI**: Object Storage bucket (versioned), addressed through the
-  S3-compatible endpoint
-  `https://<namespace>.compat.objectstorage.<region>.oraclecloud.com`
-  (`oci os ns get` prints the namespace). It authenticates with a **Customer
-  Secret Key**, which is an AWS-style key pair — create one under the deploy
-  user's *Customer Secret Keys*.
+| Stack | Blob key |
+|---|---|
+| `foundations/<cloud>` | `foundations/<cloud>/<env>.tfstate` |
+| `tenants` (cloud is a parameter) | `tenants/<cloud>/<env>.tfstate` |
+
+Consequence: **every** deploy needs Azure credentials, including the AWS,
+GCP and OCI ones, in addition to the target cloud's. Grant the Azure deploy
+identity *Storage Blob Data Contributor* on the state container — the
+backends use `use_azuread_auth = true`, not storage account keys. No S3 /
+GCS / Object Storage bucket is needed for Terraform state.
 
 ## 2. Configure GitHub credentials (secrets)
 
@@ -31,10 +34,10 @@ secrets:
 
 - **Azure**: an Entra app (service principal) with a client secret. Note:
   the Azure secrets are needed by **all** deploy jobs, not just the Azure
-  ones — the unified tenants stack keeps its state in Azure Storage, so
-  AWS/GCP tenant deploys also authenticate to Azure for state access.
-  Grant the app Contributor + RBAC-admin rights scoped to the platform
-  subscription.
+  ones — every stack keeps its state in the Azure Storage state home, so
+  AWS/GCP/OCI deploys also authenticate to Azure for state access. Grant the
+  app Contributor + RBAC-admin rights scoped to the platform subscription,
+  plus Storage Blob Data Contributor on the state container.
 - **AWS**: an IAM user with an access key. Grant it the rights to manage
   the foundation + tenant resources.
 - **GCP**: a deploy service account with a JSON key.
@@ -42,18 +45,18 @@ secrets:
   platform compartment plus `manage policies` — per-tenant policies are
   created at deploy time. Note that IAM writes always go to the tenancy's
   **home region**, which the stacks address through a separate `oci.home`
-  provider alias.
+  provider alias. No Customer Secret Key is needed: OCI state lives in the
+  Azure state home like everything else.
 
 Then set repository **secrets** (Settings → Secrets and variables →
 Actions → Secrets):
 
 | Secret | Used by |
 |---|---|
-| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_SECRET` | azurerm/azapi providers + azurerm state backend |
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `AZURE_CLIENT_SECRET` | azurerm/azapi providers + the azurerm state backend of **every** stack |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | aws-actions/configure-aws-credentials |
 | `GCP_CREDENTIALS_JSON` | google-github-actions/auth (service account key JSON) |
 | `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY` | oci provider + OCI CLI (API signing key, PEM contents) |
-| `OCI_S3_SECRET_ACCESS_KEY` | OCI Object Storage state backend (Customer Secret Key) |
 
 And repository **variables**:
 
@@ -61,7 +64,6 @@ And repository **variables**:
 |---|---|
 | `AWS_REGION` | aws-actions/configure-aws-credentials |
 | `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_REGION` | oci provider + OCI CLI |
-| `OCI_S3_ACCESS_KEY_ID` | OCI Object Storage state backend |
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
 
 Create GitHub **environments** `azure-dev`, `azure-staging`, `azure-prod`,
@@ -72,19 +74,20 @@ Create GitHub **environments** `azure-dev`, `azure-staging`, `azure-prod`,
 
 ```bash
 cd foundations/aws
-terraform init -backend-config=backend/dev.hcl
-terraform plan  -var-file=envs/dev.tfvars
-terraform apply -var-file=envs/dev.tfvars
+terraform init -backend-config=backend/prototype.hcl   # Azure creds needed here too
+terraform plan  -var-file=envs/prototype.tfvars
+terraform apply -var-file=envs/prototype.tfvars
 ```
 
-Or via Actions: **Deploy Foundations** → cloud `aws`, environment `dev`.
+Or via Actions: **Deploy Foundations** → cloud `aws`, environment
+`prototype`.
 
 ## 4. Onboard tenants
 
 There is one tenants stack for all clouds; the target cloud is just the
 `cloud = "..."` parameter inside the env file. Edit
-`tenants/envs/aws-dev.tfvars` and add a tenant — the syntax is identical on
-every cloud:
+`tenants/envs/aws-prototype.tfvars` and add a tenant — the syntax is
+identical on every cloud:
 
 ```hcl
 tenants = {
@@ -99,14 +102,16 @@ Then:
 
 ```bash
 cd tenants
-terraform init -backend-config=backend/aws-dev.hcl
-terraform apply -var-file=envs/aws-dev.tfvars
+terraform init -backend-config=backend/aws-prototype.hcl
+terraform apply -var-file=envs/aws-prototype.tfvars
 ```
 
-(Azure credentials are needed too — tenant state lives in the Azure Storage
-state home regardless of cloud; use `az login` or ARM_* env vars.)
+(Azure credentials are needed too — all state lives in the Azure Storage
+state home regardless of cloud; use `az login` or ARM_* env vars. The stack
+also *reads* the foundation's state from there, so `foundation_state` in the
+tfvars must match `foundations/aws/backend/prototype.hcl`.)
 
-Or via Actions: **Deploy Tenants** → cloud `aws`, environment `dev`.
+Or via Actions: **Deploy Tenants** → cloud `aws`, environment `prototype`.
 
 ## 5. Give the tenant a secret and consume it
 

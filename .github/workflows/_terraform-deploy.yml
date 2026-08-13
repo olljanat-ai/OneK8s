@@ -46,8 +46,8 @@ jobs:
     env:
       TF_IN_AUTOMATION: "true"
       TF_CONFIG: ${{ inputs.config || inputs.environment }}
-      # Azure credentials are needed on every cloud: the unified tenants
-      # stack keeps its state in Azure Storage.
+      # Azure credentials are needed on every cloud: every stack — foundations
+      # included — keeps its state in the Azure Storage state home.
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
@@ -84,15 +84,6 @@ jobs:
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
-
-      # OCI state lives in Object Storage, addressed through its
-      # S3-compatible API, which authenticates with a Customer Secret Key
-      # presented as an AWS-style key pair.
-      - name: Configure OCI state backend credentials
-        if: inputs.cloud == 'oci'
-        run: |
-          echo "AWS_ACCESS_KEY_ID=${{ vars.OCI_S3_ACCESS_KEY_ID }}" >> "$GITHUB_ENV"
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.OCI_S3_SECRET_ACCESS_KEY }}" >> "$GITHUB_ENV"
 
       # The AWS, GCP and OCI tenant stacks shell out for cluster tokens
       # (aws eks get-token / gke auth / oci ce cluster generate-token); the
