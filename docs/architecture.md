@@ -26,8 +26,16 @@ hard, cloud-enforced secret isolation.
 
 | Layer | Stacks | State | Deploys |
 |---|---|---|---|
-| Foundations | `foundations/{azure,aws,gcp,oci}` | `foundations/<cloud>/<env>` in that cloud's backend | independently |
-| Tenants | `tenants/` (one stack, `cloud` is a tfvars parameter) | `tenants/<cloud>/<env>` in the Azure Storage state home | independently, **after** the foundation for that cloud+env exists |
+| Foundations | `foundations/{azure,aws,gcp,oci}` | `foundations/<cloud>/<env>.tfstate` in the Azure Storage state home | independently |
+| Tenants | `tenants/` (one stack, `cloud` is a tfvars parameter) | `tenants/<cloud>/<env>.tfstate` in the Azure Storage state home | independently, **after** the foundation for that cloud+env exists |
+
+**One state home.** Every stack — whichever cloud it provisions — keeps its
+state in the same Azure Storage account, distinguished only by blob key.
+Bootstrapping is therefore a single storage account rather than one bucket
+per cloud, `terraform_remote_state` is a single `azurerm` read instead of
+one data source per backend type, and state RBAC/versioning/retention is
+configured in one place. The price is that every deploy needs Azure
+credentials in addition to the target cloud's.
 
 Tenants consume foundation outputs via `terraform_remote_state` only.
 Foundations never reference tenants — the dependency arrow points one way.
@@ -40,7 +48,9 @@ parameter in the file and the tenant syntax is identical everywhere. Inside
 the stack, a dispatcher module (`modules/tenant-namespace`) instantiates
 exactly one cloud implementation, and providers for unselected clouds are
 configured inert (mock credentials, zero resources), so a run needs only
-Azure credentials (state home) plus the selected cloud's credentials.
+Azure credentials (state home) plus the selected cloud's credentials. The
+same applies to the foundations: they all read and write their state in the
+Azure state home too.
 
 ## Cloud mapping
 
@@ -119,12 +129,16 @@ spec:
 - AKS uses cluster-local accounts for CI bootstrap (Helm/add-ons). Harden to
   Entra-only + `kubelogin` once your CI identity has an AAD admin group.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
-- A Terraform working directory supports one backend type, so unifying
-  tenants into a single stack means all tenant states — including AWS/GCP
-  ones — live in the Azure Storage state home. Every tenant deploy therefore
-  needs Azure credentials in addition to the target cloud's. If that
-  coupling is unacceptable, split tenants back into per-cloud roots that
-  call the same unified module.
+- All state lives in the Azure Storage state home, so every deploy — AWS,
+  GCP and OCI foundations included — needs Azure credentials in addition to
+  the target cloud's, and Azure Storage is a single point of failure for
+  operating the other three clouds. The trade is deliberate: one bootstrap,
+  one place to secure and version state, and one remote-state backend type
+  (a working directory supports only one anyway, which is what forced the
+  unified tenants stack into Azure Storage to begin with). If that coupling
+  is unacceptable, move each `foundations/<cloud>` back to its own cloud's
+  backend and give the tenants stack one `terraform_remote_state` data
+  source per backend type, count-gated on `var.cloud`.
 - Azure Managed Namespaces are a preview API surface, addressed via `azapi`
   by design (`managed_namespace_api_version` variable).
 - OCI IAM is global but writable only in the tenancy's **home region**, so

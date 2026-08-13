@@ -16,12 +16,10 @@ variable "environment" {
 variable "foundation_state" {
   description = <<-EOT
     Backend location of the foundations/<cloud> state for this environment.
-    Keys depend on var.cloud (they mirror that backend's config):
-      azure: resource_group_name, storage_account_name, container_name, key
-      aws:   bucket, key, region
-      gcp:   bucket, prefix
-      oci:   bucket, key, region, endpoints, and the s3-compatibility flags
-             (see tenants/envs/oci-*.tfvars)
+    Every foundation stores its state in the Azure Storage state home, so the
+    keys are the azurerm backend's on every cloud — only the blob key differs:
+      resource_group_name, storage_account_name, container_name, key
+    They must match foundations/<cloud>/backend/<env>.hcl.
   EOT
   type        = any
 }

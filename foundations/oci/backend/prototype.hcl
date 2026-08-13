@@ -1,18 +1,7 @@
-# OCI Object Storage through its S3-compatible endpoint. Bootstrap the bucket
-# once, out of band, and replace <namespace> with your Object Storage
-# namespace (`oci os ns get`). Authenticate with a Customer Secret Key
-# (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).
-bucket = "onek8s-tfstate"
-key    = "foundations/oci/prototype.tfstate"
-region = "eu-stockholm-1"
-
-endpoints = {
-  s3 = "https://ax9e2kehb4lc.compat.objectstorage.eu-stockholm-1.oraclecloud.com"
-}
-
-# OCI is not AWS: skip the AWS-specific validation and checksum behaviour.
-skip_region_validation      = true
-skip_credentials_validation = true
-skip_requesting_account_id  = true
-skip_s3_checksum            = true
-use_path_style              = true
+# The Azure Storage state home holds every stack's state, on every cloud.
+# Bootstrap the storage account once, out of band.
+resource_group_name  = "rg-onek8s-tfstate"
+storage_account_name = "onek8stfstate"
+container_name       = "tfstate"
+key                  = "foundations/oci/prototype.tfstate"
+use_azuread_auth     = true

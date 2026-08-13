@@ -1,10 +1,13 @@
 cloud       = "aws"
 environment = "prototype"
 
+# Every foundation's state lives in the Azure Storage state home; only the
+# blob key is cloud-specific. Must match foundations/aws/backend/prototype.hcl.
 foundation_state = {
-  bucket = "onek8s-tfstate"
-  key    = "foundations/aws/prototype.tfstate"
-  region = "eu-north-1"
+  resource_group_name  = "rg-onek8s-tfstate"
+  storage_account_name = "onek8stfstate"
+  container_name       = "tfstate"
+  key                  = "foundations/aws/prototype.tfstate"
 }
 
 # Example tenants — identical syntax on every cloud.

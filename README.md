@@ -24,7 +24,7 @@ via External Secrets Operator and per-tenant workload identities.
 │       └── oci/            #   workload-identity IAM policy + secret-name prefix
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <cloud>-<env>.tfvars: cloud is a parameter in the file
-│   └── backend/            #   <cloud>-<env>.hcl state configs (shared state home)
+│   └── backend/            #   <cloud>-<env>.hcl state configs (Azure state home)
 ├── .github/workflows/      # PR validation + deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
 ```
@@ -51,13 +51,17 @@ Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretsto
 
 ```bash
 cd foundations/aws
-terraform init -backend-config=backend/dev.hcl
-terraform apply -var-file=envs/dev.tfvars
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
 
-cd ../../tenants                                # same stack for every cloud
-terraform init -backend-config=backend/aws-dev.hcl
-terraform apply -var-file=envs/aws-dev.tfvars   # cloud = "aws" set in the file
+cd ../../tenants                                      # same stack for every cloud
+terraform init -backend-config=backend/aws-prototype.hcl
+terraform apply -var-file=envs/aws-prototype.tfvars   # cloud = "aws" set in the file
 ```
+
+All state — every stack, every cloud — lives in one Azure Storage "state
+home", so Azure credentials are required for every deploy alongside the
+target cloud's.
 
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
