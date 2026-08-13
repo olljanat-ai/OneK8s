@@ -52,7 +52,7 @@ output "ingress_namespace" {
 }
 
 output "ingress_default_certificate_secret" {
-  description = "TLS secret in the ingress namespace that Traefik serves for hosts without a certificate of their own — the platform wildcard, synced from Key Vault by the Secrets Store CSI driver."
+  description = "TLS secret in the ingress namespace that Traefik serves for hosts without a certificate of their own — the platform wildcard, read from Key Vault by External Secrets."
   value       = var.enable_ingress ? local.ingress_tls_secret_name : null
 }
 

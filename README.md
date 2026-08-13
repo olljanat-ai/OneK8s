@@ -82,9 +82,9 @@ Every cluster runs **Traefik**, installed from one module, with its
 IngressClass as the cluster default and the `*.onek8s.lol` wildcard as its
 **default certificate** — the certificate the Renew Certificate workflow
 keeps in Key Vault and distributes to Secrets Manager, Secret Manager and OCI
-Vault, read back in-cluster by External Secrets (or, on Azure, by the Secrets
-Store CSI driver). Publishing an app is therefore identical on all four
-clouds, and carries no TLS configuration of its own:
+Vault, read back in-cluster by External Secrets on every one of them.
+Publishing an app is therefore identical on all four clouds, and carries no
+TLS configuration of its own:
 
 ```yaml
 apiVersion: networking.k8s.io/v1

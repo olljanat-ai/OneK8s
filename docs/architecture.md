@@ -81,7 +81,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
 | Tenant namespace | **Azure Managed Namespace** (azapi) | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
-| Platform ingress | **Traefik** + Secrets Store CSI (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
+| Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | external-dns on the `onek8s.lol` zone | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) | — | — | — |
 
@@ -140,7 +140,7 @@ fills it from the backend its tenants already read:
 
 | Cloud | How `platform-wildcard-tls` is filled |
 |---|---|
-| Azure | Secrets Store CSI driver mounts the Key Vault certificate on the Traefik pod and syncs it; the private key travels Key Vault → kubelet and is never read by Terraform |
+| Azure | ESO `SecretStore` + `ExternalSecret` on the Key Vault certificate, over a UAMI + federated credential; Key Vault returns one PEM bundle, which `filterPEM` splits into the two fields |
 | AWS | ESO `SecretStore` + `ExternalSecret` on `<env>/platform/wildcard-onek8s-lol` in Secrets Manager, over IRSA |
 | GCP | ESO on `platform-wildcard-onek8s-lol` in Secret Manager, over Workload Identity |
 | OCI | ESO on `platform-wildcard-onek8s-lol` in the Vault, over OKE Workload Identity |
@@ -152,9 +152,13 @@ policy condition that scopes a tenant to `<tenant>-`. No tenant can read the
 private key, and the ingress can read no tenant's secrets.
 
 The distributed value is one JSON object holding `tls.crt` and `tls.key`, so
-the `ExternalSecret` uses `dataFrom.extract` and materializes a
-`kubernetes.io/tls` secret in one step. Renewals are picked up without an
-apply: ESO refreshes hourly, and the CSI driver on its rotation poll.
+those three `ExternalSecret`s use `dataFrom.extract` and materialize a
+`kubernetes.io/tls` secret in one step. Azure reads the vault the workflow
+writes to directly, and what Key Vault returns for a certificate is the PEM
+bundle that was imported — key followed by chain — so there the same two
+fields come out of `filterPEM` in the target template instead. Either way the
+certificate is referenced without a version, so renewals are picked up on the
+next hourly refresh and never by an apply.
 
 **DNS is Azure-only.** The `onek8s.lol` zone lives in Azure DNS, so the AKS
 foundation runs **external-dns** (workload identity, `DNS Zone Contributor`
@@ -337,18 +341,23 @@ spec:
   managed component for one the platform now upgrades itself. The add-on was
   managed NGINX with Azure-specific Ingress annotations and no counterpart on
   the other three clouds, so keeping it would have meant a per-cloud ingress
-  contract for tenants; the certificate mechanism (Secrets Store CSI, ABAC on
-  one certificate) is unchanged. Two consequences on an existing environment:
+  contract for tenants. The Key Vault secrets provider add-on went with it:
+  the certificate is now read by External Secrets, the component that already
+  reads every tenant secret, with the same ABAC narrowing to one certificate,
+  so the cluster carries no Azure-only add-on for either job. Two
+  consequences on an existing environment:
   the load balancer address changes, and the add-on's external-dns owns the
   records it created — the new external-dns uses a different owner ID and
   will not touch them, so those A and TXT records have to be deleted once
   before the new ones appear.
-- The Azure ingress does not wait for its Helm release to become ready. The
-  certificate is a CSI volume there, so a vault without one keeps the Traefik
-  pod from starting, and a brand-new environment has no certificate until the
-  Renew Certificate workflow has run — which needs this stack's outputs to
-  find the vault. Waiting would deadlock the two on a first apply; the cost
-  is that a genuinely broken ingress does not fail the apply on Azure.
+- Reading the Key Vault certificate through External Secrets means the
+  private key is fetched by a cluster component and written to a Kubernetes
+  Secret, where the Secrets Store CSI driver would have had kubelet mount it
+  from the vault. The etcd copy exists either way — the CSI driver's
+  `secretObjects` sync creates the same Secret — so what is actually traded
+  is one Azure-only add-on for symmetry with the other three clouds, and a
+  vault that has no certificate yet now leaves an unresolved `ExternalSecret`
+  instead of a pod that cannot start.
 - external-dns runs on AKS only, so tenant hostnames on EKS, GKE and OKE are
   manual records. The alternative — running it on all four against the
   Azure-hosted zone — needs Azure credentials inside three clusters that

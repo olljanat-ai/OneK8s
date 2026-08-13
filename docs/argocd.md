@@ -15,10 +15,10 @@ publishes its UI on `https://argocd.onek8s.lol`.
                        │      ▼                                                 │
                        │  default TLSStore ──▶ Secret "platform-wildcard-tls"   │
                        │                            ▲                           │
-                       │      Secrets Store CSI ────┘                           │
+                       │      External Secrets ─────┘                           │
                        └────────────│───────────────────────────────────────────┘
-                                    │ Key Vault secrets provider identity
-                                    │ (Key Vault Certificate User + ABAC)
+                                    │ platform ingress identity (UAMI + FIC)
+                                    │ (Key Vault Secrets User + ABAC)
                                     ▼
                           Key Vault: platform-wildcard-onek8s-lol
 ```
@@ -50,16 +50,21 @@ The `*.onek8s.lol` wildcard lives in this environment's Key Vault as
 and — since the ingress moved to Traefik — nothing about it is specific to
 Argo CD:
 
-1. `aks.tf` enables the **Secrets Store CSI driver**
-   (`key_vault_secrets_provider`, rotation on).
-2. `ingress.tf` gives the add-on's managed identity `Key Vault Certificate
-   User` on the vault, narrowed by an **ABAC condition** to the one
-   certificate. Without that condition the role's `getSecret` would cover the
-   whole vault — every tenant's secrets. Key Vault ABAC only covers secret
-   data actions, so certificate reads stay unconditioned.
-3. A `SecretProviderClass` mounted on the Traefik pod syncs the certificate
-   into `Secret/platform-wildcard-tls`, which Traefik's **default TLSStore**
-   serves for every host that brings no certificate of its own.
+1. `ingress.tf` creates a user-assigned identity, federates it to the ingress'
+   ServiceAccount (`traefik/platform-secrets`) and grants it `Key Vault
+   Secrets User`, narrowed by an **ABAC condition** to the one certificate.
+   Without that condition the role's `getSecret` would cover the whole vault —
+   every tenant's secrets.
+2. An ESO `SecretStore` (`azurekv`, `authType: WorkloadIdentity`) and an
+   `ExternalSecret` read it. Key Vault returns a certificate as the PEM bundle
+   that was imported, so the target template splits it with `filterPEM` into
+   `Secret/platform-wildcard-tls`.
+3. Traefik's **default TLSStore** serves that secret for every host that
+   brings no certificate of its own.
+
+No AKS add-on is involved in any of it: the same External Secrets install
+that serves every tenant serves the platform, which is what makes this
+identical to the AWS, GCP and OCI clusters.
 
 So the `argocd` Ingress names no secret and no class at all — it is the same
 four lines a tenant writes. Its TLS is the ingress' business. The certificate

@@ -11,7 +11,7 @@ module "ingress" {
 
   chart_version       = var.traefik_chart_version
   service_annotations = { "service.beta.kubernetes.io/aws-load-balancer-type" = "nlb" }
-  extra_objects       = [/* SecretStore + ExternalSecret, or SecretProviderClass */]
+  extra_objects       = [/* ServiceAccount + SecretStore + ExternalSecret */]
 }
 ```
 
@@ -30,17 +30,18 @@ module "ingress" {
 The module does **not** fetch the certificate; it only points Traefik's
 default `TLSStore` at `var.default_certificate_secret_name`. Filling that
 secret is the caller's job and is the one genuinely cloud-shaped part, so it
-is passed in as `extra_objects`:
+is passed in as `extra_objects`: a platform `ServiceAccount`, a namespaced ESO
+`SecretStore` bound to it, and an `ExternalSecret` writing a
+`kubernetes.io/tls` secret. Only the provider block and the identity differ:
 
-- **AWS, GCP, OCI** — a platform `ServiceAccount`, a namespaced ESO
-  `SecretStore` bound to it, and an `ExternalSecret` that materializes the
-  distributed wildcard (`tls.crt` + `tls.key` in one JSON value) as a
-  `kubernetes.io/tls` secret.
-- **Azure** — a `SecretProviderClass`; the Secrets Store CSI driver mounts the
-  Key Vault certificate into the Traefik pod and syncs it into the same
-  secret, so the private key never passes through Terraform state.
+| Cloud | `SecretStore` provider | Identity | Shape in the backend |
+|---|---|---|---|
+| Azure | `azurekv` | UAMI + federated credential | one PEM bundle, split with `filterPEM` |
+| AWS | `aws` (SecretsManager) | IAM role via IRSA | `{"tls.crt", "tls.key"}`, `dataFrom.extract` |
+| GCP | `gcpsm` | GSA + Workload Identity | same |
+| OCI | `oracle` | OKE Workload Identity | same |
 
-Both paths converge on one Kubernetes TLS secret, which is why the Traefik
+All four converge on one Kubernetes TLS secret, which is why the Traefik
 configuration above is identical everywhere.
 
 Because the certificate is served as the default, **a tenant Ingress carries
@@ -79,6 +80,10 @@ The hostname must be **one label deep** under the certificate's domain:
   the release is applied. Callers order that with `depends_on` on the ESO
   release rather than by using `kubernetes_manifest`, which would need the
   CRDs at *plan* time — before the foundation has ever been applied.
+- A vault that has no certificate yet leaves the `ExternalSecret` unresolved
+  and Traefik serving its own self-signed certificate. The apply still
+  succeeds, so a new environment can be built before the certificate exists
+  and picks it up on its own afterwards.
 - Reaching a tenant workload also needs the tenant's NetworkPolicy to allow
   this namespace; `modules/tenant-namespace` does that by matching
   `kubernetes.io/metadata.name` on `var.namespace`, so the two names must

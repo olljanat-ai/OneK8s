@@ -1,9 +1,12 @@
 # AKS cluster with:
-#  - OIDC issuer + Workload Identity (tenant identities federate against it)
+#  - OIDC issuer + Workload Identity (tenant identities federate against it,
+#    and so do the platform's own: External Secrets and external-dns)
 #  - Azure CNI overlay with the Cilium data plane
 #  - Azure Policy add-on for guardrails
-#  - Secrets Store CSI driver, which puts the Key Vault wildcard certificate
-#    on the Traefik ingress controller (see ingress.tf)
+#
+# No managed add-on reads the vault or serves HTTP: secrets come through
+# External Secrets and ingress through Traefik, the same two components every
+# other cloud runs (eso.tf, ingress.tf).
 resource "azurerm_kubernetes_cluster" "this" {
   name                = "aks-${local.name}"
   location            = azurerm_resource_group.this.location
@@ -39,18 +42,6 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   identity {
     type = "SystemAssigned"
-  }
-
-  # Secrets Store CSI driver with the Key Vault provider. Traefik mounts the
-  # ingress certificate through it, so the private key travels Key Vault ->
-  # kubelet and never lands in Terraform state. Rotation is polled (default
-  # interval 2m), which is what lets the Renew Certificate workflow replace
-  # the wildcard without an apply here.
-  #
-  # The add-on brings its own user-assigned identity, which ingress.tf grants
-  # ABAC-narrowed read access to exactly the wildcard certificate.
-  key_vault_secrets_provider {
-    secret_rotation_enabled = true
   }
 
   network_profile {

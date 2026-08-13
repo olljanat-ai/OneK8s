@@ -17,7 +17,7 @@ variable "ingress_class_name" {
 }
 
 variable "default_certificate_secret_name" {
-  description = "Kubernetes TLS secret in var.namespace that Traefik's default TLSStore serves when a router matches no other certificate. The platform wildcard is materialized into it by var.extra_objects."
+  description = "Kubernetes TLS secret in var.namespace that Traefik's default TLSStore serves when a router matches no other certificate. The platform wildcard is materialized into it by the ExternalSecret in var.extra_objects."
   type        = string
   default     = "platform-wildcard-tls"
 }
@@ -29,13 +29,13 @@ variable "service_annotations" {
 }
 
 variable "extra_objects" {
-  description = "Extra manifests rendered with the release, as a list of objects. This is where the cloud-specific certificate plumbing lives (ESO SecretStore + ExternalSecret, or a Secrets Store CSI SecretProviderClass)."
+  description = "Extra manifests rendered with the release, as a list of objects. This is where the certificate plumbing lives: the platform ServiceAccount, its ESO SecretStore and the ExternalSecret that fills the default certificate."
   type        = any
   default     = []
 }
 
 variable "additional_volumes" {
-  description = "Extra pod volumes for the Traefik Deployment (Azure mounts the Key Vault certificate through the Secrets Store CSI driver here)."
+  description = "Extra pod volumes for the Traefik Deployment."
   type        = any
   default     = []
 }
@@ -70,12 +70,6 @@ variable "extra_values" {
   description = "Extra Helm values merged over the ones this module builds (top-level keys win outright — the merge is not deep)."
   type        = any
   default     = {}
-}
-
-variable "wait" {
-  description = "Block the apply until the release is ready. Turn it off where a Traefik pod can be held back by something outside this stack — on Azure the certificate is a CSI volume, so a vault without one would keep the pod from starting at all."
-  type        = bool
-  default     = true
 }
 
 variable "timeout" {

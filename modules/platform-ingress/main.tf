@@ -3,7 +3,7 @@
 # annotations that pick the cloud's load balancer, and the objects that
 # materialize the platform wildcard certificate into
 # var.default_certificate_secret_name (an ESO SecretStore + ExternalSecret on
-# AWS/GCP/OCI, a Secrets Store CSI SecretProviderClass on Azure).
+
 #
 # The point of the default certificate is that a tenant Ingress carries no TLS
 # configuration at all: Traefik's default TLSStore hands every websecure
@@ -103,6 +103,5 @@ resource "helm_release" "traefik" {
   # A LoadBalancer Service is only ready once the cloud has handed it an
   # address, which takes minutes on some clouds — more than the provider's
   # 5-minute default.
-  wait    = var.wait
   timeout = var.timeout
 }

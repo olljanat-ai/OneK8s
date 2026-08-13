@@ -11,7 +11,7 @@
 #
 #   argocd.onek8s.lol --(A record kept by external-dns, see dns.tf)-->
 #                     Traefik
-#                       --(default TLSStore)--> Key Vault cert via the CSI driver
+#                       --(default TLSStore)--> Key Vault cert via ESO
 #                       --(HTTP)--> argocd-server
 #
 # Users sign in with Entra ID; group object IDs map to Argo CD roles through

@@ -3,47 +3,58 @@
 # add-on, whose managed NGINX only ever served this one cluster and whose
 # Ingress annotations had no equivalent on EKS, GKE or OKE.
 #
-# TLS terminates on the platform wildcard, which reaches the cluster the way
-# it did under app routing — through the Secrets Store CSI driver, so the
-# private key travels Key Vault -> kubelet and is never read by Terraform:
+# The certificate is read the same way as everywhere else too — External
+# Secrets against the backend this cloud's tenants already use — so no
+# managed add-on is involved in either half:
 #
 #   Key Vault certificate
-#     --(SecretProviderClass + CSI volume on the Traefik pod)-->
+#     --(SecretStore + ExternalSecret, workload identity)-->
 #       Secret platform-wildcard-tls (kubernetes.io/tls)
 #         --(Traefik default TLSStore)--> every websecure router
 #
 # The last hop is the point of the exercise: an Ingress that names a host
 # under *.onek8s.lol needs no TLS block and no certificate of its own.
 locals {
-  ingress_namespace       = "traefik"
-  ingress_class_name      = "traefik"
-  ingress_tls_secret_name = "platform-wildcard-tls"
-
-  # The name the CSI driver reads the certificate under. It is also the name
-  # the ABAC condition below allows, so both halves stay in agreement.
-  ingress_certificate_name = var.ingress_certificate_name
-
-  # The Key Vault secrets provider add-on runs with its own user-assigned
-  # identity; the CSI driver authenticates as it (kubelet identity mode), so
-  # no pod-level workload identity is involved.
-  kv_secrets_provider = azurerm_kubernetes_cluster.this.key_vault_secrets_provider[0].secret_identity[0]
-
-  # https://<name>.vault.azure.net/ -> <name>
-  key_vault_name = azurerm_key_vault.this.name
+  ingress_namespace            = "traefik"
+  ingress_class_name           = "traefik"
+  ingress_tls_secret_name      = "platform-wildcard-tls"
+  ingress_service_account_name = "platform-secrets"
+  ingress_secret_store_name    = "platform-store"
 }
 
-# --- Ingress certificate access ----------------------------------------------
-# "Key Vault Certificate User" carries getSecret on the whole vault, which on
-# a shared vault would hand every tenant's secrets to whoever can mount a
-# SecretProviderClass; the ABAC condition narrows the secret half of the role
-# to exactly the wildcard certificate. Certificate reads stay unconditioned —
-# Key Vault ABAC covers secret data actions only.
+# --- Platform identity: UAMI + federated credential --------------------------
+# Same shape as a tenant identity in modules/tenant-namespace/azure, pinned to
+# the ingress namespace's own ServiceAccount and to the one certificate. No
+# tenant identity can read it, and this one can read no tenant's secrets.
+resource "azurerm_user_assigned_identity" "ingress" {
+  count = var.enable_ingress ? 1 : 0
+
+  name                = "id-platform-ingress-${local.name}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  tags                = local.tags
+}
+
+resource "azurerm_federated_identity_credential" "ingress" {
+  count = var.enable_ingress ? 1 : 0
+
+  name                      = "aks-platform-ingress"
+  user_assigned_identity_id = azurerm_user_assigned_identity.ingress[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = azurerm_kubernetes_cluster.this.oidc_issuer_url
+  subject                   = "system:serviceaccount:${local.ingress_namespace}:${local.ingress_service_account_name}"
+}
+
+# "Key Vault Secrets User" grants getSecret/readMetadata on the whole vault —
+# every tenant's secrets — so the ABAC condition narrows it to exactly the
+# wildcard. A certificate is read through the secret of the same name, which
+# is why this is the secrets role and not a certificates one.
 resource "azurerm_role_assignment" "ingress_certificate_user" {
   count = var.enable_ingress ? 1 : 0
 
   scope                = azurerm_key_vault.this.id
-  role_definition_name = "Key Vault Certificate User"
-  principal_id         = local.kv_secrets_provider.object_id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.ingress[0].principal_id
 
   condition_version = "2.0"
   condition         = <<-EOT
@@ -55,7 +66,7 @@ resource "azurerm_role_assignment" "ingress_certificate_user" {
       )
       OR
       (
-        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${local.ingress_certificate_name}'
+        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.ingress_certificate_name}'
       )
     )
   EOT
@@ -75,84 +86,96 @@ module "ingress" {
   # health probing of the Service's own ports is the default.
   service_annotations = {}
 
-  # Deliberately not waiting for the release to become ready. The certificate
-  # arrives as a CSI volume, so a vault that has no certificate yet keeps the
-  # Traefik pod from starting — and on a brand-new environment there is no
-  # certificate until the Renew Certificate workflow has run, which in turn
-  # needs this stack's outputs to find the vault. Waiting here would make the
-  # two deadlock on a first apply; not waiting leaves an ingress that comes up
-  # by itself once the certificate lands.
-  wait = false
-
-  # The CSI volume is what actually triggers the sync: the driver only
-  # materializes secretObjects for a SecretProviderClass that a running pod
-  # mounts, and re-reads the vault on its rotation poll, so a renewed
-  # certificate reaches Traefik without an apply here.
-  additional_volumes = [{
-    name = "platform-wildcard"
-    csi = {
-      driver   = "secrets-store.csi.k8s.io"
-      readOnly = true
-      volumeAttributes = {
-        secretProviderClass = "platform-wildcard"
-      }
-    }
-  }]
-
-  additional_volume_mounts = [{
-    name      = "platform-wildcard"
-    mountPath = "/mnt/platform-wildcard"
-    readOnly  = true
-  }]
-
+  # The certificate plumbing is applied with the release rather than as
+  # kubernetes_manifest resources, which would need the External Secrets CRDs
+  # to exist at *plan* time — before this stack has ever been applied.
   extra_objects = [
     {
-      apiVersion = "secrets-store.csi.x-k8s.io/v1"
-      kind       = "SecretProviderClass"
+      apiVersion = "v1"
+      kind       = "ServiceAccount"
+      metadata = {
+        name = local.ingress_service_account_name
+        annotations = {
+          "azure.workload.identity/client-id" = azurerm_user_assigned_identity.ingress[0].client_id
+          "azure.workload.identity/tenant-id" = data.azurerm_client_config.current.tenant_id
+        }
+        labels = {
+          "azure.workload.identity/use" = "true"
+        }
+      }
+    },
+    {
+      apiVersion = "external-secrets.io/v1"
+      kind       = "SecretStore"
+      metadata = {
+        name = local.ingress_secret_store_name
+      }
+      spec = {
+        provider = {
+          azurekv = {
+            authType = "WorkloadIdentity"
+            vaultUrl = azurerm_key_vault.this.vault_uri
+            serviceAccountRef = {
+              name = local.ingress_service_account_name
+            }
+          }
+        }
+      }
+    },
+    {
+      apiVersion = "external-secrets.io/v1"
+      kind       = "ExternalSecret"
       metadata = {
         name = "platform-wildcard"
       }
       spec = {
-        provider = "azure"
-
-        # A Key Vault *certificate* read as objectType "secret" comes back as
-        # the PEM bundle of key + chain; mapping the same object to both
-        # tls.key and tls.crt of a kubernetes.io/tls secret is what splits it.
-        secretObjects = [{
-          secretName = local.ingress_tls_secret_name
-          type       = "kubernetes.io/tls"
-          data = [
-            {
-              objectName = local.ingress_certificate_name
-              key        = "tls.key"
-            },
-            {
-              objectName = local.ingress_certificate_name
-              key        = "tls.crt"
-            },
-          ]
-        }]
-
-        parameters = {
-          usePodIdentity         = "false"
-          useVMManagedIdentity   = "true"
-          userAssignedIdentityID = local.kv_secrets_provider.client_id
-          keyvaultName           = local.key_vault_name
-          tenantId               = data.azurerm_client_config.current.tenant_id
-          # Version-less on purpose: the driver follows whatever version the
-          # vault currently holds, so a renewal rolls in on the next rotation
-          # poll. The array's entries are themselves YAML documents, which is
-          # the shape the Key Vault CSI provider parses.
-          objects = <<-EOT
-            array:
-              - |
-                objectName: ${local.ingress_certificate_name}
-                objectType: secret
-          EOT
+        # Key Vault is the source of truth for the certificate, so this is the
+        # copy that is refreshed first after a renewal; an hour of staleness
+        # is the worst case, against 30 days of remaining validity.
+        refreshInterval = "1h"
+        secretStoreRef = {
+          kind = "SecretStore"
+          name = local.ingress_secret_store_name
         }
+        target = {
+          name           = local.ingress_tls_secret_name
+          creationPolicy = "Owner"
+          # Unlike the copies the distribute mode writes to the other three
+          # clouds — one JSON object with tls.crt and tls.key already split —
+          # Key Vault hands back what was imported: a single PEM bundle of the
+          # private key followed by the chain. filterPEM splits it here, so
+          # the workflow keeps writing one certificate and this cluster reads
+          # the same object the vault is the source of truth for.
+          #
+          # The backticks are not decoration: Helm runs every extraObject
+          # through `tpl`, so an ESO template written plainly would be
+          # evaluated (and emptied) at chart render time. Wrapping it in a Go
+          # raw string makes Helm emit it verbatim for ESO to evaluate later.
+          template = {
+            type          = "kubernetes.io/tls"
+            engineVersion = "v2"
+            data = {
+              "tls.crt" = "{{ `{{ .bundle | filterPEM \"CERTIFICATE\" }}` }}"
+              "tls.key" = "{{ `{{ .bundle | filterPEM \"PRIVATE KEY\" }}` }}"
+            }
+          }
+        }
+        # The certificate is referenced without a version, so a renewal is
+        # picked up on the next refresh rather than by an apply here.
+        data = [{
+          secretKey = "bundle"
+          remoteRef = {
+            key = var.ingress_certificate_name
+          }
+        }]
       }
     },
   ]
 
-  depends_on = [azurerm_role_assignment.ingress_certificate_user]
+  # The External Secrets CRDs and webhook have to be up before the objects
+  # above are applied, and the role assignment before the first read.
+  depends_on = [
+    helm_release.external_secrets,
+    azurerm_role_assignment.ingress_certificate_user,
+  ]
 }

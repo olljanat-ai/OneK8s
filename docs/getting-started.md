@@ -125,11 +125,11 @@ Two things have to be true around it:
 1. **The certificate exists.** `platform-wildcard-onek8s-lol` must be in the
    environment's Key Vault (run **Renew Certificate** once), and — for EKS,
    GKE and OKE — have been copied out with the workflow's `distribute` mode.
-   Until then Traefik serves its own self-signed certificate, and on Azure,
-   where the certificate is a CSI volume, its pod does not start at all.
-   On a brand-new environment the order is: apply the foundation, run the
-   renewal (it reads the vault out of the foundation's state), then let the
-   ingress pick the certificate up — no second apply needed.
+   Until then the `ExternalSecret` stays unresolved and Traefik serves its own
+   self-signed certificate; nothing fails. On a brand-new environment the
+   order is: apply the foundation, run the renewal (it reads the vault out of
+   the foundation's state), then let the ingress pick the certificate up
+   within the hour — no second apply needed.
 2. **The name resolves.** On Azure, external-dns does it: list the zone in
    `ingress_dns_zone_ids` and every published Ingress host gets its record.
    On the other three clouds the record is manual — take the address from
@@ -324,16 +324,19 @@ cover it. Drop it from `domains` if the zone apex is served elsewhere.
 ### Consuming it from the cluster
 
 The certificate is a normal Key Vault certificate, readable through its
-secret of the same name. On AKS the consumer is the Traefik ingress: the
-Secrets Store CSI driver mounts it with the Key Vault secrets provider
-add-on's identity — which `foundations/azure/ingress.tf` grants *Key Vault
-Certificate User*, ABAC-narrowed to this one certificate — and syncs it into
-`traefik/platform-wildcard-tls`, the ingress' default certificate. Tenant
-identities cannot read it, by design.
+secret of the same name. On AKS the consumer is the Traefik ingress, and it
+reads the vault the same way a tenant reads its own secrets: an ESO
+`SecretStore` authenticating as a user-assigned identity that
+`foundations/azure/ingress.tf` creates, federates to the ingress'
+ServiceAccount and grants *Key Vault Secrets User* — ABAC-narrowed to this one
+certificate. Tenant identities cannot read it, by design.
 
-Renewals are picked up without an apply: the driver re-reads the vault on its
-rotation poll (two minutes), because the certificate is referenced without a
-version. Check what actually landed with:
+What the vault returns for a certificate is the PEM bundle that was imported,
+key followed by chain, so the `ExternalSecret` splits it with `filterPEM`
+into the `tls.crt` and `tls.key` of `traefik/platform-wildcard-tls` — the
+ingress' default certificate. Renewals are picked up without an apply: the
+certificate is referenced without a version and ESO refreshes hourly. Check
+what actually landed with:
 
 ```bash
 kubectl -n traefik get secret platform-wildcard-tls \
