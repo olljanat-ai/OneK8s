@@ -51,12 +51,15 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   # Application routing add-on: the AKS-managed NGINX ingress controller that
-  # fronts platform services (Argo CD today). DNS stays out of band —
-  # "argocd.onek8s.lol" is pointed at the ingress load balancer by hand — so
-  # no zone is delegated to the add-on's external-dns and the list is empty.
+  # fronts platform services (Argo CD today). Zones listed in
+  # var.ingress_dns_zone_ids are handed to the add-on's external-dns, which
+  # then keeps a record per Ingress host of its class; an empty list leaves
+  # DNS out of band. The zones live outside this stack (they are shared with
+  # the Renew Certificate workflow's DNS-01 challenge), so they are
+  # configuration, not a resource here — argocd.tf grants the add-on's
+  # identity the rights to write them.
   web_app_routing {
-    // FixMe: Move this to config
-    dns_zone_ids = ["/subscriptions/54e30869-75a2-47ed-8b32-1057e61707f0/resourceGroups/rg-onek8s-argocd/providers/Microsoft.Network/dnsZones/onek8s.lol"]
+    dns_zone_ids = var.ingress_dns_zone_ids
   }
 
   network_profile {

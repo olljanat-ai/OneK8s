@@ -57,6 +57,12 @@ variable "ingress_certificate_name" {
   default     = "platform-wildcard-onek8s-lol"
 }
 
+variable "ingress_dns_zone_ids" {
+  description = "Azure DNS zone resource IDs the application routing add-on may manage records in. Empty leaves DNS out of band; the add-on's identity is granted DNS Zone Contributor on each zone listed."
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_argocd" {
   description = "Install the Microsoft-offered Argo CD cluster extension and publish its UI through the application routing ingress."
   type        = bool
@@ -91,6 +97,54 @@ variable "argocd_application_namespaces" {
   description = "Namespaces besides 'argocd' in which Application/ApplicationSet objects are honoured ('applications in any namespace'). Empty keeps them argocd-only."
   type        = list(string)
   default     = ["default"]
+}
+
+variable "argocd_workload_identity_client_id" {
+  description = "Client ID of the user-assigned managed identity the Argo CD components federate as, to reach Azure services (ACR, Azure DevOps) without stored credentials. Null disables workload identity."
+  type        = string
+  default     = null
+}
+
+variable "argocd_sso_client_id" {
+  description = "Application (client) ID of the Entra ID app registration used for single sign-on to the Argo CD UI. Null leaves the built-in admin account as the only way in."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.argocd_sso_client_id == null || var.argocd_workload_identity_client_id != null
+    error_message = "argocd_sso_client_id requires argocd_workload_identity_client_id: the SSO app proves itself with the cluster's federated credential, not a client secret."
+  }
+}
+
+variable "argocd_sso_tenant_id" {
+  description = "Entra ID tenant that issues the SSO tokens (null = the tenant of the deploying identity, which is where the app registration normally lives)."
+  type        = string
+  default     = null
+}
+
+variable "argocd_rbac_default_role" {
+  description = "Argo CD role given to an authenticated identity with no explicit binding in argocd_rbac_group_roles."
+  type        = string
+  default     = "role:readonly"
+}
+
+variable "argocd_rbac_policies" {
+  description = "Custom Argo CD RBAC role definitions, one 'p, role:<name>, <resource>, <action>, <object>, allow' line per entry. The built-in admin/readonly roles need no definition."
+  type        = list(string)
+  default = [
+    "p, role:org-admin, applications, *, */*, allow",
+    "p, role:org-admin, clusters, get, *, allow",
+    "p, role:org-admin, repositories, get, *, allow",
+    "p, role:org-admin, repositories, create, *, allow",
+    "p, role:org-admin, repositories, update, *, allow",
+    "p, role:org-admin, repositories, delete, *, allow",
+  ]
+}
+
+variable "argocd_rbac_group_roles" {
+  description = "Entra ID group object ID -> Argo CD role, e.g. { \"<group-oid>\" = \"role:admin\" }. Roles are the built-ins or one defined in argocd_rbac_policies. Only meaningful with SSO enabled."
+  type        = map(string)
+  default     = {}
 }
 
 variable "argocd_extra_configuration" {

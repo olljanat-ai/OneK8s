@@ -67,14 +67,60 @@ Two naming rules are load-bearing:
 - The URI is deliberately version-less, so a renewal is picked up on the next
   rotation poll (default two minutes) with no Terraform apply.
 
-DNS is **not** delegated to the add-on: `dns_zone_ids` is empty and the
-`argocd.onek8s.lol` A record is pointed at the ingress load balancer out of
-band. Hand the zone to the add-on later if you want records created per
-Ingress.
+DNS **is** delegated to the add-on: every zone in `var.ingress_dns_zone_ids`
+is handed to its external-dns, which keeps a record per host of every Ingress
+of this class — `argocd.onek8s.lol` included, so the record is not maintained
+by hand. Listing a zone only tells the add-on to reconcile it; `argocd.tf`
+also grants the add-on's identity **DNS Zone Contributor** on each zone,
+which is the half `az aks approuting zone add --attach-zones` would otherwise
+do out of band. Leave the list empty to keep DNS out of the cluster's hands.
+
+> If that grant was already made from the CLI or the portal, the first apply
+> fails with `RoleAssignmentExists`. Import it rather than deleting it:
+>
+> ```bash
+> az role assignment list --scope "<zone id>" --role "DNS Zone Contributor" --query "[].id" -o tsv
+> terraform import 'azurerm_role_assignment.app_routing_dns_contributor["<zone id>"]' "<assignment id>"
+> ```
 
 TLS terminates at NGINX and `configs.params.server.insecure` is `true`, so
 `argocd-server` speaks plain HTTP inside the cluster. Without it, NGINX and
 `argocd-server` redirect each other in a loop.
+
+## Who gets in: Entra ID SSO and roles
+
+Sign-in goes through Microsoft Entra ID. Three Entra objects are involved,
+all created **out of band** — this stack holds no directory writes, so it
+takes their identifiers as configuration rather than creating them:
+
+| tfvars | What it is |
+|---|---|
+| `argocd_workload_identity_client_id` | User-assigned managed identity the Argo CD components federate as, to reach Azure (ACR, Azure DevOps) without stored credentials. |
+| `argocd_sso_client_id` | App registration users sign in to. Its redirect URI must be `https://<argocd_hostname>/auth/callback`. |
+| `argocd_rbac_group_roles` | Entra **group object ID** → Argo CD role. |
+
+SSO is built on workload identity rather than a client secret: the app
+registration proves itself with the cluster's federated credential
+(`azure.useWorkloadIdentity: true` in the OIDC config), so there is no
+credential to store or rotate. That is why setting `argocd_sso_client_id`
+without `argocd_workload_identity_client_id` fails variable validation
+instead of failing at runtime. The token tenant defaults to the tenant of the
+deploying identity; `argocd_sso_tenant_id` overrides it.
+
+Roles come out of two variables:
+
+- `argocd_rbac_policies` — the `p, …` lines defining custom roles. The
+  default defines `role:org-admin` (full application access, plus repository
+  and cluster management). The built-in `role:admin` and `role:readonly` need
+  no definition.
+- `argocd_rbac_group_roles` — the `g, …` bindings, written as a map so the
+  same group cannot be bound twice. An authenticated identity in none of the
+  mapped groups falls through to `argocd_rbac_default_role`, `role:readonly`.
+
+The built-in `admin` account still exists. Set
+`argocd_extra_configuration = { "configs.cm.admin\\.enabled" = "false" }` to
+close it once group access is proven to work — do that only after signing in
+through Entra, since disabling it while SSO is broken locks everyone out.
 
 ## Operating it
 
@@ -89,7 +135,10 @@ az k8s-extension show --cluster-type managedClusters \
 # the certificate actually landed
 kubectl -n argocd get secret keyvault-argocd
 
-# initial admin password (no SSO yet — see below)
+# the record external-dns keeps for the ingress
+az network dns record-set a show -g rg-onek8s-argocd -z onek8s.lol -n argocd
+
+# break-glass: the built-in admin account, when SSO is the thing that broke
 kubectl -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 -d
 ```
@@ -108,13 +157,15 @@ first apply to sit in `Pending` for a few minutes while a node is added.
 
 ## Known gaps
 
-- **Local admin, no SSO.** The UI is public and authenticated by the built-in
-  admin account. The extension supports Entra ID SSO
-  (`azure.workloadIdentity.entraSSOClientId`, `configs.cm.oidc.config`,
-  `configs.rbac.policy.csv`) but that needs an app registration and a group
-  object ID, i.e. directory writes this stack deliberately does not do.
-  Wire it through `var.argocd_extra_configuration` and disable
-  `configs.cm.admin.enabled` once the app registration exists.
+- **The Entra objects are not managed here.** The managed identity, the app
+  registration (and its redirect URI, its group claim configuration) and the
+  groups are created by hand; the stack only consumes their IDs. Nothing
+  detects a deleted app registration or a group renamed out from under a
+  binding — SSO simply stops working. Managing them would mean an `azuread`
+  provider and directory write permission for the deploy identity, which is
+  a deliberately larger grant than this stack asks for today.
+- **The built-in admin account is still open.** It is the break-glass path
+  while SSO settles; close it as described above once group sign-in works.
 - **Preview auto-upgrade.** With `argocd_extension_version` unset Azure
   installs the latest build of the release train and upgrades it in place.
   The 0.0.x → 1.0.0-preview jump already changed every configuration key

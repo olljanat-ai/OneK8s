@@ -8,9 +8,13 @@
 # enabled in aks.tf, terminating TLS with the platform wildcard certificate
 # that the Renew Certificate workflow keeps in this environment's Key Vault:
 #
-#   argocd.onek8s.lol --(A record, out of band)--> app routing NGINX
+#   argocd.onek8s.lol --(A record kept by the add-on's external-dns)-->
+#                     app routing NGINX
 #                       --(Ingress + Secrets Store CSI)--> Key Vault cert
 #                       --(HTTP)--> argocd-server
+#
+# Users sign in with Entra ID; group object IDs map to Argo CD roles through
+# var.argocd_rbac_group_roles.
 #
 # The extension is in public preview, which is why it is pinned to the
 # "Preview" release train and why var.enable_argocd exists: an environment
@@ -26,6 +30,10 @@ locals {
 
   argocd_url = "https://${var.argocd_hostname}"
 
+  # The SSO app registration is expected in the same directory as the deploy
+  # identity; var.argocd_sso_tenant_id overrides that for a multi-tenant app.
+  argocd_sso_tenant_id = coalesce(var.argocd_sso_tenant_id, data.azurerm_client_config.current.tenant_id)
+
   # The IngressClass the application routing add-on creates. Any platform
   # service that wants the managed NGINX (and the wildcard certificate) uses
   # this class plus the annotation below.
@@ -37,52 +45,48 @@ locals {
   # poll instead of waiting for a Terraform apply.
   ingress_certificate_uri = "${azurerm_key_vault.this.vault_uri}certificates/${var.ingress_certificate_name}"
 
+  # Entra ID as the UI's identity provider. The SSO app registration proves
+  # itself with the cluster's federated credential instead of a client secret
+  # ("useWorkloadIdentity"), which is why SSO here presupposes workload
+  # identity. Groups are requested as an essential ID token claim because the
+  # RBAC policy below binds roles to group object IDs.
+  argocd_oidc_config = <<-EOT
+    name: Azure
+    issuer: https://login.microsoftonline.com/${local.argocd_sso_tenant_id}/v2.0
+    clientID: ${var.argocd_sso_client_id}
+    azure:
+      useWorkloadIdentity: true
+    requestedIDTokenClaims:
+      groups:
+        essential: true
+    requestedScopes:
+      - openid
+      - profile
+      - email
+  EOT
+
+  # Role definitions first, then the group bindings. Built-in roles (admin,
+  # readonly) need no "p" lines; see
+  # https://github.com/argoproj/argo-cd/blob/master/assets/builtin-policy.csv
+  argocd_rbac_policy_csv = join("\n", concat(
+    var.argocd_rbac_policies,
+    [for group, role in var.argocd_rbac_group_roles : "g, \"${group}\", ${role}"],
+  ))
+
   # Extension configuration is a flat map of Helm values (dots in a *value
   # key* — an argocd-cm/argocd-cmd-params-cm entry — are escaped with a
   # backslash). var.argocd_extra_configuration is merged last so an
   # environment can override any of these without editing this file.
   argocd_configuration = merge(
     {
-      # Authentication
-      "azure.workloadIdentity.clientId"         = "eca6aad4-fd01-4c67-acb9-95b33d89c53b"
-      "azure.workloadIdentity.enabled"          = "true"
-      "azure.workloadIdentity.entraSSOClientId" = "6598a87b-227b-4f20-9f3b-dbdd74604492"
-      "configs.cm.oidc\\.config"                = <<-EOT
-                name: Azure
-                issuer: https://login.microsoftonline.com/d9007062-1aae-4619-abb0-320699664975/v2.0
-                clientID: 6598a87b-227b-4f20-9f3b-dbdd74604492
-                azure:
-                  useWorkloadIdentity: true
-                requestedIDTokenClaims:
-                  groups:
-                    essential: true
-                requestedScopes:
-                  - openid
-                  - profile
-                  - email
-EOT
-      "configs.params.application\\.namespaces" = null
-      # Look: https://github.com/argoproj/argo-cd/blob/master/assets/builtin-policy.csv
-      "configs.rbac.policy\\.csv"     = <<-EOT
-                p, role:org-admin, applications, *, */*, allow
-                p, role:org-admin, clusters, get, *, allow
-                p, role:org-admin, repositories, get, *, allow
-                p, role:org-admin, repositories, create, *, allow
-                p, role:org-admin, repositories, update, *, allow
-                p, role:org-admin, repositories, delete, *, allow
-                g, "46a1d986-c8a7-42d3-b2a4-a88f789f7ecc", role:admin
-                g, "59a92e0b-f653-4d5d-bdba-473eb331a5be", role:org-admin
-                g, "4301eb89-fc3d-4836-95d1-41b497f102ad", role:readonly
-EOT
-      "configs.rbac.policy\\.default" = "role:readonly"
-
       # Redis HA is the extension's default and needs four nodes; the
       # prototype runs one.
       "redis-ha.enabled" = tostring(var.argocd_high_availability)
 
       # Both halves of "where does Argo CD live": global.domain is what the
       # components render links with, configs.cm.url is the externally
-      # reachable base URL (and OIDC callback root, once SSO is wired).
+      # reachable base URL — and the root of the OIDC callback, so it has to
+      # match a redirect URI on the SSO app registration.
       "global.domain"  = var.argocd_hostname
       "configs.cm.url" = local.argocd_url
 
@@ -95,7 +99,25 @@ EOT
       # extension goes through Argo CD's own OIDC support, so nothing needs
       # Dex today and it is one less deployment on a small node pool.
       "dex.enabled" = "false"
+
+      # Who may do what. The default applies to any authenticated identity
+      # with no explicit binding, so an unmapped Entra user lands on
+      # read-only rather than on nothing at all.
+      "configs.rbac.policy\\.default" = var.argocd_rbac_default_role
+      "configs.rbac.policy\\.csv"     = local.argocd_rbac_policy_csv
     },
+    # Workload identity: the components federate as this user-assigned
+    # identity to reach Azure (ACR, Azure DevOps) without stored credentials.
+    var.argocd_workload_identity_client_id != null ? {
+      "azure.workloadIdentity.enabled"  = "true"
+      "azure.workloadIdentity.clientId" = var.argocd_workload_identity_client_id
+    } : {},
+    # Entra ID SSO for the UI. Without it the built-in admin account is the
+    # only way in.
+    var.argocd_sso_client_id != null ? {
+      "azure.workloadIdentity.entraSSOClientId" = var.argocd_sso_client_id
+      "configs.cm.oidc\\.config"                = local.argocd_oidc_config
+    } : {},
     # "Applications in any namespace": empty means Application/ApplicationSet
     # objects are honoured only in the argocd namespace.
     length(var.argocd_application_namespaces) > 0 ? {
@@ -132,6 +154,19 @@ resource "azurerm_role_assignment" "app_routing_certificate_user" {
       )
     )
   EOT
+}
+
+# --- Ingress DNS -------------------------------------------------------------
+# Listing a zone in web_app_routing.dns_zone_ids only tells the add-on which
+# zones to reconcile; the rights to write them are a separate grant, the one
+# "az aks approuting zone add --attach-zones" would make. Without it
+# external-dns logs authorization failures and no record ever appears.
+resource "azurerm_role_assignment" "app_routing_dns_contributor" {
+  for_each = toset(var.ingress_dns_zone_ids)
+
+  scope                = each.value
+  role_definition_name = "DNS Zone Contributor"
+  principal_id         = azurerm_kubernetes_cluster.this.web_app_routing[0].web_app_routing_identity[0].object_id
 }
 
 # --- The extension -----------------------------------------------------------

@@ -96,25 +96,39 @@ Or via Actions: **Deploy Foundations** → cloud `aws`, environment
 
 `foundations/azure` also installs the Microsoft Argo CD cluster extension and
 publishes its UI on `var.argocd_hostname` (default `argocd.onek8s.lol`)
-through the application routing add-on. Two things must be in place around
-it, neither of which this stack owns:
+through the application routing add-on, behind Entra ID sign-in. Three things
+must be in place around it, none of which this stack owns:
 
 1. **The certificate.** `var.ingress_certificate_name`
    (`platform-wildcard-onek8s-lol`) must exist in the environment's Key
    Vault — run the **Renew Certificate** workflow at least once first. The
    apply succeeds without it; the ingress just serves the add-on's fallback
    certificate until the vault has one.
-2. **The DNS record.** Point `argocd.onek8s.lol` at the ingress load
-   balancer. The add-on has no DNS zone delegated to it, so nothing creates
-   the record for you:
+2. **The DNS zone.** List it in `ingress_dns_zone_ids` and the add-on's
+   external-dns keeps the record for every published Ingress host. The stack
+   grants the add-on's identity DNS Zone Contributor on each zone; if that
+   grant already exists out of band, import it (see
+   [argocd.md](argocd.md)). Leave the list empty to point records by hand
+   instead.
+3. **The Entra objects.** A user-assigned managed identity for the Argo CD
+   components, an app registration for sign-in with
+   `https://<hostname>/auth/callback` as a redirect URI and the groups claim
+   enabled, and the groups themselves. Create them in the directory, then
+   record their IDs:
 
-   ```bash
-   kubectl get svc -n app-routing-system nginx \
-     -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   ```hcl
+   argocd_workload_identity_client_id = "<managed identity client id>"
+   argocd_sso_client_id               = "<app registration client id>"
+   argocd_rbac_group_roles = {
+     "<group object id>" = "role:admin"
+   }
    ```
 
+   Leave `argocd_sso_client_id` unset and the built-in admin account is the
+   only way in.
+
 Set `enable_argocd = false` in an environment's tfvars to skip the extension
-(it is in public preview). Details, login and the hub-spoke plan:
+(it is in public preview). Details, roles, login and the hub-spoke plan:
 [argocd.md](argocd.md).
 
 ## 4. Onboard tenants

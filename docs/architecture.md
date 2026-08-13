@@ -94,7 +94,14 @@ Renew Certificate workflow keeps in Key Vault. The certificate is never
 copied into the cluster by Terraform: the Secrets Store CSI driver mounts it
 straight from the vault, using the add-on's managed identity, whose
 `Key Vault Certificate User` role is ABAC-narrowed to that one certificate so
-it cannot reach tenant secrets.
+it cannot reach tenant secrets. The same add-on's external-dns keeps the
+`onek8s.lol` record of every Ingress it serves.
+
+Access follows the same "no stored credentials" line as everything else:
+users sign in with **Entra ID**, Entra group object IDs map to Argo CD roles,
+and the SSO app registration authenticates with the cluster's federated
+credential rather than a client secret. The directory objects themselves are
+created out of band and referenced by ID.
 
 This is deliberately a **single-cluster install** for now, and deliberately
 placed on the cluster that is meant to become the **hub**: the plan is for
@@ -227,10 +234,15 @@ spec:
   identity has an AAD admin group.
 - The Argo CD extension is in **public preview**, so the Azure foundation
   pins the `Preview` release train and, with no version pinned, takes Azure's
-  auto-upgrades. Its UI is currently protected by Argo CD's built-in admin
-  account rather than Entra ID SSO, because SSO needs an app registration
-  (directory writes this stack does not do). `enable_argocd = false` opts an
-  environment out of the whole thing.
+  auto-upgrades. `enable_argocd = false` opts an environment out of the whole
+  thing.
+- Argo CD's Entra ID sign-in depends on directory objects this stack does not
+  manage: the app registration, the managed identity the components federate
+  as, and the groups bound to Argo CD roles are created out of band and
+  referenced by ID from `envs/<env>.tfvars`. Managing them would mean giving
+  the deploy identity directory write permission, which is a larger grant
+  than the platform otherwise needs; the cost is that nothing notices when
+  one of those objects is deleted or renamed.
 - The AKS cluster is the only one with an ingress controller and the only one
   with GitOps, which makes it a de-facto hub before the hub-spoke work has
   been done. Until spokes are registered, EKS/GKE/OKE have no delivery plane
