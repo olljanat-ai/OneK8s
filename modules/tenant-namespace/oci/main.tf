@@ -53,6 +53,8 @@ module "common" {
 
   service_account_name = var.service_account_name
 
+  ingress_controller_namespace = var.ingress_controller_namespace
+
   secret_store_provider = {
     oracle = {
       vault         = var.vault_id

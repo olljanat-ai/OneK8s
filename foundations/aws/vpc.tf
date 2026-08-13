@@ -33,9 +33,13 @@ resource "aws_subnet" "public" {
   availability_zone       = local.azs[count.index]
   map_public_ip_on_launch = true
 
+  # kubernetes.io/role/elb marks these as the subnets an internet-facing
+  # Service load balancer (the ingress controller's) belongs in; the cluster
+  # tag is what makes the in-tree AWS cloud provider consider them at all.
   tags = {
-    Name                     = "snet-${local.name}-public-${local.azs[count.index]}"
-    "kubernetes.io/role/elb" = "1"
+    Name                                      = "snet-${local.name}-public-${local.azs[count.index]}"
+    "kubernetes.io/role/elb"                  = "1"
+    "kubernetes.io/cluster/eks-${local.name}" = "shared"
   }
 }
 
@@ -47,8 +51,9 @@ resource "aws_subnet" "private" {
   availability_zone = local.azs[count.index]
 
   tags = {
-    Name                              = "snet-${local.name}-private-${local.azs[count.index]}"
-    "kubernetes.io/role/internal-elb" = "1"
+    Name                                      = "snet-${local.name}-private-${local.azs[count.index]}"
+    "kubernetes.io/role/internal-elb"         = "1"
+    "kubernetes.io/cluster/eks-${local.name}" = "shared"
   }
 }
 

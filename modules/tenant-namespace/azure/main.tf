@@ -103,6 +103,9 @@ module "common" {
   create_namespace = false # provided by the managed namespace above
 
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
+
   service_account_annotations = {
     "azure.workload.identity/client-id" = azurerm_user_assigned_identity.tenant.client_id
     "azure.workload.identity/tenant-id" = data.azurerm_client_config.current.tenant_id

@@ -56,3 +56,21 @@ variable "cilium_chart_version" {
   type        = string
   default     = "1.19.6"
 }
+
+variable "enable_ingress" {
+  description = "Install Traefik as the cluster's ingress controller, with the distributed platform wildcard as its default certificate."
+  type        = bool
+  default     = true
+}
+
+variable "traefik_chart_version" {
+  description = "Traefik Helm chart version."
+  type        = string
+  default     = "41.2.0"
+}
+
+variable "ingress_certificate_name" {
+  description = "Name of the platform wildcard certificate as the Renew Certificate workflow keeps it in Key Vault. On AWS it is distributed to Secrets Manager under '<environment>/platform/<name without the platform- prefix>'."
+  type        = string
+  default     = "platform-wildcard-onek8s-lol"
+}

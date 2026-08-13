@@ -50,6 +50,24 @@ variable "eso_chart_version" {
   default     = "2.9.0"
 }
 
+variable "enable_ingress" {
+  description = "Install Traefik as the cluster's ingress controller, with the distributed platform wildcard as its default certificate."
+  type        = bool
+  default     = true
+}
+
+variable "traefik_chart_version" {
+  description = "Traefik Helm chart version."
+  type        = string
+  default     = "41.2.0"
+}
+
+variable "ingress_certificate_name" {
+  description = "Secret Manager secret holding the platform wildcard certificate, as the Renew Certificate workflow's distribute mode writes it. Reserved 'platform-' prefix: no tenant identity can read it."
+  type        = string
+  default     = "platform-wildcard-onek8s-lol"
+}
+
 variable "deletion_protection" {
   description = "Protect the cluster from accidental terraform destroy."
   type        = bool

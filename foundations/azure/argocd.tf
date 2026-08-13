@@ -4,13 +4,14 @@
 # and the extension is the only supported way to reach the portal's GitOps
 # blade and the Entra ID integrations (workload identity, SSO).
 #
-# The UI is published on a single host through the application routing add-on
-# enabled in aks.tf, terminating TLS with the platform wildcard certificate
-# that the Renew Certificate workflow keeps in this environment's Key Vault:
+# The UI is published on a single host through the Traefik ingress controller
+# installed in ingress.tf, terminating TLS with the platform wildcard
+# certificate that the Renew Certificate workflow keeps in this environment's
+# Key Vault:
 #
-#   argocd.onek8s.lol --(A record kept by the add-on's external-dns)-->
-#                     app routing NGINX
-#                       --(Ingress + Secrets Store CSI)--> Key Vault cert
+#   argocd.onek8s.lol --(A record kept by external-dns, see dns.tf)-->
+#                     Traefik
+#                       --(default TLSStore)--> Key Vault cert via the CSI driver
 #                       --(HTTP)--> argocd-server
 #
 # Users sign in with Entra ID; group object IDs map to Argo CD roles through
@@ -33,17 +34,6 @@ locals {
   # The SSO app registration is expected in the same directory as the deploy
   # identity; var.argocd_sso_tenant_id overrides that for a multi-tenant app.
   argocd_sso_tenant_id = coalesce(var.argocd_sso_tenant_id, data.azurerm_client_config.current.tenant_id)
-
-  # The IngressClass the application routing add-on creates. Any platform
-  # service that wants the managed NGINX (and the wildcard certificate) uses
-  # this class plus the annotation below.
-  ingress_class_name = "webapprouting.kubernetes.azure.com"
-
-  # Version-less certificate URI on purpose: the Secrets Store CSI driver then
-  # follows whatever version the vault currently holds, so a renewal by the
-  # Renew Certificate workflow rolls into the ingress on the next rotation
-  # poll instead of waiting for a Terraform apply.
-  ingress_certificate_uri = "${azurerm_key_vault.this.vault_uri}certificates/${var.ingress_certificate_name}"
 
   # Entra ID as the UI's identity provider. The SSO app registration proves
   # itself with the cluster's federated credential instead of a client secret
@@ -127,48 +117,6 @@ locals {
   )
 }
 
-# --- Ingress certificate access ----------------------------------------------
-# The application routing add-on runs with its own managed identity and pulls
-# the certificate named in the Ingress annotation through the Secrets Store
-# CSI driver. "Key Vault Certificate User" carries getSecret on the whole
-# vault, which on a shared vault would hand every tenant's secrets to anyone
-# who can create an Ingress; the ABAC condition narrows the secret half of the
-# role to exactly the wildcard certificate. Certificate reads stay
-# unconditioned — Key Vault ABAC covers secret data actions only.
-resource "azurerm_role_assignment" "app_routing_certificate_user" {
-  scope                = azurerm_key_vault.this.id
-  role_definition_name = "Key Vault Certificate User"
-  principal_id         = azurerm_kubernetes_cluster.this.web_app_routing[0].web_app_routing_identity[0].object_id
-
-  condition_version = "2.0"
-  condition         = <<-EOT
-    (
-      (
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
-      )
-      OR
-      (
-        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.ingress_certificate_name}'
-      )
-    )
-  EOT
-}
-
-# --- Ingress DNS -------------------------------------------------------------
-# Listing a zone in web_app_routing.dns_zone_ids only tells the add-on which
-# zones to reconcile; the rights to write them are a separate grant, the one
-# "az aks approuting zone add --attach-zones" would make. Without it
-# external-dns logs authorization failures and no record ever appears.
-resource "azurerm_role_assignment" "app_routing_dns_contributor" {
-  for_each = toset(var.ingress_dns_zone_ids)
-
-  scope                = each.value
-  role_definition_name = "DNS Zone Contributor"
-  principal_id         = azurerm_kubernetes_cluster.this.web_app_routing[0].web_app_routing_identity[0].object_id
-}
-
 # --- The extension -----------------------------------------------------------
 resource "azurerm_kubernetes_cluster_extension" "argocd" {
   count = var.enable_argocd ? 1 : 0
@@ -195,26 +143,21 @@ resource "azurerm_kubernetes_cluster_extension" "argocd" {
 }
 
 # --- Ingress -----------------------------------------------------------------
-# Written here rather than left to the chart's own "server.ingress.*" values:
-# the application routing add-on derives the name of the CSI-backed TLS secret
-# from the Ingress name ("keyvault-<ingress name>"), and the chart hardcodes
-# its TLS secret to "argocd-server-tls". Owning the object keeps the two names
-# in agreement and keeps the annotation, host and backend in one readable
-# place.
+# Written here rather than left to the chart's own "server.ingress.*" values,
+# which would also want a TLS secret of their own. This is the platform's own
+# example of the tenant-facing contract: an Ingress with a host and a backend,
+# no ingressClassName (Traefik's class is the cluster default) and no TLS
+# section (the default TLSStore serves the wildcard).
 resource "kubernetes_ingress_v1" "argocd" {
   count = var.enable_argocd ? 1 : 0
 
   metadata {
     name      = "argocd"
     namespace = local.argocd_namespace
-
-    annotations = {
-      "kubernetes.azure.com/tls-cert-keyvault-uri" = local.ingress_certificate_uri
-    }
   }
 
   spec {
-    ingress_class_name = local.ingress_class_name
+    ingress_class_name = var.enable_ingress ? local.ingress_class_name : null
 
     rule {
       host = var.argocd_hostname
@@ -235,18 +178,8 @@ resource "kubernetes_ingress_v1" "argocd" {
         }
       }
     }
-
-    tls {
-      hosts = [var.argocd_hostname]
-      # Must be "keyvault-" + metadata.name above: that is the secret the
-      # add-on creates from the annotated certificate.
-      secret_name = "keyvault-argocd"
-    }
   }
 
   # The extension creates the namespace and the Service this points at.
-  depends_on = [
-    azurerm_kubernetes_cluster_extension.argocd,
-    azurerm_role_assignment.app_routing_certificate_user,
-  ]
+  depends_on = [azurerm_kubernetes_cluster_extension.argocd]
 }

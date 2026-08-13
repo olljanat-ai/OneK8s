@@ -33,6 +33,21 @@ output "workload_identity_pool" {
   value       = "${var.project_id}.svc.id.goog"
 }
 
+output "ingress_class_name" {
+  description = "IngressClass of the Traefik ingress controller (the cluster default), null when ingress is disabled."
+  value       = var.enable_ingress ? local.ingress_class_name : null
+}
+
+output "ingress_namespace" {
+  description = "Namespace the ingress controller runs in; tenant NetworkPolicies allow ingress from it."
+  value       = var.enable_ingress ? local.ingress_namespace : null
+}
+
+output "ingress_default_certificate_secret" {
+  description = "TLS secret in the ingress namespace that Traefik serves for hosts without a certificate of their own — the platform wildcard, read from Secret Manager by External Secrets."
+  value       = var.enable_ingress ? local.ingress_tls_secret_name : null
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment

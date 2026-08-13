@@ -48,6 +48,9 @@ module "common" {
   quota            = var.quota
 
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
+
   service_account_annotations = {
     "iam.gke.io/gcp-service-account" = google_service_account.tenant.email
   }

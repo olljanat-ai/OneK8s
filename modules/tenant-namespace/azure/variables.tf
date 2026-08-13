@@ -67,3 +67,9 @@ variable "managed_namespace_api_version" {
   type        = string
   default     = "2025-05-02-preview"
 }
+
+variable "ingress_controller_namespace" {
+  description = "Namespace of the platform ingress controller (foundations/<cloud> ingress.tf), allowed to reach tenant workloads by an additional NetworkPolicy. Empty string adds no allowance, which leaves tenant Ingresses unreachable."
+  type        = string
+  default     = "traefik"
+}

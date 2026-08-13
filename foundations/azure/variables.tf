@@ -51,16 +51,44 @@ variable "eso_chart_version" {
   default     = "2.9.0"
 }
 
+variable "enable_ingress" {
+  description = "Install Traefik as the cluster's ingress controller, with the Key Vault wildcard as its default certificate."
+  type        = bool
+  default     = true
+}
+
+variable "traefik_chart_version" {
+  description = "Traefik Helm chart version."
+  type        = string
+  default     = "41.2.0"
+}
+
+variable "external_dns_chart_version" {
+  description = "external-dns Helm chart version."
+  type        = string
+  default     = "1.21.1"
+}
+
 variable "ingress_certificate_name" {
-  description = "Key Vault certificate the application routing ingress terminates TLS with. Reserved 'platform-' prefix: it is the wildcard the Renew Certificate workflow maintains."
+  description = "Key Vault certificate the ingress controller terminates TLS with, for every host that carries no certificate of its own. Reserved 'platform-' prefix: it is the wildcard the Renew Certificate workflow maintains."
   type        = string
   default     = "platform-wildcard-onek8s-lol"
 }
 
 variable "ingress_dns_zone_ids" {
-  description = "Azure DNS zone resource IDs the application routing add-on may manage records in. Empty leaves DNS out of band; the add-on's identity is granted DNS Zone Contributor on each zone listed."
+  description = "Azure DNS zone resource IDs external-dns may manage records in, one record per published Ingress host. Empty leaves DNS out of band and installs no external-dns; each zone listed is granted to its identity as DNS Zone Contributor."
   type        = list(string)
   default     = []
+
+  validation {
+    # external-dns takes one subscription and one resource group in its
+    # config file, so zones spread over several of either cannot be served by
+    # the single deployment this stack installs.
+    condition = length(distinct([
+      for id in var.ingress_dns_zone_ids : join("/", slice(split("/", id), 0, 5))
+    ])) <= 1
+    error_message = "All ingress_dns_zone_ids must live in the same subscription and resource group."
+  }
 }
 
 variable "enable_argocd" {
