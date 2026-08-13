@@ -4,7 +4,9 @@
 #
 # The job binds to the GitHub environment "<cloud>-<environment>"
 # (e.g. azure-prod), so approvals/wait timers are configured per cloud and
-# per environment under Settings -> Environments.
+# per environment under Settings -> Environments. The tenants stack spans all
+# clouds in one run and passes cloud "all" plus its own gh_environment
+# ("tenants-<environment>").
 name: terraform-deploy (reusable)
 
 on:
@@ -15,17 +17,16 @@ on:
         required: true
         type: string
       cloud:
-        description: "azure | aws | gcp | oci"
+        description: "azure | aws | gcp | oci | all"
         required: true
         type: string
       environment:
-        description: "dev | staging | prod"
+        description: "prototype | dev | staging | prod — selects backend/<env>.hcl and envs/<env>.tfvars"
         required: true
         type: string
-      config:
+      gh_environment:
         description: >-
-          File stem for backend/<config>.hcl and envs/<config>.tfvars.
-          Defaults to the environment name; the unified tenants stack passes
+          GitHub environment to bind the job to. Defaults to
           "<cloud>-<environment>".
         required: false
         type: string
@@ -38,14 +39,14 @@ jobs:
   deploy:
     name: ${{ inputs.stack }} (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    environment: ${{ inputs.cloud }}-${{ inputs.environment }}
+    environment: ${{ inputs.gh_environment || format('{0}-{1}', inputs.cloud, inputs.environment) }}
     concurrency:
-      # One writer per stack+config; never cancel a running apply.
-      group: ${{ inputs.stack }}-${{ inputs.config || inputs.environment }}
+      # One writer per stack+environment; never cancel a running apply.
+      group: ${{ inputs.stack }}-${{ inputs.environment }}
       cancel-in-progress: false
     env:
       TF_IN_AUTOMATION: "true"
-      TF_CONFIG: ${{ inputs.config || inputs.environment }}
+      TF_ENV: ${{ inputs.environment }}
       # Azure credentials are needed on every cloud: every stack — foundations
       # included — keeps its state in the Azure Storage state home.
       ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
@@ -72,7 +73,7 @@ jobs:
           terraform_version: "1.15.8"
 
       - name: Configure AWS credentials
-        if: inputs.cloud == 'aws'
+        if: inputs.cloud == 'aws' || inputs.cloud == 'all'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ vars.AWS_ACCESS_KEY_ID }}
@@ -80,7 +81,7 @@ jobs:
           aws-region: ${{ vars.AWS_REGION }}
 
       - name: Authenticate to GCP
-        if: inputs.cloud == 'gcp'
+        if: inputs.cloud == 'gcp' || inputs.cloud == 'all'
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
@@ -90,13 +91,13 @@ jobs:
       # AWS and gcloud CLIs are preinstalled on ubuntu-latest, the GKE auth
       # plugin and the OCI CLI are not.
       - name: Install GKE auth plugin
-        if: inputs.cloud == 'gcp'
+        if: inputs.cloud == 'gcp' || inputs.cloud == 'all'
         uses: google-github-actions/setup-gcloud@v2
         with:
           install_components: gke-gcloud-auth-plugin
 
       - name: Install OCI CLI
-        if: inputs.cloud == 'oci'
+        if: inputs.cloud == 'oci' || inputs.cloud == 'all'
         run: |
           curl -sSfL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh \
             | bash -s -- --accept-all-defaults
@@ -104,11 +105,11 @@ jobs:
 
       - name: terraform init
         working-directory: ${{ inputs.stack }}
-        run: terraform init -backend-config=backend/${TF_CONFIG}.hcl
+        run: terraform init -backend-config=backend/${TF_ENV}.hcl
 
       - name: terraform plan
         working-directory: ${{ inputs.stack }}
-        run: terraform plan -var-file=envs/${TF_CONFIG}.tfvars -input=false -out=tfplan
+        run: terraform plan -var-file=envs/${TF_ENV}.tfvars -input=false -out=tfplan
 
       - name: terraform apply
         working-directory: ${{ inputs.stack }}

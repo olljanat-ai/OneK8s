@@ -1,8 +1,10 @@
 name: Deploy Tenants
 
 # Tenants deploy independently of foundations; they only consume foundation
-# remote-state outputs. Path filter includes the tenant module so module
-# changes roll out to tenants on merge.
+# remote-state outputs. One stack, one state file per environment, every cloud
+# in a single run — the cloud is a per-tenant parameter in
+# tenants/envs/<environment>.tfvars. Path filter includes the tenant module so
+# module changes roll out to tenants on merge.
 on:
   # push:
   #   branches: [main]
@@ -13,12 +15,6 @@ on:
   #     - ".github/workflows/_terraform-deploy.yml"
   workflow_dispatch:
     inputs:
-      cloud:
-        description: "Cloud to deploy"
-        required: true
-        default: "azure"
-        type: choice
-        options: [all, azure, aws, gcp, oci]
       environment:
         description: "Environment to deploy"
         required: true
@@ -30,42 +26,14 @@ permissions:
   contents: read
 
 jobs:
-  azure:
-    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'azure'
+  tenants:
     uses: ./.github/workflows/_terraform-deploy.yml
     with:
       stack: tenants
-      cloud: azure
+      # All clouds at once: the run needs every cloud's credentials and CLIs,
+      # and binds to the "tenants-<environment>" GitHub environment rather than
+      # a per-cloud one.
+      cloud: all
       environment: ${{ inputs.environment || 'prototype' }}
-      config: azure-${{ inputs.environment || 'prototype' }}
-    secrets: inherit
-
-  aws:
-    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'aws'
-    uses: ./.github/workflows/_terraform-deploy.yml
-    with:
-      stack: tenants
-      cloud: aws
-      environment: ${{ inputs.environment || 'prototype' }}
-      config: aws-${{ inputs.environment || 'prototype' }}
-    secrets: inherit
-
-  gcp:
-    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'gcp'
-    uses: ./.github/workflows/_terraform-deploy.yml
-    with:
-      stack: tenants
-      cloud: gcp
-      environment: ${{ inputs.environment || 'prototype' }}
-      config: gcp-${{ inputs.environment || 'prototype' }}
-    secrets: inherit
-
-  oci:
-    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'oci'
-    uses: ./.github/workflows/_terraform-deploy.yml
-    with:
-      stack: tenants
-      cloud: oci
-      environment: ${{ inputs.environment || 'prototype' }}
-      config: oci-${{ inputs.environment || 'prototype' }}
+      gh_environment: tenants-${{ inputs.environment || 'prototype' }}
     secrets: inherit
