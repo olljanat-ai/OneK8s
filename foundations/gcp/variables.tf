@@ -33,7 +33,7 @@ variable "node_count_per_zone" {
 }
 
 variable "kubernetes_version" {
-  description = "AKS Kubernetes minor version"
+  description = "Minimum GKE control-plane version (minor, e.g. 1.36). Must be available in the cluster's release channel."
   type        = string
   default     = "1.36"
 }

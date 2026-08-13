@@ -31,9 +31,20 @@ variable "name_prefix" {
 }
 
 variable "kubernetes_version" {
-  description = "OKE Kubernetes version, including the leading 'v'."
+  description = <<-EOT
+    OKE Kubernetes version, including the leading 'v'. Give just the minor
+    ("v1.36") to track the newest patch OKE offers, or an exact version
+    ("v1.36.1") to pin one. Resolved against the region's supported list in
+    oke.tf; the cluster, the node pool and the worker image all use the
+    resolved value.
+  EOT
   type        = string
   default     = "v1.36"
+
+  validation {
+    condition     = can(regex("^v?[0-9]+\\.[0-9]+(\\.[0-9]+)?$", var.kubernetes_version))
+    error_message = "kubernetes_version must look like v1.36 or v1.36.1."
+  }
 }
 
 variable "vcn_cidr" {
