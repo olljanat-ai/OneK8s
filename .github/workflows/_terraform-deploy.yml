@@ -15,7 +15,7 @@ on:
         required: true
         type: string
       cloud:
-        description: "azure | aws | gcp"
+        description: "azure | aws | gcp | oci"
         required: true
         type: string
       environment:
@@ -52,6 +52,18 @@ jobs:
       ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      # The oci provider and the OCI CLI read their credentials straight from
+      # the environment; both are ignored on the other clouds.
+      OCI_TENANCY_OCID: ${{ vars.OCI_TENANCY_OCID }}
+      OCI_USER_OCID: ${{ vars.OCI_USER_OCID }}
+      OCI_REGION: ${{ vars.OCI_REGION }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+      OCI_CLI_TENANCY: ${{ vars.OCI_TENANCY_OCID }}
+      OCI_CLI_USER: ${{ vars.OCI_USER_OCID }}
+      OCI_CLI_REGION: ${{ vars.OCI_REGION }}
+      OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -73,14 +85,31 @@ jobs:
         with:
           credentials_json: ${{ secrets.GCP_CREDENTIALS_JSON }}
 
-      # The AWS and GCP tenant stacks shell out for cluster tokens
-      # (aws eks get-token / gke auth); both CLIs are preinstalled on
-      # ubuntu-latest, but the GKE auth plugin is not.
+      # OCI state lives in Object Storage, addressed through its
+      # S3-compatible API, which authenticates with a Customer Secret Key
+      # presented as an AWS-style key pair.
+      - name: Configure OCI state backend credentials
+        if: inputs.cloud == 'oci'
+        run: |
+          echo "AWS_ACCESS_KEY_ID=${{ vars.OCI_S3_ACCESS_KEY_ID }}" >> "$GITHUB_ENV"
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.OCI_S3_SECRET_ACCESS_KEY }}" >> "$GITHUB_ENV"
+
+      # The AWS, GCP and OCI tenant stacks shell out for cluster tokens
+      # (aws eks get-token / gke auth / oci ce cluster generate-token); the
+      # AWS and gcloud CLIs are preinstalled on ubuntu-latest, the GKE auth
+      # plugin and the OCI CLI are not.
       - name: Install GKE auth plugin
         if: inputs.cloud == 'gcp'
         uses: google-github-actions/setup-gcloud@v2
         with:
           install_components: gke-gcloud-auth-plugin
+
+      - name: Install OCI CLI
+        if: inputs.cloud == 'oci'
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.sh \
+            | bash -s -- --accept-all-defaults
+          echo "$HOME/bin" >> "$GITHUB_PATH"
 
       - name: terraform init
         working-directory: ${{ inputs.stack }}

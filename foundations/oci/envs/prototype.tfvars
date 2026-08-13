@@ -1,0 +1,10 @@
+environment      = "prototype"
+region           = "eu-stockholm-1"
+home_region      = "eu-stockholm-1"
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaaaaaaaw4bqifybm3pzjeejetacxp6zcuuvbjmw6fykjmishivazmq432q"
+compartment_ocid = "ocid1.compartment.oc1..aaaaaaaabxudy3kjrfrxqwu7x5yusaoha2ltfcplhd2ofiela4p2qqbd3pwq"
+name_prefix      = "onek8s"
+node_shape       = "VM.Standard.E2.1"
+node_ocpus       = 1
+node_memory_gbs  = 8
+node_count       = 1

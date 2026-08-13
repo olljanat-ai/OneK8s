@@ -1,10 +1,10 @@
 variable "cloud" {
-  description = "Which cloud these tenants land on: azure, aws or gcp."
+  description = "Which cloud these tenants land on: azure, aws, gcp or oci."
   type        = string
 
   validation {
-    condition     = contains(["azure", "aws", "gcp"], var.cloud)
-    error_message = "cloud must be one of: azure, aws, gcp."
+    condition     = contains(["azure", "aws", "gcp", "oci"], var.cloud)
+    error_message = "cloud must be one of: azure, aws, gcp, oci."
   }
 }
 
@@ -20,6 +20,8 @@ variable "foundation_state" {
       azure: resource_group_name, storage_account_name, container_name, key
       aws:   bucket, key, region
       gcp:   bucket, prefix
+      oci:   bucket, key, region, endpoints, and the s3-compatibility flags
+             (see tenants/envs/oci-*.tfvars)
   EOT
   type        = any
 }

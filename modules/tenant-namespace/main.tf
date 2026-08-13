@@ -48,3 +48,26 @@ module "gcp" {
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
 }
+
+# OCI needs an explicit providers block: its IAM policies must be written
+# through the home-region provider alias, which is never inherited implicitly.
+module "oci" {
+  source = "./oci"
+  count  = var.cloud == "oci" ? 1 : 0
+
+  providers = {
+    oci        = oci
+    oci.home   = oci.home
+    kubernetes = kubernetes
+  }
+
+  tenant_name          = var.tenant_name
+  environment          = var.environment
+  compartment_id       = var.foundation.compartment_id
+  cluster_id           = var.foundation.cluster_id
+  vault_id             = var.foundation.vault_id
+  region               = var.foundation.region
+  quota                = var.quota
+  namespace_labels     = var.namespace_labels
+  service_account_name = var.service_account_name
+}

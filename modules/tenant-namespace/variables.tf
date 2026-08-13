@@ -1,10 +1,10 @@
 variable "cloud" {
-  description = "Which cloud this tenant lands on: azure, aws or gcp."
+  description = "Which cloud this tenant lands on: azure, aws, gcp or oci."
   type        = string
 
   validation {
-    condition     = contains(["azure", "aws", "gcp"], var.cloud)
-    error_message = "cloud must be one of: azure, aws, gcp."
+    condition     = contains(["azure", "aws", "gcp", "oci"], var.cloud)
+    error_message = "cloud must be one of: azure, aws, gcp, oci."
   }
 }
 
@@ -27,6 +27,7 @@ variable "foundation" {
       aws:   oidc_issuer_url, oidc_provider_arn, region, account_id,
              secrets_kms_key_arn
       gcp:   project_id, project_number, cluster_name, cluster_location
+      oci:   compartment_id, cluster_id, vault_id, region
   EOT
   type        = any
 }
