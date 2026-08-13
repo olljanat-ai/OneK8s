@@ -92,7 +92,7 @@ variable "ingress_dns_zone_ids" {
 }
 
 variable "enable_argocd" {
-  description = "Install the Microsoft-offered Argo CD cluster extension and publish its UI through the application routing ingress."
+  description = "Install the Microsoft-offered Argo CD cluster extension and publish its UI through the platform ingress."
   type        = bool
   default     = true
 }

@@ -81,8 +81,8 @@ locals {
       "configs.cm.url" = local.argocd_url
 
       # TLS terminates at the ingress, so argocd-server serves plain HTTP and
-      # stops issuing its own 307 redirect to HTTPS — without this, NGINX and
-      # argocd-server redirect each other in a loop.
+      # stops issuing its own 307 redirect to HTTPS — without this, Traefik
+      # and argocd-server redirect each other in a loop.
       "configs.params.server\\.insecure" = "true"
 
       # Dex is only needed to bridge to an external IdP. Entra ID SSO on this
@@ -145,9 +145,11 @@ resource "azurerm_kubernetes_cluster_extension" "argocd" {
 # --- Ingress -----------------------------------------------------------------
 # Written here rather than left to the chart's own "server.ingress.*" values,
 # which would also want a TLS secret of their own. This is the platform's own
-# example of the tenant-facing contract: an Ingress with a host and a backend,
-# no ingressClassName (Traefik's class is the cluster default) and no TLS
-# section (the default TLSStore serves the wildcard).
+# example of the tenant-facing contract: an Ingress with a host, a backend and
+# no TLS section at all — the default TLSStore serves it the wildcard. The
+# class is named only because leaving it out would let the API server fill it
+# in from the default IngressClass, which this resource would then see as
+# drift on every plan; a tenant writing YAML can omit it.
 resource "kubernetes_ingress_v1" "argocd" {
   count = var.enable_argocd ? 1 : 0
 

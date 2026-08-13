@@ -92,24 +92,87 @@ terraform apply -var-file=envs/prototype.tfvars
 Or via Actions: **Deploy Foundations** → cloud `aws`, environment
 `prototype`.
 
+### Ingress
+
+Every foundation installs **Traefik** as the cluster's ingress controller
+(`enable_ingress`, on by default), with the platform wildcard as its default
+certificate. Publishing an application is therefore the same on all four
+clouds — an `Ingress` with a host and a backend, no `ingressClassName` and no
+`tls:` section:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: team-alpha
+spec:
+  rules:
+    - host: web-team-alpha.onek8s.lol       # <app>-<tenant>.onek8s.lol
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+```
+
+Two things have to be true around it:
+
+1. **The certificate exists.** `platform-wildcard-onek8s-lol` must be in the
+   environment's Key Vault (run **Renew Certificate** once), and — for EKS,
+   GKE and OKE — have been copied out with the workflow's `distribute` mode.
+   Until then Traefik serves its own self-signed certificate, and on Azure,
+   where the certificate is a CSI volume, its pod does not start at all.
+   On a brand-new environment the order is: apply the foundation, run the
+   renewal (it reads the vault out of the foundation's state), then let the
+   ingress pick the certificate up — no second apply needed.
+2. **The name resolves.** On Azure, external-dns does it: list the zone in
+   `ingress_dns_zone_ids` and every published Ingress host gets its record.
+   On the other three clouds the record is manual — take the address from
+   the controller's Service and point an A (or CNAME, on AWS) record at it:
+
+   ```bash
+   kubectl -n traefik get svc traefik \
+     -o jsonpath='{.status.loadBalancer.ingress[0]}'
+   ```
+
+Hostnames are one label deep — `*.onek8s.lol` covers
+`web-team-alpha.onek8s.lol`, not `web.team-alpha.onek8s.lol`.
+
+> **Migrating an Azure environment off the application routing add-on.**
+> Removing the add-on deletes its load balancer, so the ingress address
+> changes, and its external-dns owns the records it wrote. The replacement
+> uses a different owner ID and deliberately does not touch records it does
+> not own, so delete the stale ones once — the A record *and* its
+> `externaldns-`/TXT companion — and the new external-dns recreates them:
+>
+> ```bash
+> az network dns record-set a delete -g <zone rg> -z onek8s.lol -n argocd
+> az network dns record-set txt list -g <zone rg> -z onek8s.lol \
+>   --query "[?contains(name,'argocd')].name" -o tsv
+> ```
+
 ### Argo CD on the Azure foundation
 
 `foundations/azure` also installs the Microsoft Argo CD cluster extension and
 publishes its UI on `var.argocd_hostname` (default `argocd.onek8s.lol`)
-through the application routing add-on, behind Entra ID sign-in. Three things
+through that same Traefik ingress, behind Entra ID sign-in. Three things
 must be in place around it, none of which this stack owns:
 
 1. **The certificate.** `var.ingress_certificate_name`
    (`platform-wildcard-onek8s-lol`) must exist in the environment's Key
    Vault — run the **Renew Certificate** workflow at least once first. The
-   apply succeeds without it; the ingress just serves the add-on's fallback
-   certificate until the vault has one.
-2. **The DNS zone.** List it in `ingress_dns_zone_ids` and the add-on's
-   external-dns keeps the record for every published Ingress host. The stack
-   grants the add-on's identity DNS Zone Contributor on each zone; if that
-   grant already exists out of band, import it (see
-   [argocd.md](argocd.md)). Leave the list empty to point records by hand
-   instead.
+   Argo CD Ingress names no certificate of its own; it is served the
+   ingress' default one.
+2. **The DNS zone.** List it in `ingress_dns_zone_ids` and external-dns keeps
+   the record for every published Ingress host. The stack grants its identity
+   DNS Zone Contributor on each zone; if that grant already exists out of
+   band, import it (see [argocd.md](argocd.md)). Leave the list empty to
+   point records by hand instead.
 3. **The Entra objects.** A user-assigned managed identity for the Argo CD
    components, an app registration for sign-in with
    `https://<hostname>/auth/callback` as a redirect URI and the groups claim
@@ -261,12 +324,21 @@ cover it. Drop it from `domains` if the zone apex is served elsewhere.
 ### Consuming it from the cluster
 
 The certificate is a normal Key Vault certificate, readable through its
-secret of the same name. Platform workloads (ingress, for example) need an
-identity with *Key Vault Secrets User* on `platform-` the way
-`modules/tenant-namespace/azure` grants it on `<tenant>-`; the tenant
-identities cannot read it, by design. Nothing in the cluster is restarted
-when a new version is imported — whatever consumes the certificate is
-responsible for picking it up.
+secret of the same name. On AKS the consumer is the Traefik ingress: the
+Secrets Store CSI driver mounts it with the Key Vault secrets provider
+add-on's identity — which `foundations/azure/ingress.tf` grants *Key Vault
+Certificate User*, ABAC-narrowed to this one certificate — and syncs it into
+`traefik/platform-wildcard-tls`, the ingress' default certificate. Tenant
+identities cannot read it, by design.
+
+Renewals are picked up without an apply: the driver re-reads the vault on its
+rotation poll (two minutes), because the certificate is referenced without a
+version. Check what actually landed with:
+
+```bash
+kubectl -n traefik get secret platform-wildcard-tls \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -enddate
+```
 
 ### Distributing it to the other clouds
 
@@ -312,16 +384,22 @@ what a Kubernetes TLS secret wants, so an `ExternalSecret` maps the two fields
 straight through:
 
 ```yaml
-  data:
-    - secretKey: tls.crt
-      remoteRef:
+  target:
+    name: platform-wildcard-tls
+    template:
+      type: kubernetes.io/tls
+  dataFrom:
+    - extract:
         key: platform-wildcard-onek8s-lol   # "prototype/platform/wildcard-onek8s-lol" on AWS
-        property: tls.crt
-    - secretKey: tls.key
-      remoteRef:
-        key: platform-wildcard-onek8s-lol
-        property: tls.key
 ```
+
+That is exactly what each foundation's `ingress.tf` applies into the
+`traefik` namespace on EKS, GKE and OKE, so **the distribution now has a
+consumer on every cloud**: run `distribute` after a renewal and the ingress
+picks the new certificate up within the hour. `dataFrom.extract` rather than
+two `remoteRef`s with a `property`: the stored value is exactly these two
+fields, and extracting it avoids a property path having to quote the dots in
+their names.
 
 The workflow reads the private key out of Key Vault, so it needs *Key Vault
 Secrets User* (covered by the Secrets Officer role the foundation already

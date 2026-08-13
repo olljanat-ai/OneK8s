@@ -81,21 +81,107 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
 | Tenant namespace | **Azure Managed Namespace** (azapi) | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
-| Platform ingress | application routing add-on (managed NGINX) + Secrets Store CSI | — | — | — |
+| Platform ingress | **Traefik** + Secrets Store CSI (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
+| Ingress DNS | external-dns on the `onek8s.lol` zone | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) | — | — | — |
+
+## Ingress
+
+Every cluster runs the **same ingress controller**: Traefik, installed from
+`modules/platform-ingress` by each foundation's `ingress.tf` and opt-in per
+environment with `enable_ingress`. A tenant that publishes an application
+writes the same four lines of Ingress on AKS, EKS, GKE and OKE — which is the
+whole premise of the platform applied to HTTP.
+
+```
+   <app>-<tenant>.onek8s.lol
+        │
+        ▼
+   Traefik (namespace "traefik", IngressClass "traefik", cluster default)
+        │  :80 ── permanent redirect ──▶ :443
+        │  :443 TLS, default TLSStore ──▶ Secret platform-wildcard-tls
+        ▼
+   tenant Service (NetworkPolicy allows the ingress namespace)
+```
+
+**The certificate is the ingress', not the application's.** Traefik's default
+`TLSStore` serves `platform-wildcard-tls` for every host that carries no
+certificate of its own, so a tenant `Ingress` has **no `tls:` section, no
+secret and no `ingressClassName`**:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: team-alpha
+spec:
+  rules:
+    - host: web-team-alpha.onek8s.lol
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+```
+
+**Hostnames are `<app>-<tenant>.onek8s.lol`** — one label deep, because
+`*.onek8s.lol` covers `web-team-alpha.onek8s.lol` and does *not* cover
+`web.team-alpha.onek8s.lol`. A deeper scheme would mean reissuing and
+redistributing the wildcard, so the naming follows the certificate that
+exists.
+
+That secret is where the certificate distribution finally lands. Each cloud
+fills it from the backend its tenants already read:
+
+| Cloud | How `platform-wildcard-tls` is filled |
+|---|---|
+| Azure | Secrets Store CSI driver mounts the Key Vault certificate on the Traefik pod and syncs it; the private key travels Key Vault → kubelet and is never read by Terraform |
+| AWS | ESO `SecretStore` + `ExternalSecret` on `<env>/platform/wildcard-onek8s-lol` in Secrets Manager, over IRSA |
+| GCP | ESO on `platform-wildcard-onek8s-lol` in Secret Manager, over Workload Identity |
+| OCI | ESO on `platform-wildcard-onek8s-lol` in the Vault, over OKE Workload Identity |
+
+The identity that reads it is the platform's counterpart of a tenant
+identity: pinned to the ingress namespace's own ServiceAccount and scoped to
+the reserved `platform-` prefix by the same ABAC condition / IAM prefix /
+policy condition that scopes a tenant to `<tenant>-`. No tenant can read the
+private key, and the ingress can read no tenant's secrets.
+
+The distributed value is one JSON object holding `tls.crt` and `tls.key`, so
+the `ExternalSecret` uses `dataFrom.extract` and materializes a
+`kubernetes.io/tls` secret in one step. Renewals are picked up without an
+apply: ESO refreshes hourly, and the CSI driver on its rotation poll.
+
+**DNS is Azure-only.** The `onek8s.lol` zone lives in Azure DNS, so the AKS
+foundation runs **external-dns** (workload identity, `DNS Zone Contributor`
+on the zones in `ingress_dns_zone_ids`) and every Ingress it serves gets its
+record. Doing the same from EKS/GKE/OKE would mean storing Azure credentials
+in three more clusters — the first stored cross-cloud credential on a
+platform that has none — so those three get a record pointed at their load
+balancer by hand:
+
+```bash
+kubectl -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress[0]}'
+```
+
+A tenant namespace's NetworkPolicy allows the ingress namespace by its
+`kubernetes.io/metadata.name` label, on top of the "same namespace only" rule
+(policies are additive, so this holds on Azure too, where the namespace and
+its policy are managed by AKS).
 
 ## GitOps (Azure only, today)
 
 The Azure foundation additionally carries the platform's delivery plane:
 the **Argo CD cluster extension** offered by Microsoft, published on
-`argocd.onek8s.lol` through the **application routing** add-on and
-terminating TLS with the same `platform-wildcard-onek8s-lol` certificate the
-Renew Certificate workflow keeps in Key Vault. The certificate is never
-copied into the cluster by Terraform: the Secrets Store CSI driver mounts it
-straight from the vault, using the add-on's managed identity, whose
-`Key Vault Certificate User` role is ABAC-narrowed to that one certificate so
-it cannot reach tenant secrets. The same add-on's external-dns keeps the
-`onek8s.lol` record of every Ingress it serves.
+`argocd.onek8s.lol` through the same Traefik ingress every other cloud runs
+and terminating TLS with the platform wildcard, which the Ingress does not
+have to name — it is the ingress' default certificate (see **Ingress**
+above). Its Ingress object is deliberately the plainest one on the platform:
+a host and a backend, nothing else.
 
 Access follows the same "no stored credentials" line as everything else:
 users sign in with **Entra ID**, Entra group object IDs map to Argo CD roles,
@@ -243,10 +329,35 @@ spec:
   the deploy identity directory write permission, which is a larger grant
   than the platform otherwise needs; the cost is that nothing notices when
   one of those objects is deleted or renamed.
-- The AKS cluster is the only one with an ingress controller and the only one
-  with GitOps, which makes it a de-facto hub before the hub-spoke work has
-  been done. Until spokes are registered, EKS/GKE/OKE have no delivery plane
-  at all.
+- The AKS cluster is the only one with GitOps, which makes it a de-facto hub
+  before the hub-spoke work has been done. Until spokes are registered,
+  EKS/GKE/OKE have no delivery plane at all — they now have an ingress
+  controller, but nothing that deploys to them.
+- Traefik replaced the AKS **application routing add-on** on Azure, trading a
+  managed component for one the platform now upgrades itself. The add-on was
+  managed NGINX with Azure-specific Ingress annotations and no counterpart on
+  the other three clouds, so keeping it would have meant a per-cloud ingress
+  contract for tenants; the certificate mechanism (Secrets Store CSI, ABAC on
+  one certificate) is unchanged. Two consequences on an existing environment:
+  the load balancer address changes, and the add-on's external-dns owns the
+  records it created — the new external-dns uses a different owner ID and
+  will not touch them, so those A and TXT records have to be deleted once
+  before the new ones appear.
+- The Azure ingress does not wait for its Helm release to become ready. The
+  certificate is a CSI volume there, so a vault without one keeps the Traefik
+  pod from starting, and a brand-new environment has no certificate until the
+  Renew Certificate workflow has run — which needs this stack's outputs to
+  find the vault. Waiting would deadlock the two on a first apply; the cost
+  is that a genuinely broken ingress does not fail the apply on Azure.
+- external-dns runs on AKS only, so tenant hostnames on EKS, GKE and OKE are
+  manual records. The alternative — running it on all four against the
+  Azure-hosted zone — needs Azure credentials inside three clusters that
+  otherwise hold none.
+- The ingress' certificate is the platform wildcard and nothing else, so a
+  tenant that needs its own certificate (its own domain, or a client-facing
+  CA) has to bring an `Ingress` with a `tls:` section and a secret it
+  manages. That case is not wired up: nothing today issues per-tenant
+  certificates.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
 - All state lives in the Azure Storage state home, so every deploy — AWS,
   GCP and OCI foundations included — needs Azure credentials in addition to
