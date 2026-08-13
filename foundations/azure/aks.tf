@@ -48,4 +48,12 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   tags = local.tags
+
+  lifecycle {
+    ignore_changes = [
+      // FixMe: Enable these and ArgoCD extension with code
+      key_vault_secrets_provider,
+      web_app_routing
+    ]
+  }
 }
