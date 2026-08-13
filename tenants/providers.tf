@@ -103,7 +103,7 @@ provider "kubernetes" {
     for_each = var.cloud == "oci" ? [1] : []
 
     content {
-      api_version = "client.authentication.k8s.io/v1"
+      api_version = "client.authentication.k8s.io/v1beta1"
       command     = "oci"
       args = [
         "ce", "cluster", "generate-token",
