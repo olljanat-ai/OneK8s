@@ -3,23 +3,28 @@
 ## Overview
 
 OneK8s provisions **cluster + secret-backend pairs** ("foundations") on
-Azure, AWS, GCP and OCI, and onboards **tenants** onto those clusters with
-hard, cloud-enforced secret isolation.
+Azure, AWS, GCP and OCI, onboards **tenants** onto those clusters with hard,
+cloud-enforced secret isolation, and delivers to all four from **one Argo CD**
+on the Azure cluster.
 
 ```
-┌──────────── per environment: foundations per cloud, one tenants stack ────────────┐
-│                                                                                   │
-│  foundations/<cloud>                          tenants/ (cloud per tenant)         │
-│  ┌─────────────────────────────┐              ┌─────────────────────────────┐     │
-│  │ Cluster (AKS/EKS/GKE/OKE)   │   remote     │ for each tenant:            │     │
-│  │  - workload identity/IRSA   │   state      │  - namespace (+quota,netpol)│     │
-│  │  - Cilium / Dataplane V2    │ ──outputs──▶ │  - cloud identity           │     │
-│  │  - External Secrets Operator│              │  - ServiceAccount           │     │
-│  │  - policy guardrails        │              │  - namespaced SecretStore   │     │
-│  │ Secret backend              │              │  - prefix-scoped IAM        │     │
-│  │  (KV / SM / GSM / Vault)    │              └─────────────────────────────┘     │
-│  └─────────────────────────────┘                                                  │
-└───────────────────────────────────────────────────────────────────────────────────┘
+┌───── per environment: foundations per cloud, one tenants stack, one gitops stack ─────┐
+│                                                                                       │
+│  foundations/<cloud>                          tenants/ (cloud per tenant)             │
+│  ┌─────────────────────────────┐              ┌─────────────────────────────┐         │
+│  │ Cluster (AKS/EKS/GKE/OKE)   │   remote     │ for each tenant:            │         │
+│  │  - workload identity/IRSA   │   state      │  - namespace (+quota,netpol)│         │
+│  │  - Cilium / Dataplane V2    │ ──outputs──▶ │  - cloud identity           │         │
+│  │  - External Secrets Operator│      │       │  - ServiceAccount           │         │
+│  │  - policy guardrails        │      │       │  - namespaced SecretStore   │         │
+│  │ Secret backend              │      │       │  - prefix-scoped IAM        │         │
+│  │  (KV / SM / GSM / Vault)    │      │       └─────────────────────────────┘         │
+│  └─────────────────────────────┘      │       gitops/ (cloud per spoke)               │
+│                                       │       ┌─────────────────────────────┐         │
+│                                       └──────▶│ Argo CD hub on AKS +        │         │
+│                                               │ EKS/GKE/OKE as spokes       │         │
+│                                               └─────────────────────────────┘         │
+└───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Layering and dependency direction
@@ -362,7 +367,7 @@ spec:
 - The AKS cluster is the only one running Argo CD, which makes it the hub for
   the whole platform: losing it stops delivery on all four clouds. Workloads
   keep running — Argo CD holds no state a spoke needs at runtime — but nothing
-  syncs until it is back. Clouds not yet registered as spokes have an ingress
+  syncs until it is back. A cloud left out of `var.spokes` has an ingress
   controller but no delivery plane at all.
 - A spoke's credential is a **long-lived ServiceAccount token** that
   Terraform reads in order to write the hub's cluster Secret, so it lands in
