@@ -163,19 +163,28 @@ prefix fails at the cloud IAM layer.
 
 ```
 │ Error: Invalid value for variable
-│   on main.tf line 34, in module "tenants_aws":
-│   foundation has no attributes: the foundations/<cloud> state ... is missing or empty.
+│   on main.tf line 88, in module "tenants_azure":
+│   No outputs in the azure foundation state for environment prototype:
+│   blob key foundations/azure/prototype.tfstate in the state_home container.
 ```
 
 `terraform_remote_state` read the blob and found no outputs there. The
-coordinates themselves cannot be wrong any more — the key is derived — so the
-foundation state is simply not at `foundations/<cloud>/<env>.tfstate` in the
-`state_home` container. Either the foundation was never applied, or it was
-applied while its backend pointed somewhere else (an earlier `dev` key, or
-that cloud's own S3/GCS/Object Storage bucket, before all state moved to the
-Azure state home).
+message names the cloud, the environment and the exact blob key. The
+coordinates themselves cannot be wrong any more — the key is derived — so
+there are only two possibilities, and they need different fixes:
 
-Check what the container actually holds:
+1. **The blob is not there.** The foundation was never applied, or it was
+   applied while its backend pointed somewhere else: at an earlier key (the
+   `prototype` backends still wrote `foundations/<cloud>/dev.tfstate` until the
+   prototype rename was completed), or at that cloud's own S3/GCS/Object
+   Storage bucket, before all state moved to the Azure state home.
+2. **The blob is there but carries no outputs.** An apply that failed partway
+   leaves resources in state without ever writing the outputs. Re-run
+   `terraform apply` on that foundation until it completes; the tenants stack
+   can only read what a finished apply published.
+
+Check what the container actually holds — sizes included, since a state blob
+with resources is kilobytes and a freshly created one is nearly empty:
 
 ```bash
 az storage blob list \
@@ -186,16 +195,24 @@ az storage blob list \
 If the foundation was never applied, apply it (step 3). If its state exists
 under a different key or backend, move it with Terraform rather than by hand
 — from the foundation directory, with `backend/<env>.hcl` already updated to
-the new key:
+the new key. When `.terraform/` no longer records the old location (a fresh
+clone, or an init that already switched), point it back explicitly first:
 
 ```bash
-cd foundations/aws
-terraform init -backend-config=backend/prototype.hcl -migrate-state
+cd foundations/azure
+
+# 1. Re-init against the OLD key, so Terraform knows what to migrate from.
+terraform init -reconfigure \
+  -backend-config=resource_group_name=rg-onek8s-tfstate \
+  -backend-config=storage_account_name=onek8stfstate \
+  -backend-config=container_name=tfstate \
+  -backend-config=key=foundations/azure/dev.tfstate \
+  -backend-config=use_azuread_auth=true
+
+# 2. Migrate it to the key the backend file (and the tenants stack) now uses.
+terraform init -migrate-state -backend-config=backend/prototype.hcl
 ```
 
-Terraform reads the state from the backend recorded in `.terraform/` and
-copies it to the new one. If that directory is gone, re-init against the old
-location first (`-reconfigure` with the old settings), then run the migration.
 Verify before applying — a foundation re-applied against an empty state will
 try to build a second cluster:
 

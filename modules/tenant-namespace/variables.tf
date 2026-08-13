@@ -32,13 +32,13 @@ variable "foundation" {
   type        = any
 
   # An empty object means terraform_remote_state read a state file that does
-  # not exist (or holds no outputs) — usually a foundation that was never
-  # applied, or one whose state was written to a different storage account,
-  # container or key. Without this the failure surfaces as a pile of
-  # "Unsupported attribute" errors below.
+  # not exist, or one that exists but carries no outputs (an apply that never
+  # finished). Naming the cloud, environment and blob key is the whole point:
+  # without this the failure surfaces as a pile of "Unsupported attribute"
+  # errors that say nothing about which foundation is missing.
   validation {
     condition     = length(keys(var.foundation)) > 0
-    error_message = "foundation has no attributes: the foundations/<cloud> state for the tenant's cloud and environment is missing or empty. Deploy that foundation first (cd foundations/<cloud> && terraform init -backend-config=backend/<env>.hcl && terraform apply -var-file=envs/<env>.tfvars), and check that state_home in tenants/envs/<env>.tfvars names the same storage account and container as foundations/<cloud>/backend/<env>.hcl — the blob key foundations/<cloud>/<env>.tfstate is derived from the cloud and environment."
+    error_message = "No outputs in the ${var.cloud} foundation state for environment ${var.environment}: blob key foundations/${var.cloud}/${var.environment}.tfstate in the state_home container. Either the blob is absent — deploy the foundation (cd foundations/${var.cloud} && terraform init -backend-config=backend/${var.environment}.hcl && terraform apply -var-file=envs/${var.environment}.tfvars), or check whether it was written under an older key and needs migrating — or the blob exists but its apply never completed, so it holds resources and no outputs. `az storage blob list --account-name <state account> --container-name <container> --auth-mode login --prefix foundations/ -o table` tells the two apart; see docs/getting-started.md (Troubleshooting)."
   }
 }
 
