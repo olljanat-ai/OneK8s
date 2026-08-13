@@ -14,12 +14,17 @@ There is a single **state home** for the whole monorepo: an Azure Storage
 account that holds the state of every stack on every cloud. Create a
 resource group + storage account + `tfstate` container (enable blob
 versioning), and put its coordinates into each stack's `backend/*.hcl` and
-the tenants' `envs/*.tfvars` (`foundation_state`). The keys are:
+into `state_home` in `tenants/envs/<env>.tfvars`. The keys are:
 
 | Stack | Blob key |
 |---|---|
 | `foundations/<cloud>` | `foundations/<cloud>/<env>.tfstate` |
-| `tenants` (cloud is a parameter) | `tenants/<cloud>/<env>.tfstate` |
+| `tenants` (one per environment, all clouds) | `tenants/<env>.tfstate` |
+
+The tenants stack does not take the foundation keys as configuration: it
+derives `foundations/<cloud>/<env>.tfstate` from `state_home` and
+`environment`, so the only thing that has to match is the storage account and
+container.
 
 Consequence: **every** deploy needs Azure credentials, including the AWS,
 GCP and OCI ones, in addition to the target cloud's. Grant the Azure deploy
@@ -66,9 +71,12 @@ And repository **variables**:
 | `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_REGION` | oci provider + OCI CLI |
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
 
-Create GitHub **environments** `azure-dev`, `azure-staging`, `azure-prod`,
-`aws-dev`, … `oci-prod` and attach protection rules (required reviewers for
-`*-prod` at minimum). The deploy workflows bind to them automatically.
+Create GitHub **environments** for the foundations — `azure-prototype`,
+`azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
+environment for the all-clouds tenants job: `tenants-prototype`,
+`tenants-staging`, `tenants-prod`. Attach protection rules (required
+reviewers for `*-prod` at minimum). The deploy workflows bind to them
+automatically.
 
 ## 3. Deploy a foundation
 
@@ -84,40 +92,57 @@ Or via Actions: **Deploy Foundations** → cloud `aws`, environment
 
 ## 4. Onboard tenants
 
-There is one tenants stack for all clouds; the target cloud is just the
-`cloud = "..."` parameter inside the env file. Edit
-`tenants/envs/aws-prototype.tfvars` and add a tenant — the syntax is
-identical on every cloud:
+There is one tenants stack and one state file per environment, covering every
+cloud: the target cloud is an attribute of the tenant. Edit
+`tenants/envs/prototype.tfvars` and add tenants — the syntax is identical on
+every cloud:
 
 ```hcl
 tenants = {
-  team-gamma = {
+  aws-team-gamma = {
+    cloud  = "aws"
+    name   = "team-gamma"                                  # defaults to the key
     quota  = { cpu_requests = "2", memory_requests = "4Gi" }
     labels = { "onek8s.io/cost-center" = "gamma-2002" }
   }
+  gcp-team-gamma = {
+    cloud = "gcp"
+    name  = "team-gamma"
+  }
 }
 ```
+
+Map keys must be unique, so the same tenant on several clouds is keyed
+`<cloud>-<tenant>` with an explicit `name`; that name is what the namespace,
+the cloud identity and the secret prefix are built from.
 
 Then:
 
 ```bash
 cd tenants
-terraform init -backend-config=backend/aws-prototype.hcl
-terraform apply -var-file=envs/aws-prototype.tfvars
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
 ```
 
-(Azure credentials are needed too — all state lives in the Azure Storage
-state home regardless of cloud; use `az login` or ARM_* env vars. The stack
-also *reads* the foundation's state from there, so `foundation_state` in the
-tfvars must match `foundations/aws/backend/prototype.hcl`.)
+One apply covers every cloud that appears in `tenants`, so it needs those
+clouds' credentials — plus Azure credentials in any case, since all state
+lives in the Azure Storage state home (use `az login` or ARM_* env vars).
+Clouds with no tenants are skipped entirely: their foundation state is never
+read and their providers stay inert.
 
-Or via Actions: **Deploy Tenants** → cloud `aws`, environment `prototype`.
+Each cloud's foundation must already be deployed for this environment. The
+stack reads `foundations/<cloud>/<environment>.tfstate` from the `state_home`
+container; if a foundation was never applied there, the run stops with
+"foundation has no attributes" naming the cloud, rather than a list of
+unsupported attributes.
+
+Or via Actions: **Deploy Tenants** → environment `prototype`.
 
 ## 5. Give the tenant a secret and consume it
 
 ```bash
 # AWS naming contract: <env>/<tenant>/<name>
-aws secretsmanager create-secret --name dev/team-gamma/db-password --secret-string 'hunter2'
+aws secretsmanager create-secret --name prototype/team-gamma/db-password --secret-string 'hunter2'
 
 # OCI naming contract: <tenant>-<name>
 oci vault secret create-base64 \
@@ -128,14 +153,15 @@ oci vault secret create-base64 \
 
 In the tenant namespace (see `docs/architecture.md` for the full example),
 an `ExternalSecret` referencing `secretStoreRef: {kind: SecretStore, name:
-tenant-store}` with `remoteRef.key: dev/team-gamma/db-password` will
+tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
 
 ## Environment promotion
 
-dev → staging → prod is data-driven: the same code reads a different
-`envs/<env>.tfvars` + `backend/<env>.hcl` (foundations) or
-`envs/<cloud>-<env>.tfvars` + `backend/<cloud>-<env>.hcl` (tenants).
-Merges to `main` roll dev automatically; staging and prod are explicit
+prototype → staging → prod is data-driven: the same code reads a different
+`envs/<env>.tfvars` + `backend/<env>.hcl`, in both layers — the tenants stack
+uses the plain environment name too, because the cloud is a per-tenant
+parameter rather than part of the deployment. Merges to `main` roll the
+prototype environment automatically; staging and prod are explicit
 `workflow_dispatch` runs gated by their GitHub environments.
