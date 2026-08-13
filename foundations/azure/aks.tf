@@ -11,7 +11,7 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   node_provisioning_profile {
     default_node_pools = "None"
-    mode = "Auto"
+    mode               = "Auto"
   }
 
   oidc_issuer_enabled       = true

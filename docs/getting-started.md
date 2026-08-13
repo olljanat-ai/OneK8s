@@ -70,6 +70,8 @@ And repository **variables**:
 | `AWS_REGION` | aws-actions/configure-aws-credentials |
 | `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_REGION` | oci provider + OCI CLI |
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
+| `LETSENCRYPT_EMAIL` | Renew Certificate (ACME registration + expiry notices) |
+| `DNS_ZONE_NAME`, `DNS_ZONE_RESOURCE_GROUP` | Renew Certificate (both optional — see below) |
 
 Create GitHub **environments** for the foundations — `azure-prototype`,
 `azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
@@ -156,6 +158,75 @@ an `ExternalSecret` referencing `secretStoreRef: {kind: SecretStore, name:
 tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
+
+## 6. Wildcard certificate renewal
+
+The **Renew Certificate** workflow keeps a Let's Encrypt wildcard for the
+Azure-hosted `onek8s.lol` zone in the AKS cluster's Key Vault. It runs daily,
+solves the DNS-01 challenge by writing TXT records into the zone with
+[lego](https://go-acme.github.io/lego/), and imports the result as the Key
+Vault certificate `platform-wildcard-onek8s-lol`. Nothing is carried between
+runs: the vault's copy decides whether a renewal is due (under 30 days left),
+and the ACME account key lives beside it as the secret
+`platform-letsencrypt-account-key` (Let's Encrypt's staging directory is a
+separate account and gets its own `platform-letsencrypt-staging-account-key`).
+
+Both names use the reserved `platform-` prefix. Tenant access to this vault is
+an ABAC condition on `<tenant>-`, so **do not name a tenant `platform`** — it
+would be granted read access to the certificate and the account key.
+
+### What to set up
+
+1. **`LETSENCRYPT_EMAIL`** (repository variable) — the ACME registration
+   contact. The workflow fails fast without it.
+2. **DNS permissions.** Grant the Azure deploy service principal
+   **DNS Zone Contributor** on the `onek8s.lol` zone. lego locates the zone
+   with an Azure Resource Graph query over the zones the principal can read,
+   so a zone it has no read access to is simply not found. Set
+   `DNS_ZONE_RESOURCE_GROUP` to narrow that query when the subscription holds
+   many zones, and `DNS_ZONE_NAME` when the apex is not `onek8s.lol`; both are
+   optional.
+3. **Key Vault permissions.** Handled by `foundations/azure` — it assigns the
+   deploy principal *Key Vault Certificates Officer* alongside *Secrets
+   Officer*. Certificates are a separate RBAC surface from secrets, so
+   **re-apply the Azure foundation** before the first renewal, or the import
+   fails with `Forbidden`.
+4. **Environment protection.** The job binds to `azure-<environment>`, the
+   same environment the Azure foundation deploys through. Protection rules
+   apply to scheduled runs too: if `azure-prod` requires reviewers, its
+   renewals wait for an approval instead of running unattended. Give the
+   environments that renew on a schedule a path that does not need a human.
+
+### Running it
+
+```
+Actions -> Renew Certificate -> Run workflow
+  environment      prototype
+  domains          *.onek8s.lol,onek8s.lol
+  certificate_name platform-wildcard-onek8s-lol-staging
+  acme_server      letsencrypt-staging     # untrusted, but not rate-limited
+  force            true                    # ignore the 30-day threshold
+```
+
+Do a smoke test like the above first. It exercises the DNS-01 challenge and
+the vault import end to end against Let's Encrypt's staging directory, whose
+rate limits are far looser than production's five duplicate certificates per
+week. Give it its own `certificate_name`: a staging certificate is issued by
+an untrusted root, so it must not land on the name real workloads serve.
+Delete the throwaway certificate afterwards and run again with the defaults.
+
+The apex `onek8s.lol` is included as a second SAN because a wildcard does not
+cover it. Drop it from `domains` if the zone apex is served elsewhere.
+
+### Consuming it from the cluster
+
+The certificate is a normal Key Vault certificate, readable through its
+secret of the same name. Platform workloads (ingress, for example) need an
+identity with *Key Vault Secrets User* on `platform-` the way
+`modules/tenant-namespace/azure` grants it on `<tenant>-`; the tenant
+identities cannot read it, by design. Nothing in the cluster is restarted
+when a new version is imported — whatever consumes the certificate is
+responsible for picking it up.
 
 ## Troubleshooting
 

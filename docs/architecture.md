@@ -102,6 +102,12 @@ Secret naming contract per tenant:
 - GCP Secret Manager: `"<tenant>-<name>"`
 - OCI Vault: `"<tenant>-<name>"`
 
+Because the prefix *is* the boundary, a tenant name is also a claim on a slice
+of the shared backend. `platform-` is reserved for the platform's own objects
+(the wildcard certificate and its ACME account key, see below) and must not be
+used as a tenant name — a tenant called `platform` would be granted exactly
+those.
+
 Consuming a secret from a tenant workload:
 
 ```yaml
@@ -135,6 +141,30 @@ spec:
   environment — `<cloud>-<env>` for foundations, `tenants-<env>` for the
   tenants stack — so protection rules (required reviewers, wait timers) gate
   production applies.
+- `renew-certificate.yml` — daily issuance/renewal of the `*.onek8s.lol`
+  wildcard from Let's Encrypt, solved with DNS-01 against the Azure-hosted
+  `onek8s.lol` zone and imported into the environment's Key Vault. It binds
+  to the same `azure-<env>` GitHub environment as the Azure foundation, so
+  the vault's credentials are configured in one place.
+
+  The workflow keeps **no state of its own**. It resolves the vault from
+  `foundations/azure`'s `key_vault_uri` output — whichever vault the
+  foundation built is the one the cluster reads from, so it is the one the
+  certificate belongs in — and then the vault answers both questions the
+  run has: the stored certificate's `attributes.expires` decides whether a
+  renewal is due (under 30 days left, or `force`), and the ACME account key
+  is stored beside it as `platform-letsencrypt-account-key` so every renewal
+  reuses the same Let's Encrypt account rather than registering a new one.
+  A run with nothing to do exits before ACME is contacted, which is why it
+  can afford to run daily: the certificate gets ~30 attempts inside its
+  renewal window.
+
+  The trade-off against the obvious alternative — cert-manager in-cluster
+  with `ClusterIssuer` + workload identity — is that CI, not the cluster,
+  holds the DNS-write permission, and the result lands in the secret backend
+  every cloud's tenants already read from instead of in one cluster's etcd.
+  The cost is that the certificate does not renew while the workflow is
+  broken, and nothing in the cluster notices.
 - Authentication uses long-lived cloud credentials stored as GitHub secrets
   (azurerm `ARM_CLIENT_SECRET`, AWS access keys via
   `aws-actions/configure-aws-credentials`, a service account key via

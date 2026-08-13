@@ -1,0 +1,309 @@
+name: Renew Certificate
+
+# Scheduled issuance and renewal of the platform wildcard certificate:
+#
+#   Let's Encrypt --(DNS-01 in Azure DNS)--> lego --> Key Vault --> AKS
+#
+# The target vault is the one the Azure foundation created for the
+# environment — the same vault tenants read their secrets from — so the vault
+# name is not configuration here: it is read out of the foundation's remote
+# state, the way the tenants stack reads everything else.
+#
+# Key Vault is also the only state this workflow keeps. Nothing is carried
+# between runs on disk: the certificate already in the vault decides whether a
+# renewal is due, and the ACME account key sits next to it as a secret so
+# every run reuses the same Let's Encrypt account instead of registering a new
+# one. Both objects use the reserved "platform-" prefix, which no tenant may
+# claim — tenant identities are scoped to their own "<tenant>-" prefix by the
+# Key Vault ABAC conditions in modules/tenant-namespace/azure.
+on:
+  schedule:
+    # Daily. A run with nothing to renew exits before ACME is contacted, so
+    # the certificate gets ~30 attempts inside the renewal window and a bad
+    # day (Let's Encrypt outage, DNS hiccup) costs nothing.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment whose foundation (and Key Vault) to renew for"
+        required: true
+        default: "prototype"
+        type: choice
+        options: [prototype, dev, staging, prod]
+      domains:
+        description: "Comma-separated SANs; the first one names the certificate"
+        required: false
+        default: "*.onek8s.lol,onek8s.lol"
+        type: string
+      certificate_name:
+        description: "Key Vault certificate name (alphanumerics and dashes only)"
+        required: false
+        default: "platform-wildcard-onek8s-lol"
+        type: string
+      acme_server:
+        description: "letsencrypt (trusted, rate-limited) or letsencrypt-staging (untrusted, for testing)"
+        required: false
+        default: "letsencrypt"
+        type: choice
+        options: [letsencrypt, letsencrypt-staging]
+      force:
+        description: "Renew even if the certificate in the vault is not due yet"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  renew:
+    name: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }} (${{ inputs.environment || 'prototype' }})
+    runs-on: ubuntu-latest
+    # Same GitHub environment as the Azure foundation deploys, so the vault's
+    # credentials are configured in exactly one place. Note that protection
+    # rules apply to scheduled runs too: an environment with required
+    # reviewers will hold the renewal until someone approves it.
+    environment: azure-${{ inputs.environment || 'prototype' }}
+    concurrency:
+      # One issuance at a time per vault; never cancel a run mid-order, it
+      # would leave the DNS-01 TXT records behind.
+      group: renew-certificate-${{ inputs.environment || 'prototype' }}
+      cancel-in-progress: false
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_ENV: ${{ inputs.environment || 'prototype' }}
+      # Reads the foundation state out of the Azure Storage state home and
+      # authenticates the az CLI against Key Vault.
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      # lego's azuredns provider reads its credentials from AZURE_* directly.
+      # AZURE_SUBSCRIPTION_ID is deliberately left unset: lego locates the
+      # zone with a Resource Graph query, and narrowing that query to a
+      # subscription only helps when the zone is guaranteed to live there.
+      # DNS_ZONE_RESOURCE_GROUP is optional and narrows it further.
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_ZONE_NAME: ${{ vars.DNS_ZONE_NAME || 'onek8s.lol' }}
+      AZURE_RESOURCE_GROUP: ${{ vars.DNS_ZONE_RESOURCE_GROUP }}
+      # Certificate identity and renewal policy.
+      DOMAINS: ${{ inputs.domains || '*.onek8s.lol,onek8s.lol' }}
+      CERT_NAME: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }}
+      ACME_SERVER: ${{ inputs.acme_server || 'letsencrypt' }}
+      ACME_EMAIL: ${{ vars.LETSENCRYPT_EMAIL }}
+      # An ACME account belongs to one directory: production and staging know
+      # nothing of each other's keys, so they get a secret each. Sharing one
+      # would make every switch between them fail to resolve the account.
+      ACCOUNT_SECRET_NAME: platform-${{ inputs.acme_server || 'letsencrypt' }}-account-key
+      # Renew once the certificate has fewer than this many days left. Let's
+      # Encrypt issues for 90 days and starts warning at 20.
+      RENEW_DAYS: "30"
+      FORCE: ${{ inputs.force || false }}
+      # Pinned so a renewal never picks up an unreviewed ACME client.
+      LEGO_VERSION: v5.3.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required configuration
+        run: |
+          missing=""
+          [ -n "$ARM_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "$ARM_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "$ARM_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "$ARM_CLIENT_SECRET" ] || missing="$missing AZURE_CLIENT_SECRET"
+          [ -n "$ACME_EMAIL" ] || missing="$missing LETSENCRYPT_EMAIL"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository variables/secrets:$missing" >&2
+            echo "See docs/getting-started.md, 'Wildcard certificate renewal'." >&2
+            exit 1
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # The vault is addressed by convention, not by configuration: whichever
+      # Key Vault this environment's Azure foundation built is the one the
+      # cluster reads from, so it is the one the certificate belongs in.
+      - name: Resolve the Key Vault from the foundation state
+        id: vault
+        working-directory: foundations/azure
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="backend/${TF_ENV}.hcl"
+          uri="$(terraform output -raw key_vault_uri)"
+          if [ -z "$uri" ]; then
+            echo "::error::foundations/azure has no key_vault_uri output for ${TF_ENV}; deploy the foundation first" >&2
+            exit 1
+          fi
+          # https://<name>.vault.azure.net/ -> <name>
+          name="${uri#https://}"
+          name="${name%%.*}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Key Vault: $name ($uri)"
+
+      - name: Log in to Azure
+        run: |
+          set -euo pipefail
+          az login --service-principal \
+            --username "$ARM_CLIENT_ID" \
+            --password "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID" \
+            --output none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      # A missing certificate and an expiring one are the same case: issue.
+      # Anything else that goes wrong talking to the vault is not — a denied
+      # read must fail the run rather than silently trigger a fresh order.
+      - name: Decide whether a renewal is due
+        id: due
+        env:
+          VAULT: ${{ steps.vault.outputs.name }}
+        run: |
+          set -euo pipefail
+          if expires="$(az keyvault certificate show \
+                --vault-name "$VAULT" --name "$CERT_NAME" \
+                --query attributes.expires -o tsv \
+                --only-show-errors 2>/tmp/kv-err)"; then
+            left=$(( ( $(date -u -d "$expires" +%s) - $(date -u +%s) ) / 86400 ))
+            echo "$CERT_NAME expires $expires ($left days left)"
+            echo "expires=$expires" >> "$GITHUB_OUTPUT"
+            if [ "$left" -ge "$RENEW_DAYS" ] && [ "$FORCE" != "true" ]; then
+              echo "renew=false" >> "$GITHUB_OUTPUT"
+              echo "Nothing to do: renewal starts at $RENEW_DAYS days left."
+              exit 0
+            fi
+          elif grep -qiE 'not found|CertificateNotFound' /tmp/kv-err; then
+            echo "No $CERT_NAME in $VAULT yet; issuing for the first time."
+          else
+            cat /tmp/kv-err >&2
+            exit 1
+          fi
+          echo "renew=true" >> "$GITHUB_OUTPUT"
+
+      - name: Install lego
+        if: steps.due.outputs.renew == 'true'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o lego.tar.gz \
+            "https://github.com/go-acme/lego/releases/download/${LEGO_VERSION}/lego_${LEGO_VERSION}_linux_amd64.tar.gz"
+          tar -xzf lego.tar.gz lego
+          sudo install -m 0755 lego /usr/local/bin/lego
+          lego --version
+
+      # Let's Encrypt identifies the account by its key, so recovering the
+      # stored one keeps every renewal on the same account (and its rate
+      # limits). The first run has no key to recover and lets `lego run`
+      # register, after which the generated key is put in the vault.
+      - name: Restore the ACME account
+        id: account
+        if: steps.due.outputs.renew == 'true'
+        env:
+          VAULT: ${{ steps.vault.outputs.name }}
+        run: |
+          set -euo pipefail
+          if az keyvault secret download \
+                --vault-name "$VAULT" --name "$ACCOUNT_SECRET_NAME" \
+                --file acme-account.key --encoding utf-8 \
+                --only-show-errors 2>/tmp/kv-err; then
+            # `accounts recover` asks for confirmation on stdin.
+            printf 'y\n' | lego accounts recover \
+              --path .lego \
+              --server "$ACME_SERVER" \
+              --email "$ACME_EMAIL" \
+              --private-key acme-account.key
+            echo "restored=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'not found|SecretNotFound' /tmp/kv-err; then
+            echo "No ACME account key in $VAULT; lego will register a new account."
+            echo "restored=false" >> "$GITHUB_OUTPUT"
+          else
+            cat /tmp/kv-err >&2
+            exit 1
+          fi
+
+      - name: Obtain the certificate from Let's Encrypt
+        if: steps.due.outputs.renew == 'true'
+        run: |
+          set -euo pipefail
+          lego run \
+            --path .lego \
+            --server "$ACME_SERVER" \
+            --email "$ACME_EMAIL" \
+            --accept-tos \
+            --key-type RSA2048 \
+            --cert.name "$CERT_NAME" \
+            --domains "$DOMAINS" \
+            --dns azuredns
+
+      - name: Store the new ACME account key
+        if: steps.due.outputs.renew == 'true' && steps.account.outputs.restored == 'false'
+        env:
+          VAULT: ${{ steps.vault.outputs.name }}
+        run: |
+          set -euo pipefail
+          key="$(find .lego/accounts -type f -name '*.key' -print -quit)"
+          if [ -z "$key" ]; then
+            echo "::error::lego registered an account but left no key under .lego/accounts" >&2
+            exit 1
+          fi
+          az keyvault secret set \
+            --vault-name "$VAULT" --name "$ACCOUNT_SECRET_NAME" \
+            --file "$key" --encoding utf-8 \
+            --only-show-errors --output none
+          echo "Stored the Let's Encrypt account key as $ACCOUNT_SECRET_NAME."
+
+      # Key Vault imports a PEM bundle of key + chain, but wants the key in
+      # PKCS#8; lego writes PKCS#1 (RSA) or SEC1 (EC), so convert it here
+      # instead of relying on the format lego happened to pick.
+      - name: Import the certificate into Key Vault
+        if: steps.due.outputs.renew == 'true'
+        id: import
+        env:
+          VAULT: ${{ steps.vault.outputs.name }}
+        run: |
+          set -euo pipefail
+          crt="$(find .lego/certificates -name '*.crt' ! -name '*.issuer.crt' -print -quit)"
+          key="${crt%.crt}.key"
+          if [ ! -s "$crt" ] || [ ! -s "$key" ]; then
+            echo "::error::lego produced no certificate under .lego/certificates" >&2
+            exit 1
+          fi
+          openssl pkcs8 -topk8 -nocrypt -in "$key" -out key.pkcs8.pem
+          cat key.pkcs8.pem "$crt" > import.pem
+          imported="$(az keyvault certificate import \
+            --vault-name "$VAULT" --name "$CERT_NAME" \
+            --file import.pem \
+            --only-show-errors --query '[id, attributes.expires]' -o tsv)"
+          IFS=$'\t' read -r id expires <<< "$imported"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "expires=$expires" >> "$GITHUB_OUTPUT"
+          echo "Imported $id (expires $expires)"
+
+      - name: Summary
+        env:
+          VAULT: ${{ steps.vault.outputs.name }}
+        run: |
+          {
+            echo "### Wildcard certificate — ${TF_ENV}"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Domains | \`${DOMAINS}\` |"
+            echo "| Key Vault | \`${VAULT}\` |"
+            echo "| Certificate | \`${CERT_NAME}\` |"
+            echo "| ACME server | \`${ACME_SERVER}\` |"
+            if [ "${{ steps.due.outputs.renew }}" = "true" ]; then
+              echo "| Action | renewed |"
+              echo "| Expires | ${{ steps.import.outputs.expires }} |"
+              echo "| Version | \`${{ steps.import.outputs.id }}\` |"
+            else
+              echo "| Action | skipped — more than ${RENEW_DAYS} days left |"
+              echo "| Expires | ${{ steps.due.outputs.expires }} |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of Azure
+        if: always()
+        run: az logout --output none || true
