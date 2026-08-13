@@ -3,7 +3,7 @@
 #  - Dataplane V2 (eBPF/Cilium-based) for networking + NetworkPolicy
 resource "google_container_cluster" "this" {
   name     = "gke-${local.name}"
-  location = var.region
+  location = var.zone
 
   # The floor for the control plane, not a pin: GKE auto-upgrades within the
   # release channel, so master_version can move past it. (Not

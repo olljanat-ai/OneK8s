@@ -14,6 +14,12 @@ variable "region" {
   default     = "europe-west1"
 }
 
+variable "zone" {
+  description = "GCP zone for the cluster."
+  type        = string
+  default     = "europe-north1-c"
+}
+
 variable "name_prefix" {
   description = "Prefix for all resource names, e.g. 'onek8s'."
   type        = string
