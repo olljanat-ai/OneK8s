@@ -21,7 +21,7 @@ on:
     # Daily. A run with nothing to renew exits before ACME is contacted, so
     # the certificate gets ~30 attempts inside the renewal window and a bad
     # day (Let's Encrypt outage, DNS hiccup) costs nothing.
-    - cron: "17 3 * * *"
+    - cron: "17 3 12 * *"
   workflow_dispatch:
     inputs:
       environment:
