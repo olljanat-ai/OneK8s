@@ -1,15 +1,16 @@
 cloud       = "oci"
 environment = "prototype"
 
-# OCI Object Storage via its S3-compatible endpoint; replace <namespace> with
-# your Object Storage namespace (`oci os ns get`).
+# OCI Object Storage via its S3-compatible endpoint. These coordinates must
+# match foundations/oci/backend/prototype.hcl — that is where the foundation
+# writes the state this stack reads.
 foundation_state = {
   bucket = "onek8s-tfstate"
   key    = "foundations/oci/prototype.tfstate"
-  region = "eu-frankfurt-1"
+  region = "eu-stockholm-1"
 
   endpoints = {
-    s3 = "https://<namespace>.compat.objectstorage.eu-frankfurt-1.oraclecloud.com"
+    s3 = "https://ax9e2kehb4lc.compat.objectstorage.eu-stockholm-1.oraclecloud.com"
   }
 
   skip_region_validation      = true
