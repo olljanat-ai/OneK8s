@@ -1,11 +1,11 @@
 cloud       = "azure"
-environment = "dev"
+environment = "prototype"
 
 foundation_state = {
   resource_group_name  = "rg-onek8s-tfstate"
   storage_account_name = "onek8stfstate"
   container_name       = "tfstate"
-  key                  = "foundations/azure/dev.tfstate"
+  key                  = "foundations/azure/prototype.tfstate"
 }
 
 # Example tenants — identical syntax on every cloud.

@@ -1,9 +1,9 @@
 cloud       = "aws"
-environment = "dev"
+environment = "prototype"
 
 foundation_state = {
   bucket = "onek8s-tfstate"
-  key    = "foundations/aws/dev.tfstate"
+  key    = "foundations/aws/prototype.tfstate"
   region = "eu-west-1"
 }
 

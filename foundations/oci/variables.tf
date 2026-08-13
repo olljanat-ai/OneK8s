@@ -33,7 +33,7 @@ variable "name_prefix" {
 variable "kubernetes_version" {
   description = "OKE Kubernetes version, including the leading 'v'."
   type        = string
-  default     = "v1.34.1"
+  default     = "v1.36"
 }
 
 variable "vcn_cidr" {
@@ -87,13 +87,13 @@ variable "node_count" {
 variable "eso_chart_version" {
   description = "External Secrets Operator Helm chart version."
   type        = string
-  default     = "0.18.2"
+  default     = "2.9.0"
 }
 
 variable "cilium_chart_version" {
   description = "Cilium Helm chart version."
   type        = string
-  default     = "1.16.5"
+  default     = "1.19.6"
 }
 
 variable "freeform_tags" {

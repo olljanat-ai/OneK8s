@@ -2,8 +2,9 @@
 #  - Workload Identity (tenant KSAs impersonate Google Service Accounts)
 #  - Dataplane V2 (eBPF/Cilium-based) for networking + NetworkPolicy
 resource "google_container_cluster" "this" {
-  name     = "gke-${local.name}"
-  location = var.region
+  name                     = "gke-${local.name}"
+  location                 = var.region
+  desired_emulated_version = var.kubernetes_version
 
   network    = google_compute_network.this.id
   subnetwork = google_compute_subnetwork.gke.id

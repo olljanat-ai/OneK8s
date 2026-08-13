@@ -6,7 +6,7 @@
 terraform {
   required_version = ">= 1.9.0"
 
-  # backend "gcs" {}
+  backend "gcs" {}
 
   required_providers {
     google = {

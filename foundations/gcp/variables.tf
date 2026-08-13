@@ -32,10 +32,16 @@ variable "node_count_per_zone" {
   default     = 1
 }
 
+variable "kubernetes_version" {
+  description = "AKS Kubernetes minor version"
+  type        = string
+  default     = "1.36"
+}
+
 variable "eso_chart_version" {
   description = "External Secrets Operator Helm chart version."
   type        = string
-  default     = "0.18.2"
+  default     = "2.9.0"
 }
 
 variable "deletion_protection" {

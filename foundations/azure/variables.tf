@@ -18,7 +18,7 @@ variable "name_prefix" {
 variable "kubernetes_version" {
   description = "AKS Kubernetes minor version (null = latest default for the region)."
   type        = string
-  default     = null
+  default     = "1.36"
 }
 
 variable "system_node_count" {
@@ -48,7 +48,7 @@ variable "pod_cidr" {
 variable "eso_chart_version" {
   description = "External Secrets Operator Helm chart version."
   type        = string
-  default     = "0.18.2"
+  default     = "2.9.0"
 }
 
 variable "enable_baseline_policy" {

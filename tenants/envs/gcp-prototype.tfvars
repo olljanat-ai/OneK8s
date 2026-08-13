@@ -1,9 +1,9 @@
 cloud       = "gcp"
-environment = "dev"
+environment = "prototype"
 
 foundation_state = {
   bucket = "onek8s-tfstate"
-  prefix = "foundations/gcp/dev"
+  prefix = "foundations/gcp/prototype"
 }
 
 # Example tenants — identical syntax on every cloud.

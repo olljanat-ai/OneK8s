@@ -48,11 +48,11 @@ variable "node_max_size" {
 variable "eso_chart_version" {
   description = "External Secrets Operator Helm chart version."
   type        = string
-  default     = "0.18.2"
+  default     = "2.9.0"
 }
 
 variable "cilium_chart_version" {
   description = "Cilium Helm chart version."
   type        = string
-  default     = "1.16.5"
+  default     = "1.19.6"
 }

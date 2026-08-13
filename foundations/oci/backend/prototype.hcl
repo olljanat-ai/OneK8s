@@ -4,10 +4,10 @@
 # (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY).
 bucket = "onek8s-tfstate"
 key    = "foundations/oci/prototype.tfstate"
-region = "eu-frankfurt-1"
+region = "eu-stockholm-1"
 
 endpoints = {
-  s3 = "https://<namespace>.compat.objectstorage.eu-frankfurt-1.oraclecloud.com"
+  s3 = "https://ax9e2kehb4lc.compat.objectstorage.eu-stockholm-1.oraclecloud.com"
 }
 
 # OCI is not AWS: skip the AWS-specific validation and checksum behaviour.
