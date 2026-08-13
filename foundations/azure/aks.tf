@@ -2,6 +2,8 @@
 #  - OIDC issuer + Workload Identity (tenant identities federate against it)
 #  - Azure CNI overlay with the Cilium data plane
 #  - Azure Policy add-on for guardrails
+#  - Secrets Store CSI driver + application routing, which together put a
+#    Key Vault certificate on the platform ingress (see argocd.tf)
 resource "azurerm_kubernetes_cluster" "this" {
   name                = "aks-${local.name}"
   location            = azurerm_resource_group.this.location
@@ -39,6 +41,27 @@ resource "azurerm_kubernetes_cluster" "this" {
     type = "SystemAssigned"
   }
 
+  # Secrets Store CSI driver with the Key Vault provider. The application
+  # routing add-on mounts the ingress certificate through it, so the private
+  # key travels Key Vault -> kubelet and never lands in Terraform state.
+  # Rotation is polled (default interval 2m), which is what lets the Renew
+  # Certificate workflow replace the wildcard without an apply here.
+  key_vault_secrets_provider {
+    secret_rotation_enabled = true
+  }
+
+  # Application routing add-on: the AKS-managed NGINX ingress controller that
+  # fronts platform services (Argo CD today). Zones listed in
+  # var.ingress_dns_zone_ids are handed to the add-on's external-dns, which
+  # then keeps a record per Ingress host of its class; an empty list leaves
+  # DNS out of band. The zones live outside this stack (they are shared with
+  # the Renew Certificate workflow's DNS-01 challenge), so they are
+  # configuration, not a resource here — argocd.tf grants the add-on's
+  # identity the rights to write them.
+  web_app_routing {
+    dns_zone_ids = var.ingress_dns_zone_ids
+  }
+
   network_profile {
     network_plugin      = "azure"
     network_plugin_mode = "overlay"
@@ -48,12 +71,4 @@ resource "azurerm_kubernetes_cluster" "this" {
   }
 
   tags = local.tags
-
-  lifecycle {
-    ignore_changes = [
-      // FixMe: Enable these and ArgoCD extension with code
-      key_vault_secrets_provider,
-      web_app_routing
-    ]
-  }
 }

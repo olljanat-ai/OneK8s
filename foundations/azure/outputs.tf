@@ -36,6 +36,21 @@ output "key_vault_uri" {
   value       = azurerm_key_vault.this.vault_uri
 }
 
+output "argocd_url" {
+  description = "Public URL of the Argo CD UI (null when the extension is disabled)."
+  value       = var.enable_argocd ? local.argocd_url : null
+}
+
+output "ingress_class_name" {
+  description = "IngressClass of the application routing add-on, for platform services published on this cluster."
+  value       = local.ingress_class_name
+}
+
+output "ingress_certificate_uri" {
+  description = "Version-less Key Vault certificate URI to annotate ingresses with (kubernetes.azure.com/tls-cert-keyvault-uri)."
+  value       = local.ingress_certificate_uri
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment
