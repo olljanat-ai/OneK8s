@@ -130,6 +130,7 @@ a key of `var.spokes`:
 # gitops/envs/prototype.tfvars
 spokes = {
   aws = {}    # or: { namespaces = ["team-alpha"], cluster_resources = false }
+  gcp = {}
 }
 ```
 
@@ -137,8 +138,8 @@ Each spoke gets an `argocd-manager` ServiceAccount with a scoped ClusterRole
 on its own cluster, and the hub gets a labelled `cluster` Secret holding that
 token — so no cloud's admin kubeconfig ever lives on the hub, and an
 `ApplicationSet` cluster generator can select spokes by
-`onek8s.io/cloud` / `onek8s.io/environment`. EKS is registered today; GKE and
-OKE are not yet. Details, scoping and trade-offs:
+`onek8s.io/cloud` / `onek8s.io/environment`. EKS and GKE are registered
+today; OKE is not yet. Details, scoping and trade-offs:
 [docs/argocd.md](docs/argocd.md).
 
 Full setup (state bootstrap, GitHub secrets, environment protection):

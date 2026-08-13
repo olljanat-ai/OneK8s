@@ -1,6 +1,7 @@
 locals {
   spoke_modules = {
     aws = module.spoke_aws
+    gcp = module.spoke_gcp
   }
 }
 

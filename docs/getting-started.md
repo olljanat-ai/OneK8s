@@ -308,6 +308,7 @@ environment, with the cloud as a key of `var.spokes`:
 # gitops/envs/prototype.tfvars
 spokes = {
   aws = {}   # unrestricted; or { namespaces = [...], cluster_resources = false }
+  gcp = {}
 }
 ```
 
@@ -323,6 +324,12 @@ environment; it reads both out of the state home. A cloud left out of
 `spokes` is skipped entirely — its foundation state is never read and its
 provider stays inert — so the run needs Azure credentials plus the
 credentials of the clouds actually registered.
+
+Creating a ClusterRole is a privileged act, so each cloud's deploy identity
+needs cluster-admin rights on its own spoke **for this run only** — an EKS
+access entry mapping to a cluster admin, `roles/container.admin` on GCP.
+Everything Argo CD does afterwards uses the `argocd-manager` token instead,
+never those credentials.
 
 Each spoke gets an `argocd-manager` ServiceAccount and a ClusterRole on its
 own cluster, and the hub gets a labelled `cluster` Secret carrying that

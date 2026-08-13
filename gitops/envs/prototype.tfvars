@@ -22,4 +22,5 @@ state_home = {
 # ServiceAccount per namespace instead of cluster-wide.
 spokes = {
   aws = {}
+  gcp = {}
 }

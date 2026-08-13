@@ -88,7 +88,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
-| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | — | — |
+| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | — |
 
 ## Ingress
 
@@ -212,8 +212,8 @@ That AKS cluster is the **hub**. The other clouds' clusters are registered
 with it as **spokes** by the `gitops/` stack, so there is one delivery plane
 for all four clouds rather than one Argo CD per cloud — the same "one stack,
 all clouds" shape the tenants layer has, with the cloud as a key of
-`var.spokes` instead of a per-tenant attribute. EKS is registered today; GKE
-and OKE are not yet.
+`var.spokes` instead of a per-tenant attribute. EKS and GKE are registered
+today; OKE is not yet.
 
 Registration is a `cluster`-labelled Secret in the hub's `argocd` namespace
 whose credential is a `argocd-manager` ServiceAccount token minted on the

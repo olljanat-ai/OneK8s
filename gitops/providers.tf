@@ -25,6 +25,14 @@ provider "aws" {
   secret_key                  = local.active.aws ? null : "unused"
 }
 
+provider "google" {
+  project = local.wired.gcp ? local.foundation.gcp.project_id : "unused"
+
+  # Inert configuration without a GCP spoke: a static (never used) token stops
+  # the provider from looking up Application Default Credentials.
+  access_token = local.active.gcp ? null : "unused"
+}
+
 # --- The hub -----------------------------------------------------------------
 # The cluster Secret that registers a spoke is an ordinary Secret in the hub's
 # Argo CD namespace, so this stack writes to AKS with the same cluster-local
@@ -56,6 +64,10 @@ data "aws_eks_cluster_auth" "spoke" {
   name = local.foundation.aws.cluster_name
 }
 
+data "google_client_config" "spoke" {
+  count = local.wired.gcp ? 1 : 0
+}
+
 provider "kubernetes" {
   alias = "aws"
 
@@ -63,4 +75,14 @@ provider "kubernetes" {
   host                   = try(local.foundation.aws.cluster_endpoint, null)
   cluster_ca_certificate = try(base64decode(local.foundation.aws.cluster_ca_certificate), null)
   token                  = try(data.aws_eks_cluster_auth.spoke[0].token, null)
+}
+
+provider "kubernetes" {
+  alias = "gcp"
+
+  # GKE publishes a bare host; the module prefixes the same way for the URL it
+  # writes into the cluster Secret.
+  host                   = try("https://${local.foundation.gcp.cluster_endpoint}", null)
+  cluster_ca_certificate = try(base64decode(local.foundation.gcp.cluster_ca_certificate), null)
+  token                  = try(data.google_client_config.spoke[0].access_token, null)
 }

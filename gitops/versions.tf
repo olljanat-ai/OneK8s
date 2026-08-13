@@ -27,6 +27,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "= 6.58.0"
     }
+    google = {
+      source  = "hashicorp/google"
+      version = "= 7.44.0"
+    }
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "= 3.2.1"

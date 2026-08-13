@@ -207,7 +207,7 @@ where.
 | Spoke | Cluster | Registered as | Status |
 |---|---|---|---|
 | `aws` | EKS, `foundations/aws` | Secret `cluster-aws` in `argocd` | registered by `gitops/` |
-| `gcp` | GKE, `foundations/gcp` | — | not yet |
+| `gcp` | GKE, `foundations/gcp` | Secret `cluster-gcp` in `argocd` | registered by `gitops/` |
 | `oci` | OKE, `foundations/oci` | — | not yet |
 
 The spokes stay plain clusters: no Argo CD components on EKS/GKE/OKE and no
@@ -277,6 +277,24 @@ projected into pods are short-lived and audience-bound, so neither is usable
 from another cluster. The module creates an explicit
 `kubernetes.io/service-account-token` Secret — what `argocd cluster add` does
 — and waits for the token controller to fill it in.
+
+### Per-cloud differences
+
+There are only two, and both are about the *registration run*, not about what
+Argo CD does afterwards — once the Secret exists every spoke is the same
+bearer token against the same Kubernetes API:
+
+| Cloud | Endpoint the foundation publishes | How Terraform authenticates to bootstrap the spoke |
+|---|---|---|
+| `aws` | complete `https://` URL | `aws_eks_cluster_auth` token (EKS access entries / `aws-auth`) |
+| `gcp` | bare host, prefixed with `https://` | `google_client_config` access token of the deploy service account |
+
+The deploy identity therefore needs cluster-admin-ish rights on the spoke for
+that one run — on GKE the deploy service account needs
+`roles/container.admin` (or at least the ability to create ClusterRoles), on
+AWS it needs an access entry that maps to a cluster admin. Argo CD itself
+never uses those credentials: everything after registration goes through the
+`argocd-manager` token.
 
 ### Scoping a spoke
 
