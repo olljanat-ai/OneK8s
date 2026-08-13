@@ -187,46 +187,182 @@ first apply to sit in `Pending` for a few minutes while a node is added.
   Nothing today restricts which repositories may be synced; add `AppProject`
   restrictions before opening it to tenants.
 
-## Planned: AKS as the hub of a hub-spoke topology
+## AKS as the hub of a hub-spoke topology
 
-Today this is a **single-cluster** install: Argo CD manages only the AKS
-cluster it runs on (`https://kubernetes.default.svc`), and the other three
-foundations have no GitOps at all.
-
-The intended end state is **hub and spoke**, with the AKS cluster as the hub:
+Argo CD runs on AKS and nowhere else. The other clouds' clusters are
+registered with it as **spokes**, so there is one delivery plane for all four
+clouds rather than one Argo CD per cloud — the same "one stack, all clouds"
+shape the tenants layer already has, and one place to see what is deployed
+where.
 
 ```
                      ┌─────────── hub: AKS (foundations/azure) ───────────┐
    Git / OCI ───────▶│  Argo CD extension  ── ApplicationSet (cluster gen) │
                      └───────┬──────────────┬──────────────┬──────────────┘
-                             │              │              │
+                             │ SA token     │              │
                         EKS (aws)      GKE (gcp)      OKE (oci)
                             spoke          spoke          spoke
 ```
 
-- **One Argo CD, four clusters.** The spokes stay plain clusters: no Argo CD
-  components on EKS/GKE/OKE, no per-cloud GitOps stack to keep in sync. This
-  mirrors the choice already made for the tenants layer — one stack, all
-  clouds — and gives one place to see what is deployed where.
-- **Registration.** Each spoke is a `cluster` Secret in the hub's `argocd`
-  namespace. The credential should be a dedicated in-cluster ServiceAccount
-  per spoke with a scoped `ClusterRole` (not the cloud's admin kubeconfig),
-  and the Secret itself should arrive through the mechanism the platform
-  already has: an `ExternalSecret` reading a `platform-`-prefixed entry from
-  Key Vault, so no cluster credential is written into Terraform state.
-- **Fan-out.** An `ApplicationSet` with a cluster generator plus per-cloud
-  labels (`cloud=aws|gcp|oci`) turns "deploy this to every cluster" into one
-  object, with Kustomize/Helm overlays for the per-cloud differences that
-  already exist in `modules/tenant-namespace`.
-- **What has to be solved first.** Hub → spoke reachability (all four API
-  servers are public today; a private-endpoint or peered-network story is
-  needed for anything beyond prototype), the authentication mode for each
-  spoke (EKS access entries, GKE/OKE equivalents), hub availability becoming
-  a platform-wide dependency, and the boundary against the tenants stack —
-  Argo CD must not fight Terraform over namespaces, quotas or SecretStores,
-  so tenant onboarding stays in Terraform and only workloads move to GitOps.
+| Spoke | Cluster | Registered as | Status |
+|---|---|---|---|
+| `aws` | EKS, `foundations/aws` | Secret `cluster-aws` in `argocd` | registered by `gitops/` |
+| `gcp` | GKE, `foundations/gcp` | — | not yet |
+| `oci` | OKE, `foundations/oci` | — | not yet |
 
-None of that is implemented. The pieces this repository already has that make
-it cheap — one wildcard certificate distributed to every cloud's secret
-backend, one state home, one tenants stack — are described in
-[architecture.md](architecture.md).
+The spokes stay plain clusters: no Argo CD components on EKS/GKE/OKE and no
+per-cloud GitOps stack to keep in sync.
+
+### The `gitops/` stack
+
+Registration is its own layer, deployed after the foundations and
+independently of the tenants stack:
+
+```bash
+cd gitops
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
+```
+
+One state file per environment (`gitops/<env>.tfstate` in the same Azure
+Storage state home as everything else), and the cloud is a key of
+`var.spokes` rather than part of the deployment:
+
+```hcl
+spokes = {
+  aws = {}                                                    # unrestricted
+  # gcp = { namespaces = ["team-alpha"], cluster_resources = false }
+}
+```
+
+A cloud left out is untouched — its foundation state is never read, its
+cluster is never contacted and its provider stays inert — so a run needs
+credentials only for the clouds actually listed, plus Azure for the hub and
+the state home.
+
+It has to be a layer of its own rather than something `foundations/aws` does:
+a foundation may not reference another foundation, or the four of them stop
+being independently deployable. `gitops/` reads `foundations/azure` (the hub)
+and each spoke's `foundations/<cloud>` through `terraform_remote_state`, the
+same one-way dependency the tenants stack has.
+
+### What registration is
+
+Per spoke, `modules/argocd-spoke` creates two things on two clusters:
+
+```
+spoke cluster                            hub cluster (AKS)
+─────────────────────────────────        ────────────────────────────────────
+ServiceAccount  argocd-manager           Secret cluster-<cloud> in argocd, with
+ClusterRole     argocd-manager-role        argocd.argoproj.io/secret-type=cluster
+  + ClusterRoleBinding                     data.server = the API endpoint
+  (or a RoleBinding per namespace)         data.config.bearerToken = the token
+Secret          argocd-manager-token ────▶ data.config.tlsClientConfig.caData
+```
+
+Argo CD has no API for adding a cluster: it lists the Secrets in its own
+namespace carrying that label, so writing the Secret *is* the registration.
+
+The credential is a ServiceAccount bearer token minted on the spoke, not the
+cloud's admin kubeconfig. Argo CD does support cloud-native credentials
+(`awsAuthConfig`, `execProviderConfig`), but each of them would need that
+cloud's credentials sitting on the hub — AWS keys, a GCP service account key,
+an OCI signing key inside AKS — which is exactly the sprawl the platform
+avoids elsewhere. A ServiceAccount token works identically on EKS, GKE and
+OKE, carries precisely the rights of the ClusterRole and nothing else, and is
+revoked by deleting one ServiceAccount.
+
+Kubernetes 1.24+ no longer mints a Secret per ServiceAccount, and the tokens
+projected into pods are short-lived and audience-bound, so neither is usable
+from another cluster. The module creates an explicit
+`kubernetes.io/service-account-token` Secret — what `argocd cluster add` does
+— and waits for the token controller to fill it in.
+
+### Scoping a spoke
+
+`cluster_role_rules` defaults to everything, which is what `argocd cluster
+add` grants: Argo CD has to be able to apply whatever a repository holds. Two
+variables narrow it:
+
+```hcl
+spokes = {
+  aws = { namespaces = ["team-alpha", "team-beta"], cluster_resources = false }
+}
+```
+
+That combination is enforced **twice** — Argo CD refuses Applications
+targeting anything else, and the manager ServiceAccount is bound with a
+`RoleBinding` per namespace instead of a `ClusterRoleBinding`, so the API
+server refuses too. Any other combination binds at cluster scope.
+
+### Fanning out
+
+The cluster Secret's labels are the selector surface of an `ApplicationSet`
+cluster generator, which is how "deploy this to every cloud" stays one
+object:
+
+| Label | Value |
+|---|---|
+| `argocd.argoproj.io/secret-type` | `cluster` |
+| `onek8s.io/cloud` | `aws` \| `gcp` \| `oci` |
+| `onek8s.io/environment` | the environment the foundations were deployed for |
+| `onek8s.io/spoke` | the name Argo CD knows the cluster by (`{{name}}`) |
+
+```yaml
+generators:
+  - clusters:
+      selector:
+        matchLabels:
+          onek8s.io/environment: prototype     # every spoke of this environment
+```
+
+The hub itself is *not* labelled — Argo CD's built-in
+`https://kubernetes.default.svc` entry has no Secret — so a cluster-generator
+selector like the above hits the spokes only. Match on
+`argocd.argoproj.io/secret-type: cluster` with no further labels to include
+the hub as well.
+
+### Operating it
+
+```bash
+# what the hub thinks it has
+kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=cluster \
+  -L onek8s.io/cloud,onek8s.io/environment
+argocd cluster list --grpc-web
+
+# from the spoke's side: who the hub is acting as, and what it may do
+kubectl -n kube-system get sa argocd-manager
+kubectl auth can-i --list --as system:serviceaccount:kube-system:argocd-manager
+
+# revoke a spoke without touching Terraform state
+kubectl -n kube-system delete sa argocd-manager
+```
+
+### Known gaps
+
+- **The token never expires and nothing rotates it.** A
+  `kubernetes.io/service-account-token` Secret is a long-lived credential;
+  rotating it means tainting `kubernetes_secret_v1.manager_token` in the
+  `gitops` state and re-applying. Bound, short-lived tokens would need
+  something on the hub to refresh them, which is a controller this platform
+  does not have.
+- **The token is in Terraform state.** Terraform has to read it to write the
+  hub's Secret, so it lands in `gitops/<env>.tfstate`. That state file is
+  therefore as sensitive as a cluster admin credential for every spoke — the
+  state home's RBAC is what protects it. The alternative sketched earlier —
+  CI writing the token into Key Vault and an `ExternalSecret` assembling the
+  cluster Secret on the hub — moves the credential out of state but adds a
+  workflow that mints and rotates tokens out of band; it is the natural next
+  step if the state home's blast radius becomes unacceptable.
+- **Every API server is public.** Hub → spoke traffic crosses the internet to
+  a public endpoint. Anything beyond prototype wants private endpoints plus
+  peering or a tunnel, which is a networking story none of the foundations
+  has yet.
+- **The hub is now a platform-wide dependency.** Losing the AKS cluster
+  stops delivery on all four clouds. Argo CD keeps no state a spoke needs at
+  runtime, so workloads keep running, but nothing syncs until it is back.
+- **The boundary against the tenants stack is a convention, not a
+  mechanism.** Tenant onboarding (namespaces, quotas, SecretStores) stays in
+  Terraform and only workloads belong in GitOps. Nothing stops an Application
+  from managing a namespace and fighting Terraform over it; `namespaces` +
+  `cluster_resources = false` on a spoke is the blunt instrument that does.

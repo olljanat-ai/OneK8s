@@ -20,11 +20,12 @@ into `state_home` in `tenants/envs/<env>.tfvars`. The keys are:
 |---|---|
 | `foundations/<cloud>` | `foundations/<cloud>/<env>.tfstate` |
 | `tenants` (one per environment, all clouds) | `tenants/<env>.tfstate` |
+| `gitops` (one per environment, all clouds) | `gitops/<env>.tfstate` |
 
-The tenants stack does not take the foundation keys as configuration: it
-derives `foundations/<cloud>/<env>.tfstate` from `state_home` and
-`environment`, so the only thing that has to match is the storage account and
-container.
+The tenants and gitops stacks do not take the foundation keys as
+configuration: they derive `foundations/<cloud>/<env>.tfstate` from
+`state_home` and `environment`, so the only thing that has to match is the
+storage account and container.
 
 Consequence: **every** deploy needs Azure credentials, including the AWS,
 GCP and OCI ones, in addition to the target cloud's. Grant the Azure deploy
@@ -75,10 +76,10 @@ And repository **variables**:
 
 Create GitHub **environments** for the foundations — `azure-prototype`,
 `azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
-environment for the all-clouds tenants job: `tenants-prototype`,
-`tenants-staging`, `tenants-prod`. Attach protection rules (required
-reviewers for `*-prod` at minimum). The deploy workflows bind to them
-automatically.
+environment for each of the two all-clouds jobs: `tenants-prototype` …
+`tenants-prod` and `gitops-prototype` … `gitops-prod`. Attach protection
+rules (required reviewers for `*-prod` at minimum). The deploy workflows bind
+to them automatically.
 
 ## 3. Deploy a foundation
 
@@ -244,8 +245,9 @@ must be in place around it, none of which this stack owns:
    only way in.
 
 Set `enable_argocd = false` in an environment's tfvars to skip the extension
-(it is in public preview). Details, roles, login and the hub-spoke plan:
-[argocd.md](argocd.md).
+(it is in public preview). Details, roles and login: [argocd.md](argocd.md).
+That cluster is also the **hub** the other clouds are registered with in step
+5.
 
 ## 4. Onboard tenants
 
@@ -295,7 +297,47 @@ unsupported attributes.
 
 Or via Actions: **Deploy Tenants** → environment `prototype`.
 
-## 5. Give the tenant a secret and consume it
+## 5. Register the GitOps spokes
+
+Argo CD runs only on the AKS cluster (step 3). The `gitops/` stack registers
+the other clouds' clusters with it as spokes, so one Argo CD delivers to all
+four. Like the tenants stack it is one stack and one state file per
+environment, with the cloud as a key of `var.spokes`:
+
+```hcl
+# gitops/envs/prototype.tfvars
+spokes = {
+  aws = {}   # unrestricted; or { namespaces = [...], cluster_resources = false }
+}
+```
+
+```bash
+cd gitops
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
+```
+
+The run needs the hub's foundation (`foundations/azure`, applied with
+`enable_argocd = true`) plus each listed spoke's foundation to exist for this
+environment; it reads both out of the state home. A cloud left out of
+`spokes` is skipped entirely — its foundation state is never read and its
+provider stays inert — so the run needs Azure credentials plus the
+credentials of the clouds actually registered.
+
+Each spoke gets an `argocd-manager` ServiceAccount and a ClusterRole on its
+own cluster, and the hub gets a labelled `cluster` Secret carrying that
+token. Check the result:
+
+```bash
+kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=cluster \
+  -L onek8s.io/cloud,onek8s.io/environment
+```
+
+Or via Actions: **Deploy GitOps** → environment `prototype`. Scoping,
+fan-out with an `ApplicationSet` and the trade-offs (the token is long-lived
+and lands in state): [argocd.md](argocd.md).
+
+## 6. Give the tenant a secret and consume it
 
 ```bash
 # AWS naming contract: <env>/<tenant>/<name>
@@ -314,7 +356,7 @@ tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
 
-## 6. Wildcard certificate renewal
+## 7. Wildcard certificate renewal
 
 The **Renew Certificate** workflow keeps a Let's Encrypt wildcard for the
 Azure-hosted `onek8s.lol` zone in the AKS cluster's Key Vault. It runs daily,

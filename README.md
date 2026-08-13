@@ -16,15 +16,19 @@ via External Secrets Operator and per-tenant workload identities.
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
 ├── modules/
 │   ├── platform-ingress/   # Traefik + the platform wildcard as its default certificate
-│   └── tenant-namespace/   # Reusable tenant module — cloud is a variable
-│       ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
-│       ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
-│       ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
-│       ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
-│       ├── gcp/            #   GSA + WI binding + IAM condition
-│       └── oci/            #   workload-identity IAM policy + secret-name prefix
+│   ├── tenant-namespace/   # Reusable tenant module — cloud is a variable
+│   │   ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
+│   │   ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
+│   │   ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
+│   │   ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
+│   │   ├── gcp/            #   GSA + WI binding + IAM condition
+│   │   └── oci/            #   workload-identity IAM policy + secret-name prefix
+│   └── argocd-spoke/       # Registers one cluster as a spoke of the Argo CD hub
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
+│   └── backend/            #   <env>.hcl state config (Azure state home)
+├── gitops/                 # ONE stack for all clouds — Argo CD hub-spoke wiring
+│   ├── envs/               #   <env>.tfvars: spokes, keyed by cloud
 │   └── backend/            #   <env>.hcl state config (Azure state home)
 ├── .github/workflows/      # PR validation + deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
@@ -115,9 +119,26 @@ published on `https://argocd.onek8s.lol` by the same Traefik ingress every
 cloud runs and terminating TLS with the `*.onek8s.lol` wildcard that ingress
 serves by default. Sign-in is **Entra ID**,
 with Entra groups mapped to Argo CD roles and no client secret anywhere —
-the SSO app authenticates with the cluster's federated credential. It manages
-only the AKS cluster today; the plan is to make it the **hub** that drives
-EKS, GKE and OKE as spokes. Details and the hub-spoke plan:
+the SSO app authenticates with the cluster's federated credential.
+
+That AKS cluster is the **hub**. The `gitops/` stack registers the other
+clouds' clusters as **spokes** — one Argo CD for all four clouds, no Argo CD
+components anywhere else — again as one stack, all clouds, with the cloud as
+a key of `var.spokes`:
+
+```hcl
+# gitops/envs/prototype.tfvars
+spokes = {
+  aws = {}    # or: { namespaces = ["team-alpha"], cluster_resources = false }
+}
+```
+
+Each spoke gets an `argocd-manager` ServiceAccount with a scoped ClusterRole
+on its own cluster, and the hub gets a labelled `cluster` Secret holding that
+token — so no cloud's admin kubeconfig ever lives on the hub, and an
+`ApplicationSet` cluster generator can select spokes by
+`onek8s.io/cloud` / `onek8s.io/environment`. EKS is registered today; GKE and
+OKE are not yet. Details, scoping and trade-offs:
 [docs/argocd.md](docs/argocd.md).
 
 Full setup (state bootstrap, GitHub secrets, environment protection):
@@ -127,13 +148,14 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 5 stacks), tflint, checkov, and
+- **PR validation** — fmt, validate (all 6 stacks), tflint, checkov, and
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
-- **Deploy Foundations / Deploy Tenants** — separate pipelines; the
-  prototype environment deploys on merge to `main`, other environments via
-  `workflow_dispatch`, authenticated with cloud credentials stored as GitHub
-  secrets. Foundation jobs are gated by the GitHub environments
-  `<cloud>-<env>`, the all-clouds tenants job by `tenants-<env>`.
+- **Deploy Foundations / Deploy Tenants / Deploy GitOps** — separate
+  pipelines; the prototype environment deploys on merge to `main`, other
+  environments via `workflow_dispatch`, authenticated with cloud credentials
+  stored as GitHub secrets. Foundation jobs are gated by the GitHub
+  environments `<cloud>-<env>`, the all-clouds tenants and gitops jobs by
+  `tenants-<env>` and `gitops-<env>`.
 - **Renew Certificate** — daily; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault.

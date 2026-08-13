@@ -28,6 +28,7 @@ hard, cloud-enforced secret isolation.
 |---|---|---|---|
 | Foundations | `foundations/{azure,aws,gcp,oci}` | `foundations/<cloud>/<env>.tfstate` in the Azure Storage state home | independently |
 | Tenants | `tenants/` (one stack, all clouds; `cloud` is a per-tenant parameter) | `tenants/<env>.tfstate` in the Azure Storage state home | independently, **after** the foundations of the clouds its tenants use |
+| GitOps | `gitops/` (one stack, all clouds; `cloud` is a key of `var.spokes`) | `gitops/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (the hub) and the foundations of the clouds it registers |
 
 **One state home.** Every stack — whichever cloud it provisions — keeps its
 state in the same Azure Storage account, distinguished only by blob key.
@@ -37,8 +38,12 @@ one data source per backend type, and state RBAC/versioning/retention is
 configured in one place. The price is that every deploy needs Azure
 credentials in addition to the target cloud's.
 
-Tenants consume foundation outputs via `terraform_remote_state` only.
-Foundations never reference tenants — the dependency arrow points one way.
+Tenants and GitOps consume foundation outputs via `terraform_remote_state`
+only. Foundations never reference either of them, and never reference each
+other — the dependency arrow points one way. That is the whole reason spoke
+registration is a layer of its own instead of something `foundations/aws`
+does to `foundations/azure`: a foundation that reads another foundation's
+state stops being independently deployable.
 
 Both layers select an environment the same way, with
 `-backend-config=backend/<env>.hcl` and `-var-file=envs/<env>.tfvars`. The
@@ -83,7 +88,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
-| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) | — | — | — |
+| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | — | — |
 
 ## Ingress
 
@@ -187,7 +192,7 @@ A tenant namespace's NetworkPolicy allows the ingress namespace by its
 (policies are additive, so this holds on Azure too, where the namespace and
 its policy are managed by AKS).
 
-## GitOps (Azure only, today)
+## GitOps: one hub, spokes on the other clouds
 
 The Azure foundation additionally carries the platform's delivery plane:
 the **Argo CD cluster extension** offered by Microsoft, published on
@@ -203,13 +208,23 @@ and the SSO app registration authenticates with the cluster's federated
 credential rather than a client secret. The directory objects themselves are
 created out of band and referenced by ID.
 
-This is deliberately a **single-cluster install** for now, and deliberately
-placed on the cluster that is meant to become the **hub**: the plan is for
-Argo CD on AKS to drive EKS, GKE and OKE as registered spokes, so there is
-one delivery plane for all four clouds rather than one Argo CD per cloud —
-the same "one stack, all clouds" shape the tenants layer already has. None of
-the spoke registration exists yet. See [argocd.md](argocd.md) for the
-mechanics, the operational commands and the full hub-spoke plan.
+That AKS cluster is the **hub**. The other clouds' clusters are registered
+with it as **spokes** by the `gitops/` stack, so there is one delivery plane
+for all four clouds rather than one Argo CD per cloud — the same "one stack,
+all clouds" shape the tenants layer has, with the cloud as a key of
+`var.spokes` instead of a per-tenant attribute. EKS is registered today; GKE
+and OKE are not yet.
+
+Registration is a `cluster`-labelled Secret in the hub's `argocd` namespace
+whose credential is a `argocd-manager` ServiceAccount token minted on the
+spoke itself — not that cloud's admin kubeconfig, which would have to live on
+the hub. It is the one authentication mode EKS, GKE and OKE all share, it
+carries exactly the rights of the ClusterRole granted next to it, and
+revoking a spoke is deleting one ServiceAccount. The Secret's labels
+(`onek8s.io/cloud`, `onek8s.io/environment`, `onek8s.io/spoke`) are what an
+`ApplicationSet` cluster generator selects on, so "deploy this to every
+cloud" is one object. See [argocd.md](argocd.md) for the mechanics, the
+scoping variables and the operational commands.
 
 ## Secret isolation (the core security invariant)
 
@@ -263,16 +278,17 @@ spec:
 ## CI/CD
 
 - `pr-validation.yml` — fmt, per-stack validate, tflint, checkov, and (once
-  `ENABLE_CLOUD_PLANS=true`) credentialed prototype plans for all five
+  `ENABLE_CLOUD_PLANS=true`) credentialed prototype plans for all six
   stacks.
-- `deploy-foundations.yml` / `deploy-tenants.yml` — independent pipelines;
-  merge to `main` auto-deploys the prototype environment on path changes,
-  other environments go through `workflow_dispatch`. Deploy Foundations fans
-  out per cloud; Deploy Tenants is a single all-clouds job. Both delegate to
-  the reusable `_terraform-deploy.yml`, which binds each run to a GitHub
-  environment — `<cloud>-<env>` for foundations, `tenants-<env>` for the
-  tenants stack — so protection rules (required reviewers, wait timers) gate
-  production applies.
+- `deploy-foundations.yml` / `deploy-tenants.yml` / `deploy-gitops.yml` —
+  independent pipelines; merge to `main` auto-deploys the prototype
+  environment on path changes, other environments go through
+  `workflow_dispatch`. Deploy Foundations fans out per cloud; Deploy Tenants
+  and Deploy GitOps are single all-clouds jobs. All three delegate to the
+  reusable `_terraform-deploy.yml`, which binds each run to a GitHub
+  environment — `<cloud>-<env>` for foundations, `tenants-<env>` and
+  `gitops-<env>` for the two all-clouds stacks — so protection rules
+  (required reviewers, wait timers) gate production applies.
 - `renew-certificate.yml` — daily issuance/renewal of the `*.onek8s.lol`
   wildcard from Let's Encrypt, solved with DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imported into the environment's Key Vault. It binds
@@ -343,10 +359,29 @@ spec:
   the deploy identity directory write permission, which is a larger grant
   than the platform otherwise needs; the cost is that nothing notices when
   one of those objects is deleted or renamed.
-- The AKS cluster is the only one with GitOps, which makes it a de-facto hub
-  before the hub-spoke work has been done. Until spokes are registered,
-  EKS/GKE/OKE have no delivery plane at all — they now have an ingress
-  controller, but nothing that deploys to them.
+- The AKS cluster is the only one running Argo CD, which makes it the hub for
+  the whole platform: losing it stops delivery on all four clouds. Workloads
+  keep running — Argo CD holds no state a spoke needs at runtime — but nothing
+  syncs until it is back. Clouds not yet registered as spokes have an ingress
+  controller but no delivery plane at all.
+- A spoke's credential is a **long-lived ServiceAccount token** that
+  Terraform reads in order to write the hub's cluster Secret, so it lands in
+  `gitops/<env>.tfstate`. That state file is consequently as sensitive as a
+  cluster admin credential for every registered spoke, and the state home's
+  RBAC is the only thing protecting it; nothing rotates the token either.
+  Moving it out of state would mean CI minting tokens into Key Vault and an
+  `ExternalSecret` assembling the cluster Secret on the hub — one more
+  scheduled workflow to own, and the reason it was not done up front.
+- Hub → spoke traffic crosses the public internet: every foundation's API
+  server is public today. Private endpoints plus peering (or a tunnel) is the
+  prerequisite for anything beyond prototype, and no foundation has that
+  networking story yet.
+- The boundary between Terraform and GitOps is a convention. Tenant
+  onboarding (namespaces, quotas, SecretStores) stays in Terraform and only
+  workloads belong in Argo CD, but nothing prevents an Application from
+  managing a namespace and fighting the tenants stack over it. A spoke
+  restricted with `namespaces` + `cluster_resources = false` is the blunt
+  instrument that does.
 - Traefik replaced the AKS **application routing add-on** on Azure, trading a
   managed component for one the platform now upgrades itself. The add-on was
   managed NGINX with Azure-specific Ingress annotations and no counterpart on
