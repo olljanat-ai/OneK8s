@@ -48,12 +48,11 @@ resource "azurerm_user_assigned_identity" "tenant" {
 }
 
 resource "azurerm_federated_identity_credential" "tenant" {
-  name                = "aks-${var.tenant_name}-${var.service_account_name}"
-  resource_group_name = var.resource_group_name
-  parent_id           = azurerm_user_assigned_identity.tenant.id
-  audience            = ["api://AzureADTokenExchange"]
-  issuer              = var.oidc_issuer_url
-  subject             = "system:serviceaccount:${local.namespace}:${var.service_account_name}"
+  name                      = "aks-${var.tenant_name}-${var.service_account_name}"
+  user_assigned_identity_id = azurerm_user_assigned_identity.tenant.id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = var.oidc_issuer_url
+  subject                   = "system:serviceaccount:${local.namespace}:${var.service_account_name}"
 }
 
 # --- Least-privilege vault access: RBAC + ABAC prefix condition --------------
