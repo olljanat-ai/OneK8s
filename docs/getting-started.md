@@ -157,6 +157,74 @@ tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
 
+## Troubleshooting
+
+### `foundation has no attributes`
+
+```
+│ Error: Invalid value for variable
+│   on main.tf line 34, in module "tenants_aws":
+│   foundation has no attributes: the foundations/<cloud> state ... is missing or empty.
+```
+
+`terraform_remote_state` read the blob and found no outputs there. The
+coordinates themselves cannot be wrong any more — the key is derived — so the
+foundation state is simply not at `foundations/<cloud>/<env>.tfstate` in the
+`state_home` container. Either the foundation was never applied, or it was
+applied while its backend pointed somewhere else (an earlier `dev` key, or
+that cloud's own S3/GCS/Object Storage bucket, before all state moved to the
+Azure state home).
+
+Check what the container actually holds:
+
+```bash
+az storage blob list \
+  --account-name onek8stfstate --container-name tfstate \
+  --auth-mode login --prefix foundations/ -o table
+```
+
+If the foundation was never applied, apply it (step 3). If its state exists
+under a different key or backend, move it with Terraform rather than by hand
+— from the foundation directory, with `backend/<env>.hcl` already updated to
+the new key:
+
+```bash
+cd foundations/aws
+terraform init -backend-config=backend/prototype.hcl -migrate-state
+```
+
+Terraform reads the state from the backend recorded in `.terraform/` and
+copies it to the new one. If that directory is gone, re-init against the old
+location first (`-reconfigure` with the old settings), then run the migration.
+Verify before applying — a foundation re-applied against an empty state will
+try to build a second cluster:
+
+```bash
+terraform plan -var-file=envs/prototype.tfvars   # expect "No changes"
+```
+
+### Tenants deployed before the per-cloud stacks were merged
+
+The tenants layer used to keep one state per cloud
+(`tenants/<cloud>/<env>.tfstate`) and now keeps one per environment
+(`tenants/<env>.tfstate`), with different resource addresses
+(`module.tenant["team-alpha"]` → `module.tenants_azure["azure-team-alpha"]`).
+A first apply on the new stack therefore plans to *create* tenants that the
+old states may already own. Before running it, check the old blobs:
+
+```bash
+az storage blob list \
+  --account-name onek8stfstate --container-name tfstate \
+  --auth-mode login --prefix tenants/ -o table
+```
+
+If they exist and hold resources, either destroy those tenants with the old
+configuration first (`git checkout` the previous commit, `terraform destroy`
+per cloud), or move the resources into the new state with
+`terraform state mv`, then delete the stale blobs. If they are empty — which
+is the case when the per-cloud stacks never applied cleanly — nothing needs
+to move.
+
 ## Environment promotion
 
 prototype → staging → prod is data-driven: the same code reads a different
