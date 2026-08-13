@@ -10,6 +10,7 @@ resource "azurerm_kubernetes_cluster" "this" {
   kubernetes_version  = var.kubernetes_version
 
   node_provisioning_profile {
+    default_node_pools = "None"
     mode = "Auto"
   }
 
