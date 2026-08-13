@@ -16,7 +16,7 @@ provider "helm" {
     host                   = local.kube_host
     cluster_ca_certificate = local.kube_ca_certificate
     exec = {
-      api_version = "client.authentication.k8s.io/v1"
+      api_version = "client.authentication.k8s.io/v1beta1"
       command     = "oci"
       args = [
         "ce", "cluster", "generate-token",
