@@ -5,6 +5,17 @@ locals {
   # "<tenant>-<secret-name>". The ABAC condition below makes this convention
   # a hard security boundary.
   secret_prefix = "${var.tenant_name}-"
+
+  # The managed namespace API accepts CPU only in milliCPU form ("2000m",
+  # minimum "1m"), while the tenant-facing quota is written in plain Kubernetes
+  # CPU units ("2") so the same value works on every cloud. Convert here, and
+  # pass values that already carry the "m" suffix through untouched.
+  cpu_millicores = {
+    for k, v in {
+      request = var.quota.cpu_requests
+      limit   = var.quota.cpu_limits
+    } : k => endswith(v, "m") ? v : "${ceil(tonumber(v) * 1000)}m"
+  }
 }
 
 data "azurerm_client_config" "current" {}
@@ -25,8 +36,8 @@ resource "azapi_resource" "managed_namespace" {
       }, var.namespace_labels)
       annotations = {}
       defaultResourceQuota = {
-        cpuRequest    = var.quota.cpu_requests
-        cpuLimit      = var.quota.cpu_limits
+        cpuRequest    = local.cpu_millicores.request
+        cpuLimit      = local.cpu_millicores.limit
         memoryRequest = var.quota.memory_requests
         memoryLimit   = var.quota.memory_limits
       }
@@ -59,6 +70,9 @@ resource "azurerm_federated_identity_credential" "tenant" {
 # "Key Vault Secrets User" grants getSecret/readMetadata on the whole vault;
 # the ABAC condition narrows it to secrets whose name starts with the tenant
 # prefix. Any other tenant's secrets are invisible to this identity.
+# Key Vault ABAC string operators are case-sensitive and there is no
+# IgnoreCase variant, so the prefix must be matched exactly as written; tenant
+# names are lowercase DNS labels, so the secret naming convention matches.
 resource "azurerm_role_assignment" "tenant_secrets" {
   scope                = var.key_vault_id
   role_definition_name = "Key Vault Secrets User"
@@ -74,7 +88,7 @@ resource "azurerm_role_assignment" "tenant_secrets" {
       )
       OR
       (
-        @Resource[Microsoft.KeyVault/vaults/secrets].secretName StringStartsWithIgnoreCase '${local.secret_prefix}'
+        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '${local.secret_prefix}'
       )
     )
   EOT
