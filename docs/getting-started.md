@@ -20,11 +20,12 @@ into `state_home` in `tenants/envs/<env>.tfvars`. The keys are:
 |---|---|
 | `foundations/<cloud>` | `foundations/<cloud>/<env>.tfstate` |
 | `tenants` (one per environment, all clouds) | `tenants/<env>.tfstate` |
+| `gitops` (one per environment, hub + all spokes) | `gitops/<env>.tfstate` |
 
-The tenants stack does not take the foundation keys as configuration: it
-derives `foundations/<cloud>/<env>.tfstate` from `state_home` and
-`environment`, so the only thing that has to match is the storage account and
-container.
+The tenants and gitops stacks do not take the foundation keys as
+configuration: they derive `foundations/<cloud>/<env>.tfstate` from
+`state_home` and `environment`, so the only thing that has to match is the
+storage account and container.
 
 Consequence: **every** deploy needs Azure credentials, including the AWS,
 GCP and OCI ones, in addition to the target cloud's. Grant the Azure deploy
@@ -75,8 +76,8 @@ And repository **variables**:
 
 Create GitHub **environments** for the foundations — `azure-prototype`,
 `azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
-environment for the all-clouds tenants job: `tenants-prototype`,
-`tenants-staging`, `tenants-prod`. Attach protection rules (required
+environment for each all-clouds job: `tenants-prototype` … `tenants-prod` and
+`gitops-prototype` … `gitops-prod`. Attach protection rules (required
 reviewers for `*-prod` at minimum). The deploy workflows bind to them
 automatically.
 
@@ -159,7 +160,169 @@ tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
 
-## 6. Wildcard certificate renewal
+## 6. Connect the other clusters to Argo CD (hub and spokes)
+
+Argo CD runs once, on AKS, installed through the Azure Argo CD cluster
+extension and served at `https://argocd.onek8s.lol`. The `gitops` stack joins
+the EKS, GKE and OKE clusters to it as spokes: each gets an
+[argocd-agent](https://github.com/argoproj-labs/argocd-agent) that dials *out*
+to the hub. **No spoke needs a public URL, an inbound firewall rule or a
+reachable API server** — only egress to the hub's endpoint.
+
+### Prerequisites
+
+- The Argo CD extension deployed on the AKS cluster of this environment, in
+  the `argocd` namespace. This stack installs *beside* it and does not manage
+  it; see "The one setting Terraform cannot apply" below for the exception.
+- Every cloud you list as a spoke has its foundation deployed for this
+  environment, and its cluster is reachable from wherever the apply runs.
+  (Terraform's own connection, not the hub's — the hub never dials a spoke.)
+
+### Deploy
+
+```hcl
+# gitops/envs/prototype.tfvars
+spokes = {
+  aws = {}
+  gcp = {}
+  oci = {}
+}
+```
+
+```bash
+cd gitops
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
+```
+
+A cloud left out of `spokes` is skipped entirely — no foundation state read,
+no cluster contacted, no credentials needed — so you can bring them up one at
+a time. Or via Actions: **Deploy GitOps** → environment `prototype`.
+
+What lands where:
+
+| Cluster | What gets installed |
+|---|---|
+| AKS (hub) | argocd-agent **principal**: gRPC on a public LoadBalancer, plus an in-cluster resource proxy and redis proxy. The CA, its leaf certificates and the JWT signing key. One Argo CD cluster secret per spoke. |
+| EKS / GKE / OKE (spokes) | The workload half of Argo CD — application controller, repo server, redis, no `argocd-server` — plus the **agent** and its mTLS material. |
+
+The agents are named `<cloud>-<environment>` by default (`aws-prototype`,
+`gcp-prototype`, `oci-prototype`); `terraform output agents` lists them.
+
+### Verify
+
+```bash
+# The hub's side of the connection
+kubectl --context aks logs -n argocd deploy/argocd-agent-principal | grep -i connected
+# -> "Agent aws-prototype connected successfully"
+
+# The spoke's side
+kubectl --context eks logs -n argocd deploy/argocd-agent-agent | grep -i connected
+# -> "Connected to argocd-agent-principal"
+```
+
+In the Argo CD UI the spokes appear under **Settings → Clusters**, one entry
+per agent.
+
+### Deploy something to a spoke
+
+An `Application` lives in the hub's own `argocd` namespace and names its
+target agent. That is the whole routing mechanism:
+
+```bash
+kubectl --context aks apply -f - <<'EOF'
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-aws
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    path: guestbook
+    targetRevision: HEAD
+  destination:
+    name: aws-prototype        # the agent name — this is the routing key
+    namespace: guestbook
+  syncPolicy:
+    automated: {}
+    syncOptions: [CreateNamespace=true]
+EOF
+```
+
+The principal hands it to the `aws-prototype` agent, the agent creates it
+locally, and the EKS application controller reconciles it. Status flows back
+up the same connection.
+
+### The one setting Terraform cannot apply
+
+The hub's `argocd-server` has to read cached application state through the
+principal's redis proxy, or the UI shows spoke applications as synced but
+cannot draw their resource trees. That is a change to `argocd-cmd-params-cm`,
+which the AKS extension owns and reverts direct edits to — so it has to go
+through the extension:
+
+```bash
+terraform output -raw hub_extension_command   # prints the exact az command
+```
+
+To have Terraform own it instead, import the extension once and flip the
+variable:
+
+```bash
+terraform output -raw hub_extension_import    # prints the exact import command
+# then: manage_hub_extension = true, and put your existing extension settings
+# (SSO, RBAC, redis HA, workload identity) into hub_extension_settings
+```
+
+Terraform will not create an extension that already exists, which is why this
+is opt-in rather than the default.
+
+### Things worth knowing
+
+- **Redis HA.** The extension installs Argo CD with `redis-ha` enabled by
+  default (it needs four nodes). If your hub runs it, the principal's redis
+  address is not `argocd-redis:6379` — set
+  `hub_redis_address = "argocd-redis-ha-haproxy:6379"`.
+- **The hub's endpoint.** Agents dial
+  `<label>.<region>.cloudapp.azure.com`, a DNS label on the AKS load
+  balancer, because the name has to be known before the load balancer exists —
+  it goes into the principal's certificate and into every agent's config in
+  the same apply. `terraform output principal_fqdn` prints it. To use your own
+  name instead, point a CNAME at that FQDN and set both `principal_address`
+  (what agents dial) and `principal_extra_dns_names` (what the certificate
+  covers):
+
+  ```hcl
+  principal_address         = "argocd-agent.onek8s.lol"
+  principal_extra_dns_names = ["argocd-agent.onek8s.lol"]
+  ```
+
+  The certificate is issued by this stack's own CA, not Let's Encrypt — the
+  wildcard from step 7 is irrelevant here, because the only clients are agents
+  that already trust this CA.
+- **Certificate expiry.** Leaves last a year and are reissued on apply once
+  they are within 90 days of expiring (`terraform output certificate_expiry`).
+  Apply the stack at least that often, or the agents eventually stop
+  connecting.
+- **Autonomous spokes.** `spokes = { gcp = { mode = "autonomous" } }` flips
+  that cluster around: it owns its Applications from its own git and the hub
+  becomes a read-only mirror that can still sync, refresh and act on
+  resources.
+- **Removing a spoke.** Order matters, for the same reason inactive clouds
+  cost nothing: dropping a cloud from `spokes` also stops its foundation
+  state being read, which leaves Terraform with no way to reach the cluster it
+  still has to clean up. Tear it down *first*, with the entry still in place,
+  then remove it:
+
+  ```bash
+  terraform destroy -target='module.spoke_aws["aws"]' -var-file=envs/prototype.tfvars
+  # then delete the aws entry from spokes and apply — this removes the hub's
+  # cluster secret and the agent's certificates
+  ```
+
+## 7. Wildcard certificate renewal
 
 The **Renew Certificate** workflow keeps a Let's Encrypt wildcard for the
 Azure-hosted `onek8s.lol` zone in the AKS cluster's Key Vault. It runs daily,

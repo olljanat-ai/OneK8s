@@ -15,15 +15,19 @@ via External Secrets Operator and per-tenant workload identities.
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
 ├── modules/
-│   └── tenant-namespace/   # Reusable tenant module — cloud is a variable
-│       ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
-│       ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
-│       ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
-│       ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
-│       ├── gcp/            #   GSA + WI binding + IAM condition
-│       └── oci/            #   workload-identity IAM policy + secret-name prefix
+│   ├── tenant-namespace/   # Reusable tenant module — cloud is a variable
+│   │   ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
+│   │   ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
+│   │   ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
+│   │   ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
+│   │   ├── gcp/            #   GSA + WI binding + IAM condition
+│   │   └── oci/            #   workload-identity IAM policy + secret-name prefix
+│   └── argocd-spoke/       # One workload cluster attached to the Argo CD hub
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
+│   └── backend/            #   <env>.hcl state config (Azure state home)
+├── gitops/                 # ONE stack: Argo CD hub (AKS) + agents on every spoke
+│   ├── envs/               #   <env>.tfvars: which clouds are spokes
 │   └── backend/            #   <env>.hcl state config (Azure state home)
 ├── .github/workflows/      # PR validation + deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
@@ -48,6 +52,53 @@ Secret Manager **IAM conditions** and OCI **policy conditions** on
 `target.secret.name`. Cross-tenant secret access is blocked in the cloud IAM
 plane, not just in Kubernetes.
 Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
+
+## GitOps: one Argo CD, four clusters
+
+Argo CD runs once, on AKS, installed through the Azure Argo CD cluster
+extension and reachable at `https://argocd.onek8s.lol`. The EKS, GKE and OKE
+clusters join it as **spokes** via
+[argocd-agent](https://github.com/argoproj-labs/argocd-agent): each runs an
+agent that dials *out* to the hub and keeps one long-lived gRPC connection
+open. Application delivery, status, live resource views and pod logs all ride
+back down that connection.
+
+```
+                       ┌──── AKS (hub) ────────────────┐
+                       │ Argo CD (AKS extension)       │
+   Application         │ argocd-agent principal ◄──────┼──┐  ┌──┐  ┌──┐
+   destination.name ──▶│   gRPC :443 (mTLS, own CA)    │  │  │  │  │  │
+                       │   resource proxy / redis proxy│  │  │  │  │  │
+                       └───────────────────────────────┘  │  │  │  │  │
+                                                     EKS ─┘  │  │  │  │
+                                                        GKE ─┘  │  │  │
+                                                           OKE ─┘  │  │
+                          (agents connect outbound; spokes need no inbound)
+```
+
+No spoke needs a public URL, an inbound firewall rule or a reachable API
+server — only egress to the hub. Authentication is mTLS against a CA this
+repo creates and holds: an agent's identity *is* its client certificate, whose
+common name is the agent's name, and that name is what an `Application`
+targets with `spec.destination.name`.
+
+```bash
+cd gitops
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
+```
+
+```hcl
+# gitops/envs/prototype.tfvars — a spoke is one map entry
+spokes = {
+  aws = {}
+  gcp = {}
+  oci = {}
+}
+```
+
+Details: [docs/architecture.md](docs/architecture.md#gitops-hub-and-spokes),
+[modules/argocd-spoke/README.md](modules/argocd-spoke/README.md).
 
 ## Quick start
 
@@ -82,13 +133,14 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 5 stacks), tflint, checkov, and
+- **PR validation** — fmt, validate (all 6 stacks), tflint, checkov, and
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
-- **Deploy Foundations / Deploy Tenants** — separate pipelines; the
-  prototype environment deploys on merge to `main`, other environments via
-  `workflow_dispatch`, authenticated with cloud credentials stored as GitHub
-  secrets. Foundation jobs are gated by the GitHub environments
-  `<cloud>-<env>`, the all-clouds tenants job by `tenants-<env>`.
+- **Deploy Foundations / Deploy Tenants / Deploy GitOps** — separate
+  pipelines; the prototype environment deploys on merge to `main`, other
+  environments via `workflow_dispatch`, authenticated with cloud credentials
+  stored as GitHub secrets. Foundation jobs are gated by the GitHub
+  environments `<cloud>-<env>`, the all-clouds tenants job by `tenants-<env>`
+  and the all-clouds gitops job by `gitops-<env>`.
 - **Renew Certificate** — daily; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault.

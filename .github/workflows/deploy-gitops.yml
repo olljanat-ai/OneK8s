@@ -1,0 +1,39 @@
+name: Deploy GitOps
+
+# The hub-spoke Argo CD topology: the principal on the AKS hub, an agent on
+# every other cloud's cluster. Deploys independently of foundations and
+# tenants; it only consumes foundation remote-state outputs.
+#
+# One stack, one state file per environment, hub and every spoke in a single
+# run — which is also why the run needs every spoke cloud's credentials and
+# CLIs, and binds to the "gitops-<environment>" GitHub environment rather than
+# a per-cloud one.
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "gitops/**"
+  #     - "modules/argocd-spoke/**"
+  #     - ".github/workflows/deploy-gitops.yml"
+  #     - ".github/workflows/_terraform-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "prototype"
+        type: choice
+        options: [prototype, dev, staging, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  gitops:
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: gitops
+      cloud: all
+      environment: ${{ inputs.environment || 'prototype' }}
+      gh_environment: gitops-${{ inputs.environment || 'prototype' }}
+    secrets: inherit
