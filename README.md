@@ -89,6 +89,9 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   `workflow_dispatch`, authenticated with cloud credentials stored as GitHub
   secrets. Foundation jobs are gated by the GitHub environments
   `<cloud>-<env>`, the all-clouds tenants job by `tenants-<env>`.
+- **Renew Certificate** — daily; issues and renews the `*.onek8s.lol`
+  wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
+  `onek8s.lol` zone and imports it into the AKS cluster's Key Vault.
 
 ## License
 

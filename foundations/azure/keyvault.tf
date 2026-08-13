@@ -31,3 +31,12 @@ resource "azurerm_role_assignment" "deployer_secrets_officer" {
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = data.azurerm_client_config.current.object_id
 }
+
+# Certificates are a separate RBAC surface from secrets: importing one needs
+# Certificates Officer even for a principal that may already write secrets.
+# The Renew Certificate workflow imports the Let's Encrypt wildcard here.
+resource "azurerm_role_assignment" "deployer_certificates_officer" {
+  scope                = azurerm_key_vault.this.id
+  role_definition_name = "Key Vault Certificates Officer"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
