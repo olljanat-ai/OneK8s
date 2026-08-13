@@ -92,6 +92,31 @@ terraform apply -var-file=envs/prototype.tfvars
 Or via Actions: **Deploy Foundations** → cloud `aws`, environment
 `prototype`.
 
+### Argo CD on the Azure foundation
+
+`foundations/azure` also installs the Microsoft Argo CD cluster extension and
+publishes its UI on `var.argocd_hostname` (default `argocd.onek8s.lol`)
+through the application routing add-on. Two things must be in place around
+it, neither of which this stack owns:
+
+1. **The certificate.** `var.ingress_certificate_name`
+   (`platform-wildcard-onek8s-lol`) must exist in the environment's Key
+   Vault — run the **Renew Certificate** workflow at least once first. The
+   apply succeeds without it; the ingress just serves the add-on's fallback
+   certificate until the vault has one.
+2. **The DNS record.** Point `argocd.onek8s.lol` at the ingress load
+   balancer. The add-on has no DNS zone delegated to it, so nothing creates
+   the record for you:
+
+   ```bash
+   kubectl get svc -n app-routing-system nginx \
+     -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+   ```
+
+Set `enable_argocd = false` in an environment's tfvars to skip the extension
+(it is in public preview). Details, login and the hub-spoke plan:
+[argocd.md](argocd.md).
+
 ## 4. Onboard tenants
 
 There is one tenants stack and one state file per environment, covering every

@@ -81,6 +81,28 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
 | Tenant namespace | **Azure Managed Namespace** (azapi) | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
+| Platform ingress | application routing add-on (managed NGINX) + Secrets Store CSI | — | — | — |
+| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) | — | — | — |
+
+## GitOps (Azure only, today)
+
+The Azure foundation additionally carries the platform's delivery plane:
+the **Argo CD cluster extension** offered by Microsoft, published on
+`argocd.onek8s.lol` through the **application routing** add-on and
+terminating TLS with the same `platform-wildcard-onek8s-lol` certificate the
+Renew Certificate workflow keeps in Key Vault. The certificate is never
+copied into the cluster by Terraform: the Secrets Store CSI driver mounts it
+straight from the vault, using the add-on's managed identity, whose
+`Key Vault Certificate User` role is ABAC-narrowed to that one certificate so
+it cannot reach tenant secrets.
+
+This is deliberately a **single-cluster install** for now, and deliberately
+placed on the cluster that is meant to become the **hub**: the plan is for
+Argo CD on AKS to drive EKS, GKE and OKE as registered spokes, so there is
+one delivery plane for all four clouds rather than one Argo CD per cloud —
+the same "one stack, all clouds" shape the tenants layer already has. None of
+the spoke registration exists yet. See [argocd.md](argocd.md) for the
+mechanics, the operational commands and the full hub-spoke plan.
 
 ## Secret isolation (the core security invariant)
 
@@ -200,8 +222,19 @@ spec:
   environment it applies to every cloud in `var.tenants` at once: list a
   cloud's tenants only once that cloud's foundation is deployed and its
   cluster is reachable from where the plan runs.
-- AKS uses cluster-local accounts for CI bootstrap (Helm/add-ons). Harden to
-  Entra-only + `kubelogin` once your CI identity has an AAD admin group.
+- AKS uses cluster-local accounts for CI bootstrap (Helm/add-ons, and the
+  Argo CD ingress object). Harden to Entra-only + `kubelogin` once your CI
+  identity has an AAD admin group.
+- The Argo CD extension is in **public preview**, so the Azure foundation
+  pins the `Preview` release train and, with no version pinned, takes Azure's
+  auto-upgrades. Its UI is currently protected by Argo CD's built-in admin
+  account rather than Entra ID SSO, because SSO needs an app registration
+  (directory writes this stack does not do). `enable_argocd = false` opts an
+  environment out of the whole thing.
+- The AKS cluster is the only one with an ingress controller and the only one
+  with GitOps, which makes it a de-facto hub before the hub-spoke work has
+  been done. Until spokes are registered, EKS/GKE/OKE have no delivery plane
+  at all.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
 - All state lives in the Azure Storage state home, so every deploy — AWS,
   GCP and OCI foundations included — needs Azure credentials in addition to

@@ -10,7 +10,7 @@ via External Secrets Operator and per-tenant workload identities.
 
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
-│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy) + Key Vault (RBAC/ABAC)
+│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy, Argo CD) + Key Vault (RBAC/ABAC)
 │   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
@@ -74,6 +74,17 @@ home", so Azure credentials are required for every deploy alongside the
 credentials of every cloud that has tenants. Clouds with no tenants are
 skipped entirely: no foundation state is read and their providers stay
 inert.
+
+## GitOps
+
+The Azure foundation carries the platform's delivery plane: the
+Microsoft-offered **Argo CD cluster extension** (`Microsoft.ArgoCD`),
+published on `https://argocd.onek8s.lol` by the AKS application routing
+add-on and terminating TLS with the `*.onek8s.lol` wildcard mounted straight
+out of Key Vault by the Secrets Store CSI driver. It manages only the AKS
+cluster today; the plan is to make it the **hub** that drives EKS, GKE and
+OKE as spokes. Details and the hub-spoke plan:
+[docs/argocd.md](docs/argocd.md).
 
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
