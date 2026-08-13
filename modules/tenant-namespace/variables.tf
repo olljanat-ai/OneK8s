@@ -30,6 +30,15 @@ variable "foundation" {
       oci:   compartment_id, cluster_id, vault_id, region
   EOT
   type        = any
+
+  # An empty object means terraform_remote_state read a state file that does
+  # not exist (or holds no outputs) — usually wrong foundation_state
+  # coordinates, or a foundation that was never applied. Without this the
+  # failure surfaces as a pile of "Unsupported attribute" errors below.
+  validation {
+    condition     = length(keys(var.foundation)) > 0
+    error_message = "foundation has no attributes: the foundations/<cloud> state for this environment is missing or empty. Deploy that foundation first, and check that foundation_state in tenants/envs/<cloud>-<env>.tfvars points at the same location as foundations/<cloud>/backend/<env>.hcl."
+  }
 }
 
 variable "quota" {

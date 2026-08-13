@@ -4,7 +4,7 @@ environment = "prototype"
 foundation_state = {
   bucket = "onek8s-tfstate"
   key    = "foundations/aws/prototype.tfstate"
-  region = "eu-west-1"
+  region = "eu-north-1"
 }
 
 # Example tenants — identical syntax on every cloud.
