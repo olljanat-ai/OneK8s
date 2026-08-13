@@ -25,7 +25,7 @@ name/prefix slice** of the shared backend:
 
 - Azure: User-Assigned Managed Identity + Federated Identity Credential;
   `Key Vault Secrets User` with an **ABAC condition** on
-  `secretName StringStartsWithIgnoreCase '<tenant>-'`.
+  `@Resource[Microsoft.KeyVault/vaults/secrets:name] StringStartsWith '<tenant>-'`.
 - AWS: IAM role via IRSA; policy resource restricted to
   `arn:...:secret:<env>/<tenant>/*`, plus `kms:Decrypt` allowed only
   `ViaService` Secrets Manager.
