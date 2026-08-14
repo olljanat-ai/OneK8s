@@ -19,9 +19,10 @@ resource "azurerm_kubernetes_cluster" "this" {
     mode               = "Auto"
   }
 
-  oidc_issuer_enabled       = true
-  workload_identity_enabled = true
-  azure_policy_enabled      = true
+  oidc_issuer_enabled              = true
+  workload_identity_enabled        = true
+  azure_policy_enabled             = false
+  http_application_routing_enabled = false
 
   # Local accounts stay enabled so this stack's Helm provider can bootstrap
   # add-ons with the cluster client certificate. Human access should go
