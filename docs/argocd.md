@@ -11,7 +11,7 @@ publishes its UI on `https://argocd.onek8s.lol`.
   (A record, out       │  Traefik ──HTTP──▶ argocd-server                       │
    of band) ──────────▶│      │                                                 │
                        │      │ Ingress "argocd": a host and a backend,         │
-                       │      │ no class and no TLS section                     │
+                       │      │ no TLS section, no certificate                  │
                        │      ▼                                                 │
                        │  default TLSStore ──▶ Secret "platform-wildcard-tls"   │
                        │                            ▲                           │
@@ -66,10 +66,20 @@ No AKS add-on is involved in any of it: the same External Secrets install
 that serves every tenant serves the platform, which is what makes this
 identical to the AWS, GCP and OCI clusters.
 
-So the `argocd` Ingress names no secret and no class at all — it is the same
-four lines a tenant writes. Its TLS is the ingress' business. The certificate
-is referenced without a version, so a renewal is picked up on the next
-rotation poll (default two minutes) with no Terraform apply.
+So the `argocd` Ingress names no certificate and no secret — its TLS is the
+ingress' business, the same way a tenant's is. (It does name the class, only
+because a Terraform-managed Ingress that leaves it out would see the API
+server's default-class mutation as drift on every plan.) The certificate is
+referenced without a version, so a renewal is picked up on ESO's next hourly
+refresh rather than by an apply here.
+
+The extension's own Ingress is turned off (`server.ingress.enabled = false`)
+and `argocd.tf` owns the object instead. Two Ingresses for one host would
+race, and it is also how an Azure-specific annotation creeps back in — an
+Ingress annotated for the application routing add-on makes that add-on
+generate a `SecretProviderClass`, which is exactly what blocks disabling the
+Key Vault secrets provider add-on (see
+[getting-started.md](getting-started.md), Troubleshooting).
 
 DNS stays out of the cluster's hands: no cluster on any cloud writes the
 `onek8s.lol` zone, so `argocd.onek8s.lol` is an A record pointed at the

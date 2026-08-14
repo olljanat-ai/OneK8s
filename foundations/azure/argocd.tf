@@ -85,6 +85,16 @@ locals {
       # and argocd-server redirect each other in a loop.
       "configs.params.server\\.insecure" = "true"
 
+      # The chart's own Ingress stays off: the object below is the one that
+      # carries the class, the host and (deliberately) no certificate. Two
+      # Ingresses for one host would race, and an extension-managed one is
+      # also how an Azure-specific annotation creeps back in — which matters
+      # more than it sounds, because an Ingress annotated for the application
+      # routing add-on makes that add-on generate a SecretProviderClass, and
+      # AKS refuses to disable the Key Vault secrets provider add-on while
+      # any SecretProviderClass exists.
+      "server.ingress.enabled" = "false"
+
       # Dex is only needed to bridge to an external IdP. Entra ID SSO on this
       # extension goes through Argo CD's own OIDC support, so nothing needs
       # Dex today and it is one less deployment on a small node pool.

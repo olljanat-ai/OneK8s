@@ -346,10 +346,16 @@ spec:
   the certificate is now read by External Secrets, the component that already
   reads every tenant secret, with the same ABAC narrowing to one certificate,
   so the cluster carries no Azure-only add-on for either job. Two
-  consequences on an existing environment: the load balancer address changes,
+  consequences on an existing environment. The load balancer address changes,
   and the add-on's external-dns is gone with it, so the records it kept are
   now stale and unmanaged — repoint the A record at the new address and
-  delete the `externaldns-` TXT record that recorded its ownership.
+  delete the `externaldns-` TXT record that recorded its ownership. And the
+  Key Vault secrets provider add-on cannot be disabled while a
+  `SecretProviderClass` exists, which the app routing add-on generated from
+  the annotated Argo CD Ingress: that Ingress and its generated class have to
+  be deleted before the apply, because the Kubernetes provider is configured
+  from the cluster resource and so nothing in the cluster can be ordered
+  ahead of it.
 - Reading the Key Vault certificate through External Secrets means the
   private key is fetched by a cluster component and written to a Kubernetes
   Secret, where the Secrets Store CSI driver would have had kubelet mount it

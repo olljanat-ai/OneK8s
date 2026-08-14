@@ -143,18 +143,45 @@ Two things have to be true around it:
 Hostnames are one label deep — `*.onek8s.lol` covers
 `web-team-alpha.onek8s.lol`, not `web.team-alpha.onek8s.lol`.
 
-> **Migrating an Azure environment off the application routing add-on.**
-> Removing the add-on deletes its load balancer *and* the external-dns that
-> came with it, so the records it kept are stale and now unmanaged. Repoint
-> the A record at the Traefik Service's address and delete the TXT record
-> that recorded the old controller's ownership:
->
-> ```bash
-> az network dns record-set a update -g <zone rg> -z onek8s.lol -n argocd \
->   --set arecords[0].ipv4Address=<new address>
-> az network dns record-set txt list -g <zone rg> -z onek8s.lol \
->   --query "[?contains(name,'argocd')].name" -o tsv     # then: ... txt delete
-> ```
+#### Migrating an Azure environment off the add-ons
+
+An environment that already ran the application routing add-on needs one
+manual step **before** the apply, and one after it.
+
+**Before.** Disabling the Key Vault secrets provider add-on fails while any
+`SecretProviderClass` exists in the cluster:
+
+```
+"message": "AzureKeyvaultSecretsProvider addon cannot be disabled due to
+            more than 0 Secret Provider Classes"
+```
+
+The add-on generated one from the annotation on the old Argo CD Ingress
+(`keyvault-argocd`), and Terraform cannot order that cleanup itself: the
+Kubernetes provider is configured *from* the cluster resource, so no
+Kubernetes object can be updated before it. Delete the annotated Ingress
+first — otherwise the add-on immediately regenerates the class — then the
+class, then apply:
+
+```bash
+kubectl -n argocd delete ingress argocd
+kubectl get secretproviderclass -A          # expect only keyvault-argocd
+kubectl -n argocd delete secretproviderclass keyvault-argocd
+
+terraform apply -var-file=envs/prototype.tfvars   # recreates the Ingress on Traefik
+```
+
+**After.** Removing the add-on deletes its load balancer *and* the
+external-dns that came with it, so the records it kept are stale and now
+unmanaged. Repoint the A record at the Traefik Service's address and delete
+the TXT record that recorded the old controller's ownership:
+
+```bash
+az network dns record-set a update -g <zone rg> -z onek8s.lol -n argocd \
+  --set arecords[0].ipv4Address=<new address>
+az network dns record-set txt list -g <zone rg> -z onek8s.lol \
+  --query "[?contains(name,'argocd')].name" -o tsv     # then: ... txt delete
+```
 
 ### Argo CD on the Azure foundation
 
@@ -410,6 +437,22 @@ that cloud. A cloud that refuses the write fails the run but does not stop the
 other two — check the run summary, which lists every target and its result.
 
 ## Troubleshooting
+
+### `AzureKeyvaultSecretsProvider addon cannot be disabled`
+
+```
+│ Error: updating Kubernetes Cluster … unexpected status 400 (400 Bad Request)
+│   "message": "AzureKeyvaultSecretsProvider addon cannot be disabled due to
+│               more than 0 Secret Provider Classes"
+```
+
+AKS will not turn the add-on off while a `SecretProviderClass` still exists,
+and the application routing add-on generates one per Ingress annotated with
+`kubernetes.azure.com/tls-cert-keyvault-uri`. This is the one-time migration
+off the add-ons: delete the annotated Ingress, then the generated class, then
+re-apply — the sequence is under **Ingress → Migrating an Azure environment
+off the add-ons** above. Deleting the class alone is not enough; while the
+annotated Ingress is still there, the add-on writes it back.
 
 ### `foundation has no attributes`
 
