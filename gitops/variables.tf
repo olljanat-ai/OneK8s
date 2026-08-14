@@ -51,3 +51,46 @@ variable "spokes" {
     error_message = "Spokes are keyed by cloud, and the supported spokes are: aws, gcp, oci. (azure is the hub and registers itself.)"
   }
 }
+
+variable "platform_apps" {
+  description = <<-EOT
+    The Argo CD "root application": one Terraform-managed Application on the
+    hub, pointing Argo CD at gitops/argocd/ in this repository.
+
+    That directory is a Helm chart holding the platform's AppProject and its
+    ApplicationSets, so everything Argo CD deploys — to the hub and to every
+    spoke — is version-controlled here rather than configured in the UI. This
+    stack bootstraps it and owns nothing else in Argo CD; after the first
+    apply, adding or changing an application is a commit.
+
+    The environment-specific values are passed down from here (environment,
+    repository, revision, domain, tenant), which is why one copy of
+    gitops/argocd/ serves every environment.
+
+    Set enabled = false for an environment that should register spokes but not
+    run any platform application. It is also skipped automatically when the
+    hub's foundation was applied with enable_argocd = false.
+  EOT
+  type = object({
+    enabled = optional(bool, true)
+    # Name of the root Application on the hub.
+    name = optional(string, "platform-gitops")
+    # Argo CD project the ROOT application belongs to. It cannot be the
+    # project the chart creates — that one does not exist yet when the root
+    # application is first reconciled.
+    project = optional(string, "default")
+    # Repository Argo CD reads. Must be reachable by the hub's repo-server;
+    # a private repository additionally needs credentials registered with
+    # Argo CD (see docs/hello-app.md).
+    repo_url        = optional(string, "https://github.com/olljanat-ai/OneK8s.git")
+    target_revision = optional(string, "main")
+    path            = optional(string, "gitops/argocd")
+    # Wildcard domain the applications' hosts sit under: "<cloud>-<app>.<domain>".
+    domain = optional(string, "onek8s.lol")
+    # Tenant namespace the platform's example applications are released into.
+    # It must already exist on every targeted cluster — the tenants stack
+    # creates it, Argo CD is barred from doing so.
+    tenant = optional(string, "team-alpha")
+  })
+  default = {}
+}

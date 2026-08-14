@@ -184,8 +184,11 @@ first apply to sit in `Pending` for a few minutes while a node is added.
 - Argo CD has cluster-wide privileges on the cluster it runs on, which is a
   strictly larger blast radius than the per-tenant identities in
   [ADR-0001](adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
-  Nothing today restricts which repositories may be synced; add `AppProject`
-  restrictions before opening it to tenants.
+  Applications brought in by the root Application are confined by the
+  `onek8s-platform` `AppProject` (this repository only, one namespace, no
+  cluster-scoped resources — see [hello-app.md](hello-app.md)), but the
+  built-in `default` project is still wide open, so anything created outside
+  that root Application is unrestricted.
 
 ## AKS as the hub of a hub-spoke topology
 
@@ -344,9 +347,42 @@ generators:
 
 The hub itself is *not* labelled — Argo CD's built-in
 `https://kubernetes.default.svc` entry has no Secret — so a cluster-generator
-selector like the above hits the spokes only. Match on
-`argocd.argoproj.io/secret-type: cluster` with no further labels to include
-the hub as well.
+selector like the above hits the spokes only. Including the hub means adding it
+as a one-element `list` generator alongside the cluster one, which is what
+`gitops/argocd/templates/applicationset-hello.yaml` does.
+
+### What Argo CD deploys, and where that is configured
+
+Argo CD's own configuration is version-controlled rather than clicked
+together, on the "app of apps" pattern. `gitops/root-app.tf` creates **one**
+Application on the hub:
+
+```
+root-app.tf ──▶ Application "platform-gitops"  (project: default)
+                  └── path gitops/argocd  ──▶ AppProject onek8s-platform
+                                              ApplicationSet hello
+                                                ├── hello-azure  (hub, in-cluster)
+                                                ├── hello-aws    (spoke)
+                                                ├── hello-gcp    (spoke)
+                                                └── hello-oci    (spoke)
+```
+
+`gitops/argocd/` is a Helm chart, and the root Application supplies its values
+from `var.environment` and `var.platform_apps` — the environment, the
+repository and revision to sync, the wildcard domain and the tenant namespace.
+That is what lets one copy of the directory serve every environment: the
+cluster generator's selector and the applications' hostnames follow the
+environment rather than being committed per environment.
+
+Terraform owns nothing else in Argo CD. After the first apply, adding an
+application or changing one is a commit; `terraform apply` is only needed to
+move the whole delivery plane to a different repository, revision or
+environment. `platform_apps = { enabled = false }` registers spokes without
+deploying anything, and the root Application is skipped automatically when the
+hub was applied with `enable_argocd = false`.
+
+The application deployed today is the `hello` example:
+[hello-app.md](hello-app.md).
 
 ### Operating it
 

@@ -1,0 +1,46 @@
+# Defaults for a manual `helm template`. In a deployed environment every value
+# down to "apps" is overridden by the root Application, which gitops/root-app.tf
+# renders from var.environment and var.platform_apps — so one copy of this chart
+# serves prototype, dev, staging and prod without a per-environment directory.
+
+# Selects the spokes an ApplicationSet's cluster generator matches
+# (onek8s.io/environment on the cluster Secret), and is passed on to the
+# applications themselves.
+environment: prototype
+
+# Where the applications' manifests come from. This is the same repository the
+# root Application syncs, so a change to a chart and a change to the Argo CD
+# object that deploys it travel together.
+repoURL: https://github.com/olljanat-ai/OneK8s.git
+targetRevision: main
+
+# Namespace the Argo CD extension is released into on the hub.
+argocdNamespace: argocd
+
+# The wildcard the platform ingress serves. Application hosts are one label
+# deep under it: "<cloud>-<app>.<domain>".
+domain: onek8s.lol
+
+# Tenant namespace the platform's example applications are released into. It is
+# created by the tenants stack — Argo CD never creates it — and its namespaced
+# SecretStore is what the applications read secrets through.
+tenant: team-alpha
+
+project:
+  name: onek8s-platform
+
+apps:
+  hello:
+    enabled: true
+    # Chart path inside this repository.
+    path: apps/hello/chart
+    # Host label: "<cloud>-hello.<domain>".
+    hostPrefix: hello
+    # The hub (AKS) is not a spoke and has no labelled cluster Secret, so an
+    # ApplicationSet cluster generator cannot select it. It is added as one
+    # static list element instead; "in-cluster" is the name Argo CD gives the
+    # cluster it runs on.
+    hub:
+      enabled: true
+      cloud: azure
+      cluster: in-cluster

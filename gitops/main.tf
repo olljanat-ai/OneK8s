@@ -18,6 +18,12 @@ locals {
   active = { for c in local.spoke_clouds : c => length(local.spokes_by_cloud[c]) > 0 }
 
   any_active = length(var.spokes) > 0
+
+  # The hub's state is read for two independent reasons: to register spokes
+  # against it, and to plant the root Application on it (root-app.tf). Either
+  # one alone is enough — a hub-only environment with no spokes yet still gets
+  # its delivery plane.
+  hub_needed = local.any_active || var.platform_apps.enabled
 }
 
 # Dependency direction: gitops reads foundation outputs, never the reverse —
@@ -28,7 +34,7 @@ locals {
 # of them; only the blob key differs, and it is derived rather than configured
 # so it cannot drift away from foundations/<cloud>/backend/<env>.hcl.
 data "terraform_remote_state" "hub" {
-  count = local.any_active ? 1 : 0
+  count = local.hub_needed ? 1 : 0
 
   backend = "azurerm"
   config = merge(var.state_home, {
