@@ -38,6 +38,26 @@ output "account_id" {
   value       = data.aws_caller_identity.current.account_id
 }
 
+output "ingress_class_name" {
+  description = "IngressClass of the Traefik ingress controller (the cluster default), null when ingress is disabled."
+  value       = var.enable_ingress ? local.ingress_class_name : null
+}
+
+output "ingress_namespace" {
+  description = "Namespace the ingress controller runs in; tenant NetworkPolicies allow ingress from it."
+  value       = var.enable_ingress ? local.ingress_namespace : null
+}
+
+output "ingress_default_certificate_secret" {
+  description = "TLS secret in the ingress namespace that Traefik serves for hosts without a certificate of their own — the platform wildcard, read from Secrets Manager by External Secrets."
+  value       = var.enable_ingress ? local.ingress_tls_secret_name : null
+}
+
+output "ingress_dashboard_url" {
+  description = "URL of the Traefik dashboard, null when ingress or the dashboard is disabled."
+  value       = var.enable_ingress ? module.ingress[0].dashboard_url : null
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment

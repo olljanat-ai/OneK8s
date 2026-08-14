@@ -51,20 +51,26 @@ variable "eso_chart_version" {
   default     = "2.9.0"
 }
 
+variable "enable_ingress" {
+  description = "Install Traefik as the cluster's ingress controller, with the Key Vault wildcard as its default certificate."
+  type        = bool
+  default     = true
+}
+
+variable "traefik_chart_version" {
+  description = "Traefik Helm chart version."
+  type        = string
+  default     = "41.2.0"
+}
+
 variable "ingress_certificate_name" {
-  description = "Key Vault certificate the application routing ingress terminates TLS with. Reserved 'platform-' prefix: it is the wildcard the Renew Certificate workflow maintains."
+  description = "Key Vault certificate the ingress controller terminates TLS with, for every host that carries no certificate of its own. Reserved 'platform-' prefix: it is the wildcard the Renew Certificate workflow maintains."
   type        = string
   default     = "platform-wildcard-onek8s-lol"
 }
 
-variable "ingress_dns_zone_ids" {
-  description = "Azure DNS zone resource IDs the application routing add-on may manage records in. Empty leaves DNS out of band; the add-on's identity is granted DNS Zone Contributor on each zone listed."
-  type        = list(string)
-  default     = []
-}
-
 variable "enable_argocd" {
-  description = "Install the Microsoft-offered Argo CD cluster extension and publish its UI through the application routing ingress."
+  description = "Install the Microsoft-offered Argo CD cluster extension and publish its UI through the platform ingress."
   type        = bool
   default     = true
 }
@@ -163,4 +169,10 @@ variable "tags" {
   description = "Tags applied to all resources."
   type        = map(string)
   default     = {}
+}
+
+variable "ingress_dashboard_hostname" {
+  description = "Host the Traefik dashboard and API are published on. Served UNAUTHENTICATED over the public load balancer — anyone who reaches it reads the cluster's whole routing configuration — so it is a lab convenience; set it to null to keep the dashboard reachable only through kubectl port-forward. Must be one label deep under the wildcard, and needs a DNS record pointed at the ingress load balancer."
+  type        = string
+  default     = "azure-traefik.onek8s.lol"
 }

@@ -15,6 +15,7 @@ via External Secrets Operator and per-tenant workload identities.
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
 ├── modules/
+│   ├── platform-ingress/   # Traefik + the platform wildcard as its default certificate
 │   └── tenant-namespace/   # Reusable tenant module — cloud is a variable
 │       ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
 │       ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
@@ -75,13 +76,44 @@ credentials of every cloud that has tenants. Clouds with no tenants are
 skipped entirely: no foundation state is read and their providers stay
 inert.
 
+## Ingress
+
+Every cluster runs **Traefik**, installed from one module, with its
+IngressClass as the cluster default and the `*.onek8s.lol` wildcard as its
+**default certificate** — the certificate the Renew Certificate workflow
+keeps in Key Vault and distributes to Secrets Manager, Secret Manager and OCI
+Vault, read back in-cluster by External Secrets on every one of them.
+Publishing an app is therefore identical on all four clouds, and carries no
+TLS configuration of its own:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: web, namespace: team-alpha }
+spec:
+  rules:
+    - host: web-team-alpha.onek8s.lol      # <app>-<tenant>.onek8s.lol
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: web, port: { number: 80 } } } }
+```
+
+Names are one label deep, because that is what the wildcard covers. DNS is
+out of band on every cloud — point a record at `kubectl -n traefik get svc
+traefik`. Turn the whole thing off per environment with `enable_ingress`.
+
+Each cluster also publishes its Traefik dashboard and API on
+`https://<cloud>-traefik.onek8s.lol/`, **unauthenticated** — a deliberate lab
+convenience, switched off per environment with
+`ingress_dashboard_hostname = null`.
+
 ## GitOps
 
 The Azure foundation carries the platform's delivery plane: the
 Microsoft-offered **Argo CD cluster extension** (`Microsoft.ArgoCD`),
-published on `https://argocd.onek8s.lol` by the AKS application routing
-add-on and terminating TLS with the `*.onek8s.lol` wildcard mounted straight
-out of Key Vault by the Secrets Store CSI driver. Sign-in is **Entra ID**,
+published on `https://argocd.onek8s.lol` by the same Traefik ingress every
+cloud runs and terminating TLS with the `*.onek8s.lol` wildcard that ingress
+serves by default. Sign-in is **Entra ID**,
 with Entra groups mapped to Argo CD roles and no client secret anywhere —
 the SSO app authenticates with the cluster's federated credential. It manages
 only the AKS cluster today; the plan is to make it the **hub** that drives

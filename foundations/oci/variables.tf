@@ -107,8 +107,44 @@ variable "cilium_chart_version" {
   default     = "1.19.6"
 }
 
+variable "enable_ingress" {
+  description = "Install Traefik as the cluster's ingress controller, with the distributed platform wildcard as its default certificate."
+  type        = bool
+  default     = true
+}
+
+variable "traefik_chart_version" {
+  description = "Traefik Helm chart version."
+  type        = string
+  default     = "41.2.0"
+}
+
+variable "ingress_certificate_name" {
+  description = "Vault secret holding the platform wildcard certificate, as the Renew Certificate workflow's distribute mode writes it. Reserved 'platform-' prefix: no tenant identity can read it."
+  type        = string
+  default     = "platform-wildcard-onek8s-lol"
+}
+
+variable "ingress_load_balancer_min_mbps" {
+  description = "Minimum bandwidth of the ingress load balancer's flexible shape, in Mbps. 10 is the floor OCI offers and what the shape is billed on."
+  type        = number
+  default     = 10
+}
+
+variable "ingress_load_balancer_max_mbps" {
+  description = "Maximum bandwidth of the ingress load balancer's flexible shape, in Mbps."
+  type        = number
+  default     = 100
+}
+
 variable "freeform_tags" {
   description = "Extra freeform tags applied to taggable resources."
   type        = map(string)
   default     = {}
+}
+
+variable "ingress_dashboard_hostname" {
+  description = "Host the Traefik dashboard and API are published on. Served UNAUTHENTICATED over the public load balancer — anyone who reaches it reads the cluster's whole routing configuration — so it is a lab convenience; set it to null to keep the dashboard reachable only through kubectl port-forward. Must be one label deep under the wildcard, and needs a DNS record pointed at the ingress load balancer."
+  type        = string
+  default     = "oci-traefik.onek8s.lol"
 }

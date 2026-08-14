@@ -40,6 +40,40 @@ provider. That is exactly what the `tenants` stack does.
 | K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` | no annotation needed |
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` |
+| Ingress reachability | NetworkPolicy allowing the `traefik` namespace (additive to the managed namespace's own policy) | same | same | same |
+
+## Publishing an application
+
+The foundation's ingress controller (`modules/platform-ingress`) is Traefik
+on every cloud, its IngressClass is the cluster default and the platform
+wildcard is its default certificate, so a tenant `Ingress` names neither:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: team-alpha
+spec:
+  rules:
+    - host: web-team-alpha.onek8s.lol      # <app>-<tenant>.onek8s.lol, one label deep
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+```
+
+Reaching it needs one hole in the tenant's "same namespace only" ingress
+rule, which the module opens itself: a second NetworkPolicy allowing the
+controller's namespace, matched by the `kubernetes.io/metadata.name` label
+the API server maintains. `var.ingress_controller_namespace` names it
+(default `traefik`) and must match the foundation's; set it to `""` on a
+cluster with no ingress controller and no allowance is created.
 
 ## Isolation model
 

@@ -42,13 +42,23 @@ output "argocd_url" {
 }
 
 output "ingress_class_name" {
-  description = "IngressClass of the application routing add-on, for platform services published on this cluster."
-  value       = local.ingress_class_name
+  description = "IngressClass of the Traefik ingress controller (the cluster default), null when ingress is disabled."
+  value       = var.enable_ingress ? local.ingress_class_name : null
 }
 
-output "ingress_certificate_uri" {
-  description = "Version-less Key Vault certificate URI to annotate ingresses with (kubernetes.azure.com/tls-cert-keyvault-uri)."
-  value       = local.ingress_certificate_uri
+output "ingress_namespace" {
+  description = "Namespace the ingress controller runs in; tenant NetworkPolicies allow ingress from it."
+  value       = var.enable_ingress ? local.ingress_namespace : null
+}
+
+output "ingress_default_certificate_secret" {
+  description = "TLS secret in the ingress namespace that Traefik serves for hosts without a certificate of their own — the platform wildcard, read from Key Vault by External Secrets."
+  value       = var.enable_ingress ? local.ingress_tls_secret_name : null
+}
+
+output "ingress_dashboard_url" {
+  description = "URL of the Traefik dashboard, null when ingress or the dashboard is disabled."
+  value       = var.enable_ingress ? module.ingress[0].dashboard_url : null
 }
 
 output "environment" {

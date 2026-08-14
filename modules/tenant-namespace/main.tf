@@ -16,6 +16,8 @@ module "azure" {
   quota                = var.quota
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
 }
 
 module "aws" {
@@ -32,6 +34,8 @@ module "aws" {
   quota                = var.quota
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
 }
 
 module "gcp" {
@@ -47,6 +51,8 @@ module "gcp" {
   quota                = var.quota
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
 }
 
 # OCI needs an explicit providers block: its IAM policies must be written
@@ -70,4 +76,6 @@ module "oci" {
   quota                = var.quota
   namespace_labels     = var.namespace_labels
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
 }

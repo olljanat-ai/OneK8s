@@ -87,6 +87,9 @@ module "common" {
   quota            = var.quota
 
   service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
+
   service_account_annotations = {
     "eks.amazonaws.com/role-arn" = aws_iam_role.tenant.arn
   }

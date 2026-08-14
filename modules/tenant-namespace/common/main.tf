@@ -60,6 +60,41 @@ resource "kubernetes_network_policy_v1" "same_namespace_only" {
   }
 }
 
+# The one hole in "same namespace only": the platform ingress controller,
+# which is what makes a tenant's Ingress reachable at all. NetworkPolicies are
+# additive, so this is a separate object rather than a clause of the one above
+# — which is what lets it apply on Azure too, where the namespace (and its
+# AllowSameNamespace policy) is managed by AKS and not created here.
+#
+# The namespace is matched by kubernetes.io/metadata.name, the label the API
+# server maintains itself, so nothing has to label the ingress namespace for
+# this to hold.
+resource "kubernetes_network_policy_v1" "allow_platform_ingress" {
+  count = var.ingress_controller_namespace == "" ? 0 : 1
+
+  metadata {
+    name      = "allow-platform-ingress"
+    namespace = local.namespace
+  }
+
+  spec {
+    pod_selector {}
+    policy_types = ["Ingress"]
+
+    ingress {
+      from {
+        namespace_selector {
+          match_labels = {
+            "kubernetes.io/metadata.name" = var.ingress_controller_namespace
+          }
+        }
+      }
+    }
+  }
+
+  depends_on = [kubernetes_namespace_v1.this]
+}
+
 # --- Tenant workload identity binding ---------------------------------------
 resource "kubernetes_service_account_v1" "workload" {
   metadata {

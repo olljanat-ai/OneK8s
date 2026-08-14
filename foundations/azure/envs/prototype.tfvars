@@ -4,12 +4,9 @@ name_prefix         = "onek8s"
 system_node_count   = 1
 system_node_vm_size = "Standard_B2s"
 
-# The onek8s.lol zone lives outside this stack; handing it to the application
-# routing add-on lets external-dns keep the record of every published Ingress
-# host, "argocd.onek8s.lol" included.
-ingress_dns_zone_ids = [
-  "/subscriptions/54e30869-75a2-47ed-8b32-1057e61707f0/resourceGroups/rg-onek8s-argocd/providers/Microsoft.Network/dnsZones/onek8s.lol",
-]
+# DNS is out of band on every cloud: the onek8s.lol zone lives outside this
+# stack, and the record for each published host is pointed at the ingress
+# load balancer by hand. See docs/getting-started.md.
 
 # Argo CD: one node, so Redis stays single-replica. The host is covered by the
 # platform wildcard certificate in this environment's Key Vault.

@@ -92,24 +92,140 @@ terraform apply -var-file=envs/prototype.tfvars
 Or via Actions: **Deploy Foundations** → cloud `aws`, environment
 `prototype`.
 
+### Ingress
+
+Every foundation installs **Traefik** as the cluster's ingress controller
+(`enable_ingress`, on by default), with the platform wildcard as its default
+certificate. Publishing an application is therefore the same on all four
+clouds — an `Ingress` with a host and a backend, no `ingressClassName` and no
+`tls:` section:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  namespace: team-alpha
+spec:
+  rules:
+    - host: web-team-alpha.onek8s.lol       # <app>-<tenant>.onek8s.lol
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 80
+```
+
+Two things have to be true around it:
+
+1. **The certificate exists.** `platform-wildcard-onek8s-lol` must be in the
+   environment's Key Vault (run **Renew Certificate** once), and — for EKS,
+   GKE and OKE — have been copied out with the workflow's `distribute` mode.
+   Until then the `ExternalSecret` stays unresolved and Traefik serves its own
+   self-signed certificate; nothing fails. On a brand-new environment the
+   order is: apply the foundation, run the renewal (it reads the vault out of
+   the foundation's state), then let the ingress pick the certificate up
+   within the hour — no second apply needed.
+2. **The name resolves.** No cluster writes DNS, on any cloud: take the
+   address from the controller's Service and point an A record (a CNAME on
+   AWS, where the load balancer has a hostname) at it, once per published
+   host.
+
+   ```bash
+   kubectl -n traefik get svc traefik \
+     -o jsonpath='{.status.loadBalancer.ingress[0]}'
+   ```
+
+Hostnames are one label deep — `*.onek8s.lol` covers
+`web-team-alpha.onek8s.lol`, not `web.team-alpha.onek8s.lol`.
+
+#### The Traefik dashboard
+
+Each cluster publishes Traefik's own dashboard and API on
+`https://<cloud>-traefik.onek8s.lol/` — `azure-traefik`, `aws-traefik`,
+`gcp-traefik`, `oci-traefik` — with the UI at `/dashboard/` (the bare host
+redirects there) and the API at `/api`. It rides the same load balancer and
+the same wildcard certificate as everything else, so it needs the same kind
+of manual A record.
+
+**There is no authentication on it.** Whoever reaches the host reads that
+cluster's whole routing configuration: every router, service, middleware and
+which certificates are loaded. It is deliberate for a lab and wrong for
+anything else — set `ingress_dashboard_hostname = null` in that environment's
+tfvars and reach it locally instead:
+
+```bash
+kubectl -n traefik port-forward deploy/traefik 8080:8080   # /dashboard/
+```
+
+So a fully published cluster has one record per tenant host plus one for the
+dashboard, all pointed at the same address:
+
+```
+web-team-alpha.onek8s.lol   A   <ingress address>
+azure-traefik.onek8s.lol    A   <ingress address>
+```
+
+#### Migrating an Azure environment off the add-ons
+
+An environment that already ran the application routing add-on needs one
+manual step **before** the apply, and one after it.
+
+**Before.** Disabling the Key Vault secrets provider add-on fails while any
+`SecretProviderClass` exists in the cluster:
+
+```
+"message": "AzureKeyvaultSecretsProvider addon cannot be disabled due to
+            more than 0 Secret Provider Classes"
+```
+
+The add-on generated one from the annotation on the old Argo CD Ingress
+(`keyvault-argocd`), and Terraform cannot order that cleanup itself: the
+Kubernetes provider is configured *from* the cluster resource, so no
+Kubernetes object can be updated before it. Delete the annotated Ingress
+first — otherwise the add-on immediately regenerates the class — then the
+class, then apply:
+
+```bash
+kubectl -n argocd delete ingress argocd
+kubectl get secretproviderclass -A          # expect only keyvault-argocd
+kubectl -n argocd delete secretproviderclass keyvault-argocd
+
+terraform apply -var-file=envs/prototype.tfvars   # recreates the Ingress on Traefik
+```
+
+**After.** Removing the add-on deletes its load balancer *and* the
+external-dns that came with it, so the records it kept are stale and now
+unmanaged. Repoint the A record at the Traefik Service's address and delete
+the TXT record that recorded the old controller's ownership:
+
+```bash
+az network dns record-set a update -g <zone rg> -z onek8s.lol -n argocd \
+  --set arecords[0].ipv4Address=<new address>
+az network dns record-set txt list -g <zone rg> -z onek8s.lol \
+  --query "[?contains(name,'argocd')].name" -o tsv     # then: ... txt delete
+```
+
 ### Argo CD on the Azure foundation
 
 `foundations/azure` also installs the Microsoft Argo CD cluster extension and
 publishes its UI on `var.argocd_hostname` (default `argocd.onek8s.lol`)
-through the application routing add-on, behind Entra ID sign-in. Three things
+through that same Traefik ingress, behind Entra ID sign-in. Three things
 must be in place around it, none of which this stack owns:
 
 1. **The certificate.** `var.ingress_certificate_name`
    (`platform-wildcard-onek8s-lol`) must exist in the environment's Key
    Vault — run the **Renew Certificate** workflow at least once first. The
-   apply succeeds without it; the ingress just serves the add-on's fallback
-   certificate until the vault has one.
-2. **The DNS zone.** List it in `ingress_dns_zone_ids` and the add-on's
-   external-dns keeps the record for every published Ingress host. The stack
-   grants the add-on's identity DNS Zone Contributor on each zone; if that
-   grant already exists out of band, import it (see
-   [argocd.md](argocd.md)). Leave the list empty to point records by hand
-   instead.
+   Argo CD Ingress names no certificate of its own; it is served the
+   ingress' default one.
+2. **The DNS record.** `argocd.onek8s.lol` is a record like any other tenant
+   host: point it at the ingress load balancer by hand (see **Ingress**
+   above). Nothing in the cluster maintains it, so it has to be repointed if
+   that load balancer is ever replaced.
 3. **The Entra objects.** A user-assigned managed identity for the Argo CD
    components, an app registration for sign-in with
    `https://<hostname>/auth/callback` as a redirect URI and the groups claim
@@ -261,12 +377,24 @@ cover it. Drop it from `domains` if the zone apex is served elsewhere.
 ### Consuming it from the cluster
 
 The certificate is a normal Key Vault certificate, readable through its
-secret of the same name. Platform workloads (ingress, for example) need an
-identity with *Key Vault Secrets User* on `platform-` the way
-`modules/tenant-namespace/azure` grants it on `<tenant>-`; the tenant
-identities cannot read it, by design. Nothing in the cluster is restarted
-when a new version is imported — whatever consumes the certificate is
-responsible for picking it up.
+secret of the same name. On AKS the consumer is the Traefik ingress, and it
+reads the vault the same way a tenant reads its own secrets: an ESO
+`SecretStore` authenticating as a user-assigned identity that
+`foundations/azure/ingress.tf` creates, federates to the ingress'
+ServiceAccount and grants *Key Vault Secrets User* — ABAC-narrowed to this one
+certificate. Tenant identities cannot read it, by design.
+
+What the vault returns for a certificate is the PEM bundle that was imported,
+key followed by chain, so the `ExternalSecret` splits it with `filterPEM`
+into the `tls.crt` and `tls.key` of `traefik/platform-wildcard-tls` — the
+ingress' default certificate. Renewals are picked up without an apply: the
+certificate is referenced without a version and ESO refreshes hourly. Check
+what actually landed with:
+
+```bash
+kubectl -n traefik get secret platform-wildcard-tls \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -subject -enddate
+```
 
 ### Distributing it to the other clouds
 
@@ -312,16 +440,22 @@ what a Kubernetes TLS secret wants, so an `ExternalSecret` maps the two fields
 straight through:
 
 ```yaml
-  data:
-    - secretKey: tls.crt
-      remoteRef:
+  target:
+    name: platform-wildcard-tls
+    template:
+      type: kubernetes.io/tls
+  dataFrom:
+    - extract:
         key: platform-wildcard-onek8s-lol   # "prototype/platform/wildcard-onek8s-lol" on AWS
-        property: tls.crt
-    - secretKey: tls.key
-      remoteRef:
-        key: platform-wildcard-onek8s-lol
-        property: tls.key
 ```
+
+That is exactly what each foundation's `ingress.tf` applies into the
+`traefik` namespace on EKS, GKE and OKE, so **the distribution now has a
+consumer on every cloud**: run `distribute` after a renewal and the ingress
+picks the new certificate up within the hour. `dataFrom.extract` rather than
+two `remoteRef`s with a `property`: the stored value is exactly these two
+fields, and extracting it avoids a property path having to quote the dots in
+their names.
 
 The workflow reads the private key out of Key Vault, so it needs *Key Vault
 Secrets User* (covered by the Secrets Officer role the foundation already
@@ -330,6 +464,22 @@ that cloud. A cloud that refuses the write fails the run but does not stop the
 other two — check the run summary, which lists every target and its result.
 
 ## Troubleshooting
+
+### `AzureKeyvaultSecretsProvider addon cannot be disabled`
+
+```
+│ Error: updating Kubernetes Cluster … unexpected status 400 (400 Bad Request)
+│   "message": "AzureKeyvaultSecretsProvider addon cannot be disabled due to
+│               more than 0 Secret Provider Classes"
+```
+
+AKS will not turn the add-on off while a `SecretProviderClass` still exists,
+and the application routing add-on generates one per Ingress annotated with
+`kubernetes.azure.com/tls-cert-keyvault-uri`. This is the one-time migration
+off the add-ons: delete the annotated Ingress, then the generated class, then
+re-apply — the sequence is under **Ingress → Migrating an Azure environment
+off the add-ons** above. Deleting the class alone is not enough; while the
+annotated Ingress is still there, the add-on writes it back.
 
 ### `foundation has no attributes`
 

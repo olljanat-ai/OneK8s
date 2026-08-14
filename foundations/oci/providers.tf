@@ -3,12 +3,18 @@
 # environment, so GitHub Actions only has to export those from repository
 # secrets; locally the ~/.oci/config profile is picked up instead.
 #
-# This stack creates no IAM resources, so it needs only the regional provider.
-# It still publishes `home_region` as an output, because the tenants stack
-# writes per-tenant policies and IAM can only be written in the tenancy's home
-# region.
+# IAM is global but writable only in the tenancy's home region, so the one
+# policy this stack owns — the platform ingress' read access to the wildcard
+# certificate, see ingress.tf — goes through the `oci.home` alias. Everything
+# else is regional. `home_region` is published as an output too, because the
+# tenants stack writes per-tenant policies the same way.
 provider "oci" {
   region = var.region
+}
+
+provider "oci" {
+  alias  = "home"
+  region = coalesce(var.home_region, var.region)
 }
 
 provider "helm" {
