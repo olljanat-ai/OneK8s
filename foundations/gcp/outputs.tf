@@ -57,3 +57,13 @@ output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment
 }
+
+output "monitoring_namespace" {
+  description = "Namespace the Grafana Alloy collectors run in, null when monitoring is disabled."
+  value       = var.enable_monitoring ? local.monitoring_namespace : null
+}
+
+output "monitoring_cluster_name" {
+  description = "Value of the 'cluster' label this cluster's telemetry carries in Grafana Cloud, null when monitoring is disabled."
+  value       = var.enable_monitoring ? local.monitoring_cluster_name : null
+}

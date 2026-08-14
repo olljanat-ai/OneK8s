@@ -63,6 +63,7 @@ Actions → Secrets):
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | aws-actions/configure-aws-credentials |
 | `GCP_CREDENTIALS_JSON` | google-github-actions/auth (service account key JSON) |
 | `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY` | oci provider + OCI CLI (API signing key, PEM contents) |
+| `GRAFANA_CLOUD_TOKEN` | Publish Grafana Cloud Credentials (the access-policy token; only needed with monitoring enabled) |
 
 And repository **variables**:
 
@@ -73,6 +74,7 @@ And repository **variables**:
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
 | `LETSENCRYPT_EMAIL` | Renew Certificate (ACME registration + expiry notices) |
 | `DNS_ZONE_NAME`, `DNS_ZONE_RESOURCE_GROUP` | Renew Certificate (both optional — see below) |
+| `GRAFANA_CLOUD_METRICS_USERNAME`, `GRAFANA_CLOUD_LOGS_USERNAME`, `GRAFANA_CLOUD_TRACES_USERNAME` | Publish Grafana Cloud Credentials (the hosted services' instance IDs; all optional, they can be typed per run) |
 
 Create GitHub **environments** for the foundations — `azure-prototype`,
 `azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
@@ -616,6 +618,56 @@ Secrets User* (covered by the Secrets Officer role the foundation already
 assigns), and write access to each target backend from the deploy identity of
 that cloud. A cloud that refuses the write fails the run but does not stop the
 other two — check the run summary, which lists every target and its result.
+
+## 8. Monitoring with Grafana Cloud (optional)
+
+Every foundation can run Grafana Alloy and ship that cluster's metrics, logs
+and events to one Grafana Cloud stack, where all four clusters show up under
+`onek8s-<cloud>-<environment>`. It is off until two things exist, and neither
+of them can be guessed from this repository.
+
+1. **The endpoints**, which are per stack and on its Details page in Grafana
+   Cloud. They go into each cloud's tfvars, where a commented block is waiting:
+
+   ```hcl
+   # foundations/<cloud>/envs/prototype.tfvars
+   enable_monitoring         = true
+   grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+   grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
+   grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional
+   ```
+
+2. **The credentials**, which are not configuration and never reach Terraform.
+   Create an access policy on the stack with the `*:write` scopes for the
+   signals you enable, take a token from it (it starts with `glc_`), store it as
+   the `GRAFANA_CLOUD_TOKEN` repository secret, and run:
+
+   ```
+   Actions -> Publish Grafana Cloud Credentials -> Run workflow
+     environment      prototype
+     metrics_username 1234567          # or leave blank and set the repository variables
+     logs_username    7654321
+   ```
+
+   That writes one JSON object to the environment's Key Vault and copies it to
+   the AWS, GCP and OCI backends — the same road the wildcard certificate
+   takes, so each cluster reads it from the backend it already reads its tenant
+   secrets from, through a monitoring identity granted that one secret and
+   nothing else.
+
+Then apply the foundations. Order does not matter: a cluster applied before
+the credentials exist leaves the `ExternalSecret` unresolved and starts
+reporting on its own within the hour of the publication.
+
+```bash
+kubectl -n monitoring get externalsecret grafana-cloud   # SecretSynced
+kubectl -n monitoring get alloy                          # one per collector
+```
+
+Pod logs are on by default and are the largest single contributor to the bill
+on a chatty cluster — `monitoring_enable_pod_logs = false` leaves metrics and
+cluster events untouched. Feature set, the cluster label, rotation and the
+trade-offs: [monitoring.md](monitoring.md).
 
 ## Troubleshooting
 

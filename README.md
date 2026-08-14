@@ -17,6 +17,7 @@ via External Secrets Operator and per-tenant workload identities.
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
 ├── modules/
 │   ├── platform-ingress/   # Traefik + the platform wildcard as its default certificate
+│   ├── platform-monitoring/# Grafana Alloy (k8s-monitoring) shipping to Grafana Cloud
 │   ├── tenant-namespace/   # Reusable tenant module — cloud is a variable
 │   │   ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
 │   │   ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
@@ -123,6 +124,40 @@ Each cluster also publishes its Traefik dashboard and API on
 `https://<cloud>-traefik.onek8s.lol/`, **unauthenticated** — a deliberate lab
 convenience, switched off per environment with
 `ingress_dashboard_hostname = null`.
+
+## Monitoring
+
+Every cluster can run **Grafana Alloy**, installed from one module
+(`modules/platform-monitoring`, Grafana's [k8s-monitoring][k8smon] chart), and
+ship its metrics, logs and events to **one Grafana Cloud stack**. Four
+clusters, one stack, told apart only by a `cluster` label carrying the cloud
+and the environment:
+
+```promql
+count by (cluster) (up)
+# onek8s-azure-prototype  onek8s-aws-prototype  onek8s-gcp-prototype  onek8s-oci-prototype
+```
+
+[k8smon]: https://github.com/grafana/k8s-monitoring-helm
+
+The collectors are the same everywhere and only the ones the enabled features
+need are created, so a cluster with pod logs turned off runs no log DaemonSet
+at all. The one cloud-shaped part is how the credentials arrive, and it is the
+wildcard certificate's road with a different payload: written to Key Vault by
+the **Publish Grafana Cloud Credentials** workflow, distributed to the other
+three backends, then read in-cluster by External Secrets over that cloud's own
+identity — so the token is in no state file, and a rotation reaches the
+collectors without an apply or a restart.
+
+```hcl
+# foundations/<cloud>/envs/<env>.tfvars — the endpoints are the configuration
+enable_monitoring         = true
+grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
+grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
+```
+
+Off by default, per cloud and per environment. Setup, the feature set and the
+trade-offs: [docs/monitoring.md](docs/monitoring.md).
 
 ## GitOps
 
@@ -233,6 +268,10 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   table nor a database user has an ARM representation, so neither can be in
   the stack. Run the same script by hand after applying the stacks by hand;
   `terraform apply` alone never creates the database user.
+- **Publish Grafana Cloud Credentials** — on demand; writes the Grafana Cloud
+  access-policy token and instance IDs into Key Vault as one JSON object and
+  copies it to the AWS, GCP and OCI backends, so no cluster's monitoring
+  credentials come from Terraform.
 - **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together
