@@ -145,13 +145,50 @@ cloud-specific surface (`hello.remoteKey` in `_helpers.tpl`):
 | `gcp` | Secret Manager | `team-alpha-test` | IAM condition `resource.name.startsWith(…/team-alpha-)` |
 | `oci` | OCI Vault | `team-alpha-test` | policy condition `target.secret.name = /team-alpha-*/` |
 
-### Creating it
+### Where the value comes from
 
-The secret itself is **not** created by any stack here — tenant data is the
-tenant's, and the tenants stack deliberately writes none of it. Until it
-exists the page renders *"not available"* instead of a value, which is also
-what it looks like while External Secrets is still syncing. Create it once per
-cloud:
+The secret is **not** created by any Terraform stack here — tenant data is the
+tenant's, and the tenants stack deliberately writes none of it. It is created
+where the platform's other shared value is: the **Renew Certificate**
+workflow, which generates it in Key Vault beside the wildcard and publishes it
+to the other three clouds in the same `distribute` run.
+
+```
+   Renew Certificate (renew)                Renew Certificate (distribute)
+        │                                          │
+        ▼                                          ▼
+   Key Vault  team-alpha-test  ──────────▶  Secrets Manager  prototype/team-alpha/test
+   (the source of truth)                    Secret Manager   team-alpha-test
+                                            OCI Vault        team-alpha-test
+```
+
+Both objects travel the same road for the same reason — one vault as the
+source of truth, one run to copy it out — and the value rotates whenever the
+certificate is renewed, so every renewal exercises the rotation path end to
+end: ESO re-reads the backend within the hour, the kubelet refreshes the
+mounted file, and the page shows the new value without a restart. A run whose
+certificate was **not** due leaves the secret alone, unless it is missing
+altogether, which is what seeds a fresh environment on the first run.
+
+The value itself is a line naming the environment and the run that wrote it,
+identical on all four clouds — comparing the four pages is the whole
+end-to-end check:
+
+```
+OneK8s prototype test secret — issued 2026-08-14T03:17:12Z by run 17482913 (a1b2c3d4)
+```
+
+It is not confidential (a public page publishes it verbatim) and the run
+summary prints it, which is what makes "is `gcp-hello` showing the current
+value?" answerable without opening a vault. `tenant` is a workflow input,
+defaulting to `team-alpha` — it must name the tenant the application is
+released into (`platform_apps.tenant` in `gitops/envs/<env>.tfvars`), because
+that is the only prefix its identity may read.
+
+Until the first renewal run the page renders *"not available"* instead of a
+value, which is also what it looks like while External Secrets is still
+syncing. To seed it by hand instead — or to put a value of your own choosing
+in front of the page — write it once per cloud:
 
 ```bash
 # Azure — the vault name carries a random suffix, so read it from the state
@@ -179,6 +216,9 @@ oci vault secret create-base64 \
   --secret-name    team-alpha-test \
   --secret-content-content "$(printf 'hello from OCI Vault' | base64 -w0)"
 ```
+
+A hand-written value survives until the next renewal overwrites it, which is
+the trade for having the workflow keep all four clouds in step.
 
 Rotating the value needs nothing on the Kubernetes side: External Secrets
 re-reads the backend hourly, the kubelet refreshes the mounted file in place,
@@ -236,10 +276,12 @@ default TLSStore serves the `*.onek8s.lol` wildcard.
   newest build, but Argo CD sees no diff when the image changes and will not
   restart anything by itself. Pin `image.tag` to a `sha-` tag for a
   reproducible deploy, or add an image updater.
-- **The test secret is created by hand.** Four CLIs, once per cloud. Seeding it
-  from the tenants stack would mean that stack writing tenant data into every
-  cloud's backend, which is a larger change to its contract than this example
-  is worth.
+- **The test secret follows the certificate's schedule, not its own.** The
+  Renew Certificate workflow generates it, so it rotates when the wildcard is
+  renewed (roughly quarterly) and reaches the other three clouds only on a
+  `distribute` run, which is manual by design. That is deliberate — one
+  source of truth and one copy-out path for both objects — but it does mean a
+  rotation is not visible on EKS, GKE and OKE until someone distributes it.
 - **Hostnames are one label deep and carry no environment.** That is what the
   wildcard covers, so a second environment cannot also publish
   `aws-hello.onek8s.lol`. A second environment needs its own `domain` in

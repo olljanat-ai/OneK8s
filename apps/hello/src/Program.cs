@@ -12,6 +12,35 @@ app.MapGet("/healthz", () => Results.Text("ok"));
 
 app.MapGet("/", () => Results.Content(Render(), "text/html; charset=utf-8"));
 
+// The page's only asset, and it is a string for the same reason the page is:
+// the image ships one file and the app serves no static content, so there is
+// no wwwroot to copy in and nothing to keep in sync with the Dockerfile.
+//
+// The Kubernetes heptagon with a "1" cut out of it: one cluster shape, four
+// clouds, one platform. The tile is dark so the icon keeps its edges on a
+// light browser theme, and the cut-out is the page's own background colour.
+//
+// SVG rather than a binary .ico, which would have to live in the repository as
+// base64 to stay inline. Every current browser prefers an SVG icon when the
+// document links one — and, because the document does, none of them falls back
+// to requesting /favicon.ico, so that route can stay unmapped.
+const string Favicon = """
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+      <rect width="32" height="32" rx="7" fill="#0b1220"/>
+      <path fill="#38bdf8" d="M16 2.5 26.55 7.58 29.16 19 21.86 28.16H10.14L2.84 19 5.45 7.58Z"/>
+      <path fill="none" stroke="#0b1220" stroke-width="4.2" stroke-linecap="round"
+            stroke-linejoin="round" d="M11.9 12.2 16 8.6V23.4M10.6 23.4h10.8"/>
+    </svg>
+    """;
+
+app.MapGet("/favicon.svg", (HttpContext http) =>
+{
+    // Nothing in it changes between requests, and a favicon is otherwise
+    // re-fetched on every visit.
+    http.Response.Headers.CacheControl = "public, max-age=86400";
+    return Results.Content(Favicon, "image/svg+xml; charset=utf-8");
+});
+
 app.Run();
 
 // The secret is read per request rather than captured at startup. It arrives
@@ -64,6 +93,7 @@ static string Render()
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>OneK8s hello</title>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml">
         <style>
           :root { color-scheme: dark; }
           body { margin: 0; padding: 3rem 1.5rem; background: #0b1220; color: #e2e8f0;

@@ -17,22 +17,36 @@ name: Renew Certificate
 # vault each cluster already reads from and there are still no per-cloud
 # coordinates to keep in sync.
 #
+# The same two hops carry one more value: the tenant **test secret** the hello
+# application reads on every cloud (docs/hello-app.md). It is generated here,
+# beside the certificate, because it travels exactly the same road — one Key
+# Vault as the source of truth, one distribute run to publish it — and because
+# a value that rotates by itself is what turns "a rotated secret reaches the
+# page without a restart" into something the platform demonstrates instead of
+# claims.
+#
 # Key Vault is also the only state this workflow keeps. Nothing is carried
 # between runs on disk: the certificate already in the vault decides whether a
 # renewal is due, and the ACME account key sits next to it as a secret so
 # every run reuses the same Let's Encrypt account instead of registering a new
 # one. Distribution is likewise stateless — Key Vault is the source of truth
-# and the other clouds hold copies of it. Every object uses the reserved
-# "platform-" prefix, which no tenant may claim — tenant identities are scoped
-# to their own "<tenant>-" prefix by the Key Vault ABAC conditions in
-# modules/tenant-namespace/azure and by their equivalents on the other clouds.
+# and the other clouds hold copies of it.
+#
+# Every object here uses the reserved "platform-" prefix, which no tenant may
+# claim — tenant identities are scoped to their own "<tenant>-" prefix by the
+# Key Vault ABAC conditions in modules/tenant-namespace/azure and by their
+# equivalents on the other clouds. The test secret is the one deliberate
+# exception: it is named "<tenant>-test", inside the prefix the tenant's own
+# identity may read, because being readable by exactly that identity is the
+# whole point of it.
 on:
   schedule:
-    # Daily, and always a renewal: distribution is a deliberate act, so it
-    # only ever runs from workflow_dispatch. A run with nothing to renew
-    # exits before ACME is contacted, so the certificate gets ~30 attempts
-    # inside the renewal window and a bad day (Let's Encrypt outage, DNS
-    # hiccup) costs nothing.
+    # Monthly, and always a renewal: distribution is a deliberate act, so it
+    # only ever runs from workflow_dispatch. A run with nothing to renew exits
+    # before ACME is contacted, so a run outside the renewal window costs
+    # nothing — but at this interval only one or two runs fall inside the
+    # window, so a bad day (Let's Encrypt outage, DNS hiccup) is worth a
+    # manual re-run rather than waiting for the next month.
     - cron: "17 3 12 * *"
   workflow_dispatch:
     inputs:
@@ -57,6 +71,11 @@ on:
         description: "Key Vault certificate name (alphanumerics and dashes only)"
         required: false
         default: "platform-wildcard-onek8s-lol"
+        type: string
+      tenant:
+        description: "Tenant whose test secret travels with the certificate; must match platform_apps.tenant in gitops/envs/<env>.tfvars"
+        required: false
+        default: "team-alpha"
         type: string
       acme_server:
         description: "letsencrypt (trusted, rate-limited) or letsencrypt-staging (untrusted, for testing) (renew only)"
@@ -111,6 +130,12 @@ jobs:
       # Certificate identity and renewal policy.
       DOMAINS: ${{ inputs.domains || '*.onek8s.lol,onek8s.lol' }}
       CERT_NAME: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }}
+      # The tenant test secret rides along with the certificate. Its Key Vault
+      # name is "<tenant>-<name>", which is the remote key the hello chart asks
+      # for — TENANT is gitops/envs/<env>.tfvars "platform_apps.tenant" and
+      # TEST_SECRET is apps/hello/chart/values.yaml "secret.name".
+      TENANT: ${{ inputs.tenant || 'team-alpha' }}
+      TEST_SECRET: test
       ACME_SERVER: ${{ inputs.acme_server || 'letsencrypt' }}
       ACME_EMAIL: ${{ vars.LETSENCRYPT_EMAIL }}
       # An ACME account belongs to one directory: production and staging know
@@ -301,9 +326,71 @@ jobs:
           echo "expires=$expires" >> "$GITHUB_OUTPUT"
           echo "Imported $id (expires $expires)"
 
+      # The tenant test secret, generated next to the certificate and rotated
+      # with it. Two cases write a new version: the certificate was renewed
+      # (so the pair stays in step, and every renewal exercises the rotation
+      # path end to end), or the secret is not in the vault at all — which is
+      # what seeds a fresh environment on the first run, without waiting for
+      # the certificate to come due.
+      #
+      # The value is not confidential: the hello page publishes it verbatim on
+      # a public host, and being able to compare that page against this run is
+      # most of what it is for. It carries the run that wrote it, so which
+      # renewal a given page is showing is never a guess.
+      - name: Generate the tenant test secret
+        id: test_secret
+        env:
+          VAULT: ${{ steps.vault.outputs.name }}
+          RENEWED: ${{ steps.due.outputs.renew }}
+        run: |
+          set -euo pipefail
+          name="${TENANT}-${TEST_SECRET}"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+          if az keyvault secret show \
+                --vault-name "$VAULT" --name "$name" \
+                --query id -o tsv --only-show-errors >/dev/null 2>/tmp/kv-err; then
+            exists=true
+          elif grep -qiE 'not found|SecretNotFound' /tmp/kv-err; then
+            exists=false
+          else
+            cat /tmp/kv-err >&2
+            exit 1
+          fi
+
+          if [ "$exists" = "true" ] && [ "$RENEWED" != "true" ]; then
+            echo "generated=false" >> "$GITHUB_OUTPUT"
+            echo "$name is already in $VAULT and nothing was renewed; leaving it as it is."
+            exit 0
+          fi
+
+          # Written to a file rather than passed as an argument, like every
+          # other value this workflow hands to a CLI.
+          value="$RUNNER_TEMP/test-secret.txt"
+          printf 'OneK8s %s test secret — issued %s by run %s (%s)' \
+            "$TF_ENV" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_RUN_ID" \
+            "$(openssl rand -hex 4)" > "$value"
+
+          az keyvault secret set \
+            --vault-name "$VAULT" --name "$name" \
+            --file "$value" --encoding utf-8 \
+            --only-show-errors --output none
+
+          echo "generated=true" >> "$GITHUB_OUTPUT"
+          echo "value=$(cat "$value")" >> "$GITHUB_OUTPUT"
+          if [ "$exists" = "true" ]; then
+            echo "Rotated $name in $VAULT."
+          else
+            echo "Seeded $name in $VAULT."
+          fi
+          echo "Run this workflow in distribute mode to publish it to AWS, GCP and OCI."
+
       - name: Summary
         env:
           VAULT: ${{ steps.vault.outputs.name }}
+          TEST_SECRET_NAME: ${{ steps.test_secret.outputs.name }}
+          TEST_SECRET_GENERATED: ${{ steps.test_secret.outputs.generated }}
+          TEST_SECRET_VALUE: ${{ steps.test_secret.outputs.value }}
         run: |
           {
             echo "### Wildcard certificate — ${TF_ENV}"
@@ -321,6 +408,19 @@ jobs:
             else
               echo "| Action | skipped — more than ${RENEW_DAYS} days left |"
               echo "| Expires | ${{ steps.due.outputs.expires }} |"
+            fi
+            echo
+            echo "### Tenant test secret — \`${TEST_SECRET_NAME}\`"
+            echo
+            if [ "$TEST_SECRET_GENERATED" = "true" ]; then
+              echo "Written to the vault by this run. It reaches AWS, GCP and OCI on"
+              echo "the next \`distribute\` run, and the hello pages within the hour"
+              echo "after that:"
+              echo
+              echo "> ${TEST_SECRET_VALUE}"
+            else
+              echo "Unchanged — the certificate was not renewed, and the secret is"
+              echo "already in the vault."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -365,6 +465,11 @@ jobs:
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
       CERT_NAME: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }}
+      # The tenant test secret is published by the same three pushes as the
+      # certificate — same source vault, same targets, same naming rules. See
+      # the renew job, which is where it is generated.
+      TENANT: ${{ inputs.tenant || 'team-alpha' }}
+      TEST_SECRET: test
     steps:
       - uses: actions/checkout@v4
 
@@ -435,8 +540,11 @@ jobs:
             # Secrets Manager names are hierarchical ("<env>/<tenant>/<name>"),
             # and the platform is the reserved "platform" tenant, so the
             # certificate keeps the same place in that layout as everything
-            # else in the vault.
+            # else in the vault. The test secret belongs to a real tenant, so
+            # it lands under that tenant's path — which is exactly the prefix
+            # its IAM role is restricted to.
             echo "aws_secret=${TF_ENV}/platform/${CERT_NAME#platform-}"
+            echo "aws_test_secret=${TF_ENV}/${TENANT}/${TEST_SECRET}"
           } >> "$GITHUB_OUTPUT"
 
           gcp_project=""
@@ -574,9 +682,32 @@ jobs:
           echo "subject=$(openssl x509 -in "$crt" -noout -subject | sed 's/^subject=[[:space:]]*//')" >> "$GITHUB_OUTPUT"
           openssl x509 -in "$crt" -noout -subject -ext subjectAltName -enddate
 
+          # The tenant test secret, fetched from the same vault in the same
+          # step because it is published by the same three pushes below. It is
+          # a plain secret, not a certificate, so its value carries over
+          # verbatim — an environment whose renewal has never run has none yet,
+          # which is a warning and not a failure: the certificate is what this
+          # job exists for.
+          test_name="${TENANT}-${TEST_SECRET}"
+          if az keyvault secret download \
+                --vault-name "$VAULT" --name "$test_name" \
+                --file "$RUNNER_TEMP/test-secret.txt" --encoding utf-8 \
+                --only-show-errors 2>/tmp/kv-err; then
+            echo "test_name=$test_name" >> "$GITHUB_OUTPUT"
+            echo "Test secret: $test_name"
+          elif grep -qiE 'not found|SecretNotFound' /tmp/kv-err; then
+            echo "::warning::no $test_name in $VAULT; skipping the test secret. Run this workflow in renew mode to generate it."
+            echo "test_name=" >> "$GITHUB_OUTPUT"
+          else
+            cat /tmp/kv-err >&2
+            exit 1
+          fi
+
       # The three pushes are independent: one cloud refusing the write must
       # not keep the other two on a stale certificate, so each is allowed to
       # fail on its own and the job is failed at the end by the outcome check.
+      # Each publishes both objects, so a cloud is either current on the pair
+      # or reported as failed.
       - name: Push to AWS Secrets Manager
         id: aws
         if: steps.targets.outputs.aws_region != ''
@@ -585,23 +716,35 @@ jobs:
           REGION: ${{ steps.targets.outputs.aws_region }}
           KMS_KEY: ${{ steps.targets.outputs.aws_kms }}
           SECRET: ${{ steps.targets.outputs.aws_secret }}
+          TEST_SECRET_ID: ${{ steps.targets.outputs.aws_test_secret }}
+          TEST_NAME: ${{ steps.fetch.outputs.test_name }}
         run: |
           set -euo pipefail
           # Encrypted with the foundation's CMK, the same key the tenant
-          # secrets in this account use.
-          if aws secretsmanager describe-secret \
-                --secret-id "$SECRET" --region "$REGION" >/dev/null 2>&1; then
-            aws secretsmanager put-secret-value \
-              --secret-id "$SECRET" --region "$REGION" \
-              --secret-string "file://$RUNNER_TEMP/payload.json" \
-              --query VersionId --output text
-          else
-            aws secretsmanager create-secret \
-              --name "$SECRET" --region "$REGION" \
-              --kms-key-id "$KMS_KEY" \
-              --description "OneK8s platform wildcard certificate (${TF_ENV})" \
-              --secret-string "file://$RUNNER_TEMP/payload.json" \
-              --query ARN --output text
+          # secrets in this account use — which is also what makes the test
+          # secret readable by the tenant, whose kms:Decrypt grant is scoped
+          # to exactly that key.
+          put() { # <secret id> <payload file> <description>
+            if aws secretsmanager describe-secret \
+                  --secret-id "$1" --region "$REGION" >/dev/null 2>&1; then
+              aws secretsmanager put-secret-value \
+                --secret-id "$1" --region "$REGION" \
+                --secret-string "file://$2" \
+                --query VersionId --output text
+            else
+              aws secretsmanager create-secret \
+                --name "$1" --region "$REGION" \
+                --kms-key-id "$KMS_KEY" \
+                --description "$3" \
+                --secret-string "file://$2" \
+                --query ARN --output text
+            fi
+          }
+          put "$SECRET" "$RUNNER_TEMP/payload.json" \
+            "OneK8s platform wildcard certificate (${TF_ENV})"
+          if [ -n "$TEST_NAME" ]; then
+            put "$TEST_SECRET_ID" "$RUNNER_TEMP/test-secret.txt" \
+              "OneK8s ${TENANT} test secret (${TF_ENV})"
           fi
 
       - name: Push to GCP Secret Manager
@@ -610,15 +753,24 @@ jobs:
         continue-on-error: true
         env:
           PROJECT: ${{ steps.targets.outputs.gcp_project }}
+          TEST_NAME: ${{ steps.fetch.outputs.test_name }}
         run: |
           set -euo pipefail
-          if gcloud secrets describe "$CERT_NAME" --project "$PROJECT" >/dev/null 2>&1; then
-            gcloud secrets versions add "$CERT_NAME" --project "$PROJECT" \
-              --data-file="$RUNNER_TEMP/payload.json"
-          else
-            gcloud secrets create "$CERT_NAME" --project "$PROJECT" \
-              --replication-policy=automatic \
-              --data-file="$RUNNER_TEMP/payload.json"
+          # Secret Manager IDs are flat, so both objects keep the name they
+          # have in Key Vault.
+          add() { # <secret id> <payload file>
+            if gcloud secrets describe "$1" --project "$PROJECT" >/dev/null 2>&1; then
+              gcloud secrets versions add "$1" --project "$PROJECT" \
+                --data-file="$2"
+            else
+              gcloud secrets create "$1" --project "$PROJECT" \
+                --replication-policy=automatic \
+                --data-file="$2"
+            fi
+          }
+          add "$CERT_NAME" "$RUNNER_TEMP/payload.json"
+          if [ -n "$TEST_NAME" ]; then
+            add "$TEST_NAME" "$RUNNER_TEMP/test-secret.txt"
           fi
 
       - name: Push to OCI Vault
@@ -630,28 +782,38 @@ jobs:
           KEY_ID: ${{ steps.targets.outputs.oci_key }}
           COMPARTMENT: ${{ steps.targets.outputs.oci_compartment }}
           REGION: ${{ steps.targets.outputs.oci_region }}
+          TEST_NAME: ${{ steps.fetch.outputs.test_name }}
         run: |
           set -euo pipefail
           # OCI takes secret content base64-encoded, and a name is unique per
           # vault: an existing secret gets a new version, it is not recreated.
-          content="$(base64 -w0 "$RUNNER_TEMP/payload.json")"
-          existing="$(oci vault secret list \
-            --compartment-id "$COMPARTMENT" --vault-id "$VAULT_ID" \
-            --name "$CERT_NAME" --region "$REGION" --all \
-            --query "data[?\"lifecycle-state\"!='DELETED'] | [0].id" \
-            --raw-output || true)"
-          if [ -n "$existing" ] && [ "$existing" != "null" ]; then
-            oci vault secret update-base64 \
-              --secret-id "$existing" --region "$REGION" \
-              --secret-content-content "$content" \
-              --query 'data.id' --raw-output
-          else
-            oci vault secret create-base64 \
+          publish() { # <secret name> <payload file> <description>
+            local content existing
+            content="$(base64 -w0 "$2")"
+            existing="$(oci vault secret list \
               --compartment-id "$COMPARTMENT" --vault-id "$VAULT_ID" \
-              --key-id "$KEY_ID" --secret-name "$CERT_NAME" --region "$REGION" \
-              --description "OneK8s platform wildcard certificate (${TF_ENV})" \
-              --secret-content-content "$content" \
-              --query 'data.id' --raw-output
+              --name "$1" --region "$REGION" --all \
+              --query "data[?\"lifecycle-state\"!='DELETED'] | [0].id" \
+              --raw-output || true)"
+            if [ -n "$existing" ] && [ "$existing" != "null" ]; then
+              oci vault secret update-base64 \
+                --secret-id "$existing" --region "$REGION" \
+                --secret-content-content "$content" \
+                --query 'data.id' --raw-output
+            else
+              oci vault secret create-base64 \
+                --compartment-id "$COMPARTMENT" --vault-id "$VAULT_ID" \
+                --key-id "$KEY_ID" --secret-name "$1" --region "$REGION" \
+                --description "$3" \
+                --secret-content-content "$content" \
+                --query 'data.id' --raw-output
+            fi
+          }
+          publish "$CERT_NAME" "$RUNNER_TEMP/payload.json" \
+            "OneK8s platform wildcard certificate (${TF_ENV})"
+          if [ -n "$TEST_NAME" ]; then
+            publish "$TEST_NAME" "$RUNNER_TEMP/test-secret.txt" \
+              "OneK8s ${TENANT} test secret (${TF_ENV})"
           fi
 
       - name: Summary
@@ -661,6 +823,8 @@ jobs:
           SUBJECT: ${{ steps.fetch.outputs.subject }}
           EXPIRES: ${{ steps.fetch.outputs.expires }}
           AWS_SECRET: ${{ steps.targets.outputs.aws_secret }}
+          AWS_TEST_SECRET: ${{ steps.targets.outputs.aws_test_secret }}
+          TEST_NAME: ${{ steps.fetch.outputs.test_name }}
           AWS_OUTCOME: ${{ steps.aws.outcome }}
           GCP_OUTCOME: ${{ steps.gcp.outcome }}
           OCI_OUTCOME: ${{ steps.oci.outcome }}
@@ -670,32 +834,45 @@ jobs:
         run: |
           # A push that did not run has two quite different causes: the cloud
           # has no foundation here, or the run failed before reaching it.
-          row() { # <cloud> <target> <secret name> <outcome> <resolved target>
-            case "$4" in
+          row() { # <cloud> <target> <cert name> <test secret name> <outcome> <resolved target>
+            case "$5" in
               success) result="updated" ;;
               failure) result="**failed** — see the \"Push to $2\" step" ;;
-              *) if [ -z "$5" ]; then
+              *) if [ -z "$6" ]; then
                    result="skipped — no $1 foundation in \`${TF_ENV}\`"
                  else
                    result="not attempted — the run stopped earlier"
                  fi ;;
             esac
-            echo "| $2 | \`$3\` | $result |"
+            # No test secret in the vault yet: the certificate still went out.
+            if [ -n "$TEST_NAME" ]; then
+              test_cell="\`$4\`"
+            else
+              test_cell="— (none in the vault)"
+            fi
+            echo "| $2 | \`$3\` | $test_cell | $result |"
           }
+          if [ -n "$TEST_NAME" ]; then
+            source_test="\`${TEST_NAME}\`"
+          else
+            source_test="— run \`renew\` to generate it"
+          fi
           {
             echo "### Wildcard certificate distribution — ${TF_ENV}"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Source | Key Vault \`${VAULT}\` / \`${CERT_NAME}\` |"
+            echo "| Source | Key Vault \`${VAULT}\` |"
+            echo "| Certificate | \`${CERT_NAME}\` |"
             echo "| Subject | \`${SUBJECT}\` |"
             echo "| Expires | ${EXPIRES} |"
+            echo "| Test secret | ${source_test} |"
             echo
-            echo "| Target | Secret | Result |"
-            echo "|---|---|---|"
-            row aws "AWS Secrets Manager" "${AWS_SECRET}" "$AWS_OUTCOME" "$AWS_TARGET"
-            row gcp "GCP Secret Manager" "${CERT_NAME}" "$GCP_OUTCOME" "$GCP_TARGET"
-            row oci "OCI Vault" "${CERT_NAME}" "$OCI_OUTCOME" "$OCI_TARGET"
+            echo "| Target | Certificate | Test secret | Result |"
+            echo "|---|---|---|---|"
+            row aws "AWS Secrets Manager" "${AWS_SECRET}" "${AWS_TEST_SECRET}" "$AWS_OUTCOME" "$AWS_TARGET"
+            row gcp "GCP Secret Manager" "${CERT_NAME}" "${TEST_NAME}" "$GCP_OUTCOME" "$GCP_TARGET"
+            row oci "OCI Vault" "${CERT_NAME}" "${TEST_NAME}" "$OCI_OUTCOME" "$OCI_TARGET"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check the distribution

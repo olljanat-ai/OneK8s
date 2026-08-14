@@ -380,8 +380,9 @@ Terraform:
    secret),
 2. an A record per host — `azure-hello.onek8s.lol`, `aws-hello.onek8s.lol`,
    … — pointed at that cluster's Traefik Service, like every other host here,
-3. the test secret in each cloud's backend, which is step 6 below; until it
-   exists the page renders "not available" rather than failing.
+3. the test secret in each cloud's backend, which the **Renew Certificate**
+   workflow writes (section 7); until it exists the page renders "not
+   available" rather than failing.
 
 `platform_apps = { enabled = false }` registers spokes without deploying
 anything. Full walkthrough: [hello-app.md](hello-app.md).
@@ -406,15 +407,17 @@ materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
 
 The `hello` application is the working version of exactly that, on all four
-clouds at once — its secret is `test` under the `team-alpha` prefix, and
-[hello-app.md](hello-app.md) has the four commands that create it (note the
-AWS one: the secret must be encrypted with the tenant CMK, or the tenant's
-scoped `kms:Decrypt` grant cannot read it back).
+clouds at once — its secret is `test` under the `team-alpha` prefix, and it is
+the one tenant secret nobody has to write: the **Renew Certificate** workflow
+generates it in Key Vault and distributes it with the wildcard (section 7).
+[hello-app.md](hello-app.md) has the four commands to seed it by hand instead
+(note the AWS one: the secret must be encrypted with the tenant CMK, or the
+tenant's scoped `kms:Decrypt` grant cannot read it back).
 
 ## 7. Wildcard certificate renewal
 
 The **Renew Certificate** workflow keeps a Let's Encrypt wildcard for the
-Azure-hosted `onek8s.lol` zone in the AKS cluster's Key Vault. It runs daily,
+Azure-hosted `onek8s.lol` zone in the AKS cluster's Key Vault. It runs monthly,
 solves the DNS-01 challenge by writing TXT records into the zone with
 [lego](https://go-acme.github.io/lego/), and imports the result as the Key
 Vault certificate `platform-wildcard-onek8s-lol`. Nothing is carried between
@@ -426,6 +429,15 @@ separate account and gets its own `platform-letsencrypt-staging-account-key`).
 Both names use the reserved `platform-` prefix. Tenant access to this vault is
 an ABAC condition on `<tenant>-`, so **do not name a tenant `platform`** — it
 would be granted read access to the certificate and the account key.
+
+The workflow writes one object outside that prefix, on purpose: the tenant
+**test secret** `team-alpha-test`, which the hello application reads on every
+cloud ([hello-app.md](hello-app.md#the-test-secret)). It is generated in the
+same vault, rotated whenever the certificate is renewed — and seeded when it
+is missing, so a fresh environment gets one on the first run — and copied out
+to the other clouds by the same `distribute` mode. The `tenant` input names
+it; it must match `platform_apps.tenant` in `gitops/envs/<env>.tfvars`, since
+that is the only prefix the application's identity may read.
 
 ### What to set up
 
@@ -497,33 +509,44 @@ kubectl -n traefik get secret platform-wildcard-tls \
 
 Key Vault holds the certificate, but a workload on EKS, GKE or OKE reads its
 secrets from that cloud's own backend. The same workflow copies the vault's
-current certificate out to all three in `distribute` mode:
+current certificate — and the test secret beside it — out to all three in
+`distribute` mode:
 
 ```
 Actions -> Renew Certificate -> Run workflow
   mode             distribute
   environment      prototype
   certificate_name platform-wildcard-onek8s-lol
+  tenant           team-alpha
 ```
 
-`distribute` never contacts Let's Encrypt: it reads whatever version Key Vault
-holds right now and publishes it, so run it **after** a renewal (the schedule
-only renews). `domains`, `acme_server` and `force` are ignored.
+`distribute` never contacts Let's Encrypt: it reads whatever versions Key
+Vault holds right now and publishes them, so run it **after** a renewal (the
+schedule only renews). `domains`, `acme_server` and `force` are ignored.
 
 Each cloud's target is read out of its foundation state, the way the Key Vault
 is — so a cloud with no foundation in this environment is reported as skipped
 rather than failing the run, and the run needs no per-cloud coordinates:
 
-| Cloud | Target | Secret name |
-|---|---|---|
-| AWS | Secrets Manager, encrypted with the foundation CMK | `<env>/platform/wildcard-onek8s-lol` |
-| GCP | Secret Manager (automatic replication) | `platform-wildcard-onek8s-lol` |
-| OCI | the foundation's Vault, wrapped by its master key | `platform-wildcard-onek8s-lol` |
+| Cloud | Target | Certificate | Test secret |
+|---|---|---|---|
+| AWS | Secrets Manager, encrypted with the foundation CMK | `<env>/platform/wildcard-onek8s-lol` | `<env>/team-alpha/test` |
+| GCP | Secret Manager (automatic replication) | `platform-wildcard-onek8s-lol` | `team-alpha-test` |
+| OCI | the foundation's Vault, wrapped by its master key | `platform-wildcard-onek8s-lol` | `team-alpha-test` |
 
-The AWS name follows that cloud's `<env>/<tenant>/<name>` layout with the
-reserved `platform` tenant; GCP and OCI use the flat `<tenant>-<name>` form,
-so the Key Vault name carries over unchanged. All three are outside every
-tenant's prefix, so no tenant identity can read them.
+The AWS names follow that cloud's `<env>/<tenant>/<name>` layout — the
+certificate under the reserved `platform` tenant, the test secret under the
+real one; GCP and OCI use the flat `<tenant>-<name>` form, so the Key Vault
+names carry over unchanged. The certificate's three names are outside every
+tenant's prefix, so no tenant identity can read it. The test secret's are
+inside `team-alpha`'s, which is what lets that tenant — and only that tenant —
+read it. On AWS it is encrypted with the same foundation CMK as the
+certificate, which is also the key the tenant's scoped `kms:Decrypt` grant
+names; under any other key the tenant could not read it back.
+
+A vault with no test secret yet is a warning, not a failure: the certificate
+is what this job exists for, and the run summary says which objects each
+cloud received.
 
 The value is one JSON object, so the key and the certificate it belongs to are
 always written and read as a single version:

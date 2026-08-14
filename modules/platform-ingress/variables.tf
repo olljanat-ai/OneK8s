@@ -63,8 +63,8 @@ variable "resources" {
   type        = any
   default = {
     requests = {
-      cpu    = "100m"
-      memory = "128Mi"
+      cpu    = "1m"
+      memory = "25Mi"
     }
     limits = {
       memory = "256Mi"

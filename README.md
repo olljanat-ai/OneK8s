@@ -192,9 +192,11 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   every merge that touches it; pull requests build without pushing. The only
   pipeline here that produces an artefact rather than applying Terraform —
   from there Argo CD takes over.
-- **Renew Certificate** — daily; issues and renews the `*.onek8s.lol`
+- **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
-  `onek8s.lol` zone and imports it into the AKS cluster's Key Vault.
+  `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together
+  with the tenant test secret the hello application shows. Its `distribute`
+  mode copies both out to the AWS, GCP and OCI backends.
 
 ## License
 
