@@ -51,14 +51,19 @@ resource "kubernetes_cluster_role_v1" "manager" {
     labels = local.labels
   }
 
+  # Empty lists are passed as null so the attribute is left undeclared: the
+  # provider requires at least one item in any of these it sees, and a
+  # non-resource rule is exactly a rule with no api_groups and no resources —
+  # the Kubernetes API rejects a rule that carries both those and
+  # nonResourceURLs, so the two cannot be collapsed into one rule.
   dynamic "rule" {
     for_each = var.cluster_role_rules
 
     content {
-      api_groups        = rule.value.api_groups
-      resources         = rule.value.resources
-      resource_names    = rule.value.resource_names
-      non_resource_urls = rule.value.non_resource_urls
+      api_groups        = length(rule.value.api_groups) > 0 ? rule.value.api_groups : null
+      resources         = length(rule.value.resources) > 0 ? rule.value.resources : null
+      resource_names    = length(rule.value.resource_names) > 0 ? rule.value.resource_names : null
+      non_resource_urls = length(rule.value.non_resource_urls) > 0 ? rule.value.non_resource_urls : null
       verbs             = rule.value.verbs
     }
   }
