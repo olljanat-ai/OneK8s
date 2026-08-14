@@ -32,6 +32,11 @@ it outside Kubernetes.
 
 `GET /healthz` is the liveness and readiness probe.
 
+`GET /favicon.svg` is the page's icon: the Kubernetes heptagon with a "1" cut
+out of it, held as a string in `Program.cs` rather than a file, because the app
+serves no static content and the image has no `wwwroot` to copy in. The
+document links it, so no browser falls back to asking for `/favicon.ico`.
+
 ## Where it is deployed, and how
 
 Argo CD, from `gitops/argocd/`. The full story — the root Application, the
