@@ -143,6 +143,33 @@ Two things have to be true around it:
 Hostnames are one label deep — `*.onek8s.lol` covers
 `web-team-alpha.onek8s.lol`, not `web.team-alpha.onek8s.lol`.
 
+#### The Traefik dashboard
+
+Each cluster publishes Traefik's own dashboard and API on
+`https://<cloud>-traefik.onek8s.lol/` — `azure-traefik`, `aws-traefik`,
+`gcp-traefik`, `oci-traefik` — with the UI at `/dashboard/` (the bare host
+redirects there) and the API at `/api`. It rides the same load balancer and
+the same wildcard certificate as everything else, so it needs the same kind
+of manual A record.
+
+**There is no authentication on it.** Whoever reaches the host reads that
+cluster's whole routing configuration: every router, service, middleware and
+which certificates are loaded. It is deliberate for a lab and wrong for
+anything else — set `ingress_dashboard_hostname = null` in that environment's
+tfvars and reach it locally instead:
+
+```bash
+kubectl -n traefik port-forward deploy/traefik 8080:8080   # /dashboard/
+```
+
+So a fully published cluster has one record per tenant host plus one for the
+dashboard, all pointed at the same address:
+
+```
+web-team-alpha.onek8s.lol   A   <ingress address>
+azure-traefik.onek8s.lol    A   <ingress address>
+```
+
 #### Migrating an Azure environment off the add-ons
 
 An environment that already ran the application routing add-on needs one

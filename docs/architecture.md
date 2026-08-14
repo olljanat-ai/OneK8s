@@ -160,6 +160,15 @@ fields come out of `filterPEM` in the target template instead. Either way the
 certificate is referenced without a version, so renewals are picked up on the
 next hourly refresh and never by an apply.
 
+**The dashboard is published too, and it is not protected.** Each cluster
+serves Traefik's own UI and API on `<cloud>-traefik.onek8s.lol`
+(`azure-`, `aws-`, `gcp-`, `oci-`), on the same load balancer and the same
+wildcard certificate, with no authentication in front of it: anyone who
+reaches the host reads that cluster's whole routing configuration. That is a
+deliberate lab trade — set `ingress_dashboard_hostname = null` in an
+environment where it is not acceptable, and the dashboard is reachable only
+through `kubectl port-forward`.
+
 **DNS is out of band, on every cloud.** The `onek8s.lol` zone lives in Azure
 DNS, and no cluster writes it: a record is pointed at the ingress load
 balancer by hand, once per published host.
@@ -370,6 +379,13 @@ spec:
   every host on that cluster until the records are repointed. Azure could run
   external-dns against its own zone, but that would automate one cloud out of
   four and leave the other three exactly as they are now.
+- The Traefik dashboard and API are published unauthenticated on every
+  cluster, because this platform is a lab. It exposes the routing
+  configuration — hosts, services, middlewares, which certificates are
+  loaded — but not secret material, and the API is read-only (Traefik has no
+  write API). `ingress_dashboard_hostname = null` turns it off per
+  environment; anything longer-lived than a lab should either do that or put
+  a `basicAuth`/`forwardAuth` middleware in front of the route.
 - The ingress' certificate is the platform wildcard and nothing else, so a
   tenant that needs its own certificate (its own domain, or a client-facing
   CA) has to bring an `Ingress` with a `tls:` section and a secret it

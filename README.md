@@ -102,6 +102,11 @@ Names are one label deep, because that is what the wildcard covers. DNS is
 out of band on every cloud — point a record at `kubectl -n traefik get svc
 traefik`. Turn the whole thing off per environment with `enable_ingress`.
 
+Each cluster also publishes its Traefik dashboard and API on
+`https://<cloud>-traefik.onek8s.lol/`, **unauthenticated** — a deliberate lab
+convenience, switched off per environment with
+`ingress_dashboard_hostname = null`.
+
 ## GitOps
 
 The Azure foundation carries the platform's delivery plane: the

@@ -23,7 +23,22 @@ module "ingress" {
 | HTTP | `web` (:80) permanently redirects to `websecure` (:443) |
 | TLS | `websecure` terminates TLS; the default `TLSStore` serves `platform-wildcard-tls` |
 | Address | `Service` type `LoadBalancer`, annotated per cloud; Traefik publishes it into every Ingress' status |
-| Dashboard | off — it would be an unauthenticated route on the public load balancer |
+| Dashboard + API | published on `var.dashboard_hostname` when one is given, **unauthenticated**; null keeps it off |
+
+## The dashboard and API
+
+Setting `dashboard_hostname` publishes Traefik's own `api@internal` on that
+host over `websecure`: the UI at `/dashboard/`, the read-only API at `/api`,
+and a redirect so the bare host lands on the UI. The route matches the whole
+host, is served the platform wildcard like everything else, and has **no
+authentication in front of it** — whoever can reach the host reads every
+router, service, middleware and loaded certificate on that cluster. It is a
+lab convenience; leave the variable null anywhere else, and reach the
+dashboard with:
+
+```bash
+kubectl -n traefik port-forward deploy/traefik 8080:8080   # http://localhost:8080/dashboard/
+```
 
 ## The default certificate
 

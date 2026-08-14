@@ -81,6 +81,7 @@ module "ingress" {
   namespace                       = local.ingress_namespace
   ingress_class_name              = local.ingress_class_name
   default_certificate_secret_name = local.ingress_tls_secret_name
+  dashboard_hostname              = var.ingress_dashboard_hostname
 
   # The Azure load balancer needs no annotations for a plain public address;
   # health probing of the Service's own ports is the default.

@@ -22,6 +22,12 @@ variable "default_certificate_secret_name" {
   default     = "platform-wildcard-tls"
 }
 
+variable "dashboard_hostname" {
+  description = "Host to publish the Traefik dashboard and API on, e.g. 'azure-traefik.onek8s.lol'. It is served UNAUTHENTICATED — anyone who can reach it reads the cluster's whole routing configuration — so this is a lab convenience; null (the default) keeps the dashboard off and reachable only through kubectl port-forward."
+  type        = string
+  default     = null
+}
+
 variable "service_annotations" {
   description = "Annotations on the Traefik Service, used to select the cloud's load balancer type and sizing."
   type        = map(string)

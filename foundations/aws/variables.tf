@@ -74,3 +74,9 @@ variable "ingress_certificate_name" {
   type        = string
   default     = "platform-wildcard-onek8s-lol"
 }
+
+variable "ingress_dashboard_hostname" {
+  description = "Host the Traefik dashboard and API are published on. Served UNAUTHENTICATED over the public load balancer — anyone who reaches it reads the cluster's whole routing configuration — so it is a lab convenience; set it to null to keep the dashboard reachable only through kubectl port-forward. Must be one label deep under the wildcard, and needs a DNS record pointed at the ingress load balancer."
+  type        = string
+  default     = "aws-traefik.onek8s.lol"
+}

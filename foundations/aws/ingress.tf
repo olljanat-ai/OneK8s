@@ -109,6 +109,7 @@ module "ingress" {
   namespace                       = local.ingress_namespace
   ingress_class_name              = local.ingress_class_name
   default_certificate_secret_name = local.ingress_tls_secret_name
+  dashboard_hostname              = var.ingress_dashboard_hostname
 
   service_annotations = {
     # A network load balancer rather than the classic one: it is the cheaper

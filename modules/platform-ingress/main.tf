@@ -2,14 +2,53 @@
 # cloud. Everything that differs between clouds is an input: the Service
 # annotations that pick the cloud's load balancer, and the objects that
 # materialize the platform wildcard certificate into
-# var.default_certificate_secret_name (an ESO SecretStore + ExternalSecret on
-
+# var.default_certificate_secret_name — an ESO SecretStore + ExternalSecret on
+# every cloud, differing only in the provider block and the identity it
+# authenticates as.
 #
 # The point of the default certificate is that a tenant Ingress carries no TLS
 # configuration at all: Traefik's default TLSStore hands every websecure
 # router the wildcard, so an Ingress only has to name a host under the
 # certificate's domain.
 locals {
+  # A one-or-zero element list rather than a bool, so everything below is a
+  # comprehension: the objects that mention the host are only built when there
+  # is a host to mention.
+  dashboard_hosts   = var.dashboard_hostname == null ? [] : [var.dashboard_hostname]
+  dashboard_enabled = length(local.dashboard_hosts) > 0
+
+  # api@internal answers on /api and /dashboard/, so a request to the bare
+  # host would 404. One redirect makes the published URL the one an operator
+  # actually types.
+  dashboard_redirect_name = "dashboard-root-redirect"
+
+  dashboard_objects = [for host in local.dashboard_hosts : {
+    apiVersion = "traefik.io/v1alpha1"
+    kind       = "Middleware"
+    metadata = {
+      name = local.dashboard_redirect_name
+    }
+    spec = {
+      redirectRegex = {
+        regex       = "^https?://[^/]+/?$"
+        replacement = "https://${host}/dashboard/"
+      }
+    }
+  }]
+
+  dashboard_values = merge({ enabled = local.dashboard_enabled }, [
+    for host in local.dashboard_hosts : {
+      # websecure only: the default "traefik" entrypoint is not exposed by the
+      # Service, and :80 permanently redirects here anyway.
+      entryPoints = ["websecure"]
+      # The whole host, so /api answers next to /dashboard/. TLS is the
+      # entrypoint's, so this route is served the platform wildcard like
+      # everything else.
+      matchRule   = "Host(`${host}`)"
+      middlewares = [{ name = local.dashboard_redirect_name }]
+    }
+  ]...)
+
   # Rendered as the chart's `extraObjects`, which runs each entry through
   # Go templating; nothing here contains template syntax, so the manifests
   # pass through unchanged.
@@ -28,12 +67,13 @@ locals {
     }
     additionalVolumeMounts = var.additional_volume_mounts
 
-    # The dashboard is an IngressRoute on the same public load balancer with
-    # no authentication in front of it; keep it to `kubectl port-forward`.
+    # The dashboard and the API, published on var.dashboard_hostname when one
+    # is given. There is no authentication in front of either: whoever reaches
+    # the host reads the cluster's whole routing configuration — every router,
+    # service, middleware and which certificates are loaded. Leave the
+    # hostname null anywhere that is not a lab.
     ingressRoute = {
-      dashboard = {
-        enabled = false
-      }
+      dashboard = local.dashboard_values
     }
 
     providers = {
@@ -86,7 +126,7 @@ locals {
 
     resources = var.resources
 
-    extraObjects = var.extra_objects
+    extraObjects = concat(local.dashboard_objects, var.extra_objects)
   }, var.extra_values)
 }
 

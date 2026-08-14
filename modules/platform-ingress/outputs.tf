@@ -17,3 +17,8 @@ output "release_name" {
   description = "Name of the Traefik Helm release."
   value       = helm_release.traefik.name
 }
+
+output "dashboard_url" {
+  description = "URL of the Traefik dashboard, null when no dashboard hostname was given."
+  value       = local.dashboard_enabled ? "https://${var.dashboard_hostname}/dashboard/" : null
+}

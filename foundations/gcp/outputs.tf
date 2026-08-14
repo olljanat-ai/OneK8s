@@ -48,6 +48,11 @@ output "ingress_default_certificate_secret" {
   value       = var.enable_ingress ? local.ingress_tls_secret_name : null
 }
 
+output "ingress_dashboard_url" {
+  description = "URL of the Traefik dashboard, null when ingress or the dashboard is disabled."
+  value       = var.enable_ingress ? module.ingress[0].dashboard_url : null
+}
+
 output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment
