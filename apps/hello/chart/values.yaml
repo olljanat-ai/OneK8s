@@ -1,0 +1,72 @@
+# Defaults for a single manual `helm install`. In the platform the per-cloud
+# values (cloud, environment, tenant, ingress.host) are set by the "hello"
+# ApplicationSet in gitops/argocd/, which renders one Application per cluster.
+
+# Which cluster this release landed on. Shown on the page, and — because the
+# secret naming convention differs on AWS — it also decides the remote key the
+# ExternalSecret asks for. See the "hello.remoteKey" helper.
+cloud: unknown
+
+# The environment the foundations were deployed for. Part of the AWS secret
+# path, and shown on the page.
+environment: prototype
+
+# The tenant whose namespace this is released into. Its namespaced SecretStore
+# ("tenant-store") is what the ExternalSecret authenticates through, and its
+# secret prefix is what the remote key is built from — a release in another
+# tenant's namespace can therefore only ever read that tenant's secrets.
+tenant: team-alpha
+
+# Empty falls back to the app's own default ("Welcome to OneK8s!").
+welcomeMessage: ""
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/olljanat-ai/onek8s/hello
+  # "latest" is the moving tag the Build Hello App workflow pushes on every
+  # merge to main. Pin an immutable "sha-<short>" tag for a reproducible
+  # deploy — see docs/hello-app.md.
+  tag: latest
+  pullPolicy: Always
+
+service:
+  port: 80
+
+ingress:
+  enabled: true
+  # One label deep, because that is what the *.onek8s.lol wildcard covers. The
+  # ApplicationSet sets "<cloud>-hello.onek8s.lol".
+  host: ""
+  # Empty leaves the class to the cluster default, which every foundation sets
+  # to Traefik. No TLS section and no certificate: Traefik's default TLSStore
+  # serves the platform wildcard.
+  className: ""
+
+secret:
+  enabled: true
+  # The tenant-relative secret name. The full remote key is derived from it
+  # per cloud: "<tenant>-test" on Azure, GCP and OCI, "<env>/<tenant>/test" on
+  # AWS Secrets Manager.
+  name: test
+  # Set to bypass that derivation entirely (e.g. a secret that does not follow
+  # the convention).
+  remoteKey: ""
+  # The namespaced SecretStore modules/tenant-namespace creates per tenant.
+  storeName: tenant-store
+  # ESO re-reads the backend this often; the kubelet then refreshes the mounted
+  # file in place, so a rotated value reaches the page without a restart.
+  refreshInterval: 1h
+
+resources:
+  requests:
+    cpu: 25m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

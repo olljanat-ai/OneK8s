@@ -54,6 +54,32 @@ jobs:
           terraform init -backend=false
           terraform validate
 
+  # The GitOps half of the repository is Helm, not Terraform: gitops/argocd is
+  # what Argo CD's root Application renders on the hub, apps/*/chart is what it
+  # renders on every cluster. Both are rendered here for the same reason the
+  # stacks are validated — a template error would otherwise only surface as a
+  # failed sync after the merge.
+  charts:
+    name: helm (lint + render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      - name: Argo CD configuration
+        run: |
+          helm lint gitops/argocd
+          helm template platform-gitops gitops/argocd > /dev/null
+
+      - name: Applications, as rendered on each cloud
+        run: |
+          helm lint apps/hello/chart --set ingress.host=azure-hello.onek8s.lol
+          for cloud in azure aws gcp oci; do
+            helm template "hello-$cloud" apps/hello/chart \
+              --set cloud="$cloud" \
+              --set ingress.host="$cloud-hello.onek8s.lol" > /dev/null
+          done
+
   tflint:
     name: tflint
     runs-on: ubuntu-latest

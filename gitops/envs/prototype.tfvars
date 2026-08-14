@@ -25,3 +25,26 @@ spokes = {
   gcp = {}
   oci = {}
 }
+
+# The root Application: the only Argo CD object Terraform creates. It points
+# Argo CD at gitops/argocd/ in this repository, and everything from there down
+# — the AppProject, the ApplicationSets, and every Application they generate on
+# the hub and on each spoke — is Git, not Terraform.
+#
+# The values below are what make one copy of gitops/argocd/ serve every
+# environment: they are handed to that chart as Helm values, so the spoke
+# selector, the hosts and the tenant follow the environment rather than being
+# committed per environment.
+platform_apps = {
+  repo_url        = "https://github.com/olljanat-ai/OneK8s.git"
+  target_revision = "main"
+
+  # Where the example application lands. team-alpha exists on all four clouds
+  # in this environment (tenants/envs/prototype.tfvars), and its namespaced
+  # SecretStore is what the app reads its test secret through.
+  tenant = "team-alpha"
+
+  # Application hosts are "<cloud>-<app>.onek8s.lol", one label deep, which is
+  # all the platform wildcard covers.
+  domain = "onek8s.lol"
+}

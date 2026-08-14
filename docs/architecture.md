@@ -231,6 +231,23 @@ revoking a spoke is deleting one ServiceAccount. The Secret's labels
 cloud" is one object. See [argocd.md](argocd.md) for the mechanics, the
 scoping variables and the operational commands.
 
+What Argo CD *deploys* is version-controlled on the same terms. The `gitops/`
+stack additionally plants one **root Application** on the hub pointing at
+`gitops/argocd/` in this repository, and owns nothing else in Argo CD: the
+platform `AppProject`, the `ApplicationSet`s and every `Application` they
+generate are YAML in that directory. Terraform bootstraps the delivery plane
+and Git configures it, so adding an application is a commit rather than an
+apply, and the environment-specific facts (which environment's spokes to
+select, which revision to sync, which domain the hosts sit under) are passed
+down as Helm values so one copy of the directory serves every environment.
+
+The workloads themselves live in `apps/`, source and chart side by side. The
+example is `hello`, a .NET page on `<cloud>-hello.onek8s.lol` showing a
+welcome message and a test secret read from that cloud's own backend through
+the tenant's namespaced `SecretStore` — one image, one chart, four clusters,
+and the only cloud-specific thing in it is the *name* of the secret it asks
+for. [hello-app.md](hello-app.md).
+
 ## Secret isolation (the core security invariant)
 
 A tenant reaches secrets only through this chain, and every link is scoped
@@ -282,9 +299,14 @@ spec:
 
 ## CI/CD
 
-- `pr-validation.yml` — fmt, per-stack validate, tflint, checkov, and (once
-  `ENABLE_CLOUD_PLANS=true`) credentialed prototype plans for all six
-  stacks.
+- `pr-validation.yml` — fmt, per-stack validate, Helm lint/render of the
+  Argo CD configuration and of every application chart as it is rendered on
+  each cloud, tflint, checkov, and (once `ENABLE_CLOUD_PLANS=true`)
+  credentialed prototype plans for all six stacks.
+- `build-hello.yml` — the one pipeline that produces an artefact rather than
+  applying Terraform: it builds `apps/hello` and pushes the image to GHCR on
+  merges that touch it, and builds without pushing on pull requests. Delivery
+  is not its job — Argo CD picks the image up from the chart.
 - `deploy-foundations.yml` / `deploy-tenants.yml` / `deploy-gitops.yml` —
   independent pipelines; merge to `main` auto-deploys the prototype
   environment on path changes, other environments go through

@@ -347,6 +347,45 @@ Or via Actions: **Deploy GitOps** → environment `prototype`. Scoping,
 fan-out with an `ApplicationSet` and the trade-offs (the token is long-lived
 and lands in state): [argocd.md](argocd.md).
 
+### What the same run deploys
+
+That apply also plants the **root Application** on the hub, which is how Argo
+CD's own configuration stays in this repository instead of in the UI:
+
+```hcl
+# gitops/envs/prototype.tfvars
+platform_apps = {
+  repo_url        = "https://github.com/olljanat-ai/OneK8s.git"
+  target_revision = "main"
+  tenant          = "team-alpha"
+  domain          = "onek8s.lol"
+}
+```
+
+It syncs `gitops/argocd/`, which holds the platform `AppProject` and the
+`ApplicationSet`s — and those deploy the example application to the hub and to
+every spoke registered above:
+
+```bash
+kubectl -n argocd get application platform-gitops
+kubectl -n argocd get applications -l app.kubernetes.io/part-of=onek8s
+# hello-azure  hello-aws  hello-gcp  hello-oci
+```
+
+Three things are needed before the pages actually render, none of them in
+Terraform:
+
+1. the image must be **public** on GHCR (the **Build Hello App** workflow
+   pushes it; GHCR packages default to private and no cluster has a pull
+   secret),
+2. an A record per host — `azure-hello.onek8s.lol`, `aws-hello.onek8s.lol`,
+   … — pointed at that cluster's Traefik Service, like every other host here,
+3. the test secret in each cloud's backend, which is step 6 below; until it
+   exists the page renders "not available" rather than failing.
+
+`platform_apps = { enabled = false }` registers spokes without deploying
+anything. Full walkthrough: [hello-app.md](hello-app.md).
+
 ## 6. Give the tenant a secret and consume it
 
 ```bash
@@ -365,6 +404,12 @@ an `ExternalSecret` referencing `secretStoreRef: {kind: SecretStore, name:
 tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
+
+The `hello` application is the working version of exactly that, on all four
+clouds at once — its secret is `test` under the `team-alpha` prefix, and
+[hello-app.md](hello-app.md) has the four commands that create it (note the
+AWS one: the secret must be encrypted with the tenant CMK, or the tenant's
+scoped `kms:Decrypt` grant cannot read it back).
 
 ## 7. Wildcard certificate renewal
 

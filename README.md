@@ -29,8 +29,12 @@ via External Secrets Operator and per-tenant workload identities.
 │   └── backend/            #   <env>.hcl state config (Azure state home)
 ├── gitops/                 # ONE stack for all clouds — Argo CD hub-spoke wiring
 │   ├── envs/               #   <env>.tfvars: spokes, keyed by cloud
-│   └── backend/            #   <env>.hcl state config (Azure state home)
-├── .github/workflows/      # PR validation + deploy pipelines
+│   ├── backend/            #   <env>.hcl state config (Azure state home)
+│   ├── root-app.tf         #   the one Argo CD object Terraform owns
+│   └── argocd/             #   ...pointing at THIS: AppProject + ApplicationSets
+├── apps/                   # Workloads Argo CD deploys, source and chart together
+│   └── hello/              #   .NET 10 example: a welcome message and a test secret
+├── .github/workflows/      # PR validation + deploy pipelines + image build
 └── docs/                   # architecture, getting started, ADRs
 ```
 
@@ -143,6 +147,31 @@ token — so no cloud's admin kubeconfig ever lives on the hub, and an
 registered. Details, scoping and trade-offs:
 [docs/argocd.md](docs/argocd.md).
 
+Argo CD's own configuration is version-controlled too. Terraform creates
+exactly one object — a **root Application** pointing at `gitops/argocd/` in
+this repository — and everything below it (the platform `AppProject`, the
+`ApplicationSet`s, and every `Application` they generate on the hub and on each
+spoke) is YAML in that directory. Adding an application is a commit, not a
+`terraform apply`, and nothing is clicked together in the UI.
+
+## Applications
+
+`apps/` holds what Argo CD deploys, source and chart side by side. The example
+is **hello**: a minimal .NET 10 page showing a welcome message and the value of
+a test secret, read out of the host cloud's own secret backend through the
+tenant's namespaced `SecretStore`. One image and one chart, on all four clouds:
+
+| https://azure-hello.onek8s.lol | https://aws-hello.onek8s.lol | https://gcp-hello.onek8s.lol | https://oci-hello.onek8s.lol |
+|---|---|---|---|
+| AKS (hub) | EKS | GKE | OKE |
+
+The only cloud-specific thing in it is the *name* of the secret it asks for —
+`team-alpha-test` on Key Vault, Secret Manager and OCI Vault,
+`prototype/team-alpha/test` on Secrets Manager, because that is what each
+cloud's per-tenant prefix restriction is written against. Everything else,
+ingress and TLS included, is identical.
+[docs/hello-app.md](docs/hello-app.md).
+
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
 Design and trade-offs: [docs/architecture.md](docs/architecture.md).
@@ -150,7 +179,8 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 6 stacks), tflint, checkov, and
+- **PR validation** — fmt, validate (all 6 stacks), Helm lint/render of the
+  Argo CD configuration and every application chart, tflint, checkov, and
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
 - **Deploy Foundations / Deploy Tenants / Deploy GitOps** — separate
   pipelines; the prototype environment deploys on merge to `main`, other
@@ -158,6 +188,10 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   stored as GitHub secrets. Foundation jobs are gated by the GitHub
   environments `<cloud>-<env>`, the all-clouds tenants and gitops jobs by
   `tenants-<env>` and `gitops-<env>`.
+- **Build Hello App** — builds `apps/hello` and pushes the image to GHCR on
+  every merge that touches it; pull requests build without pushing. The only
+  pipeline here that produces an artefact rather than applying Terraform —
+  from there Argo CD takes over.
 - **Renew Certificate** — daily; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault.
