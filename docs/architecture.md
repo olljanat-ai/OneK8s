@@ -89,7 +89,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Pod-level cloud identity | Workload Identity (OIDC issuer + FIC) | IRSA (IAM OIDC provider) | Workload Identity (`<project>.svc.id.goog`) | OKE Workload Identity (no identity object — the principal *is* cluster+ns+SA) |
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) | VCN-native pod networking + **Cilium (chaining)** |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
-| Tenant namespace | **Azure Managed Namespace** (azapi) | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
+| Tenant namespace | **Azure Managed Namespace** (azapi, ARM-side quota) + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
@@ -192,10 +192,22 @@ other clusters would need Azure credentials to write that zone, the first
 stored cross-cloud credential on a platform that has none — so no cluster
 runs it, and every cloud's hostnames are maintained the same way.
 
-A tenant namespace's NetworkPolicy allows the ingress namespace by its
-`kubernetes.io/metadata.name` label, on top of the "same namespace only" rule
-(policies are additive, so this holds on Azure too, where the namespace and
-its policy are managed by AKS).
+A tenant namespace carries two NetworkPolicies, on every cloud: pods answer
+their own namespace, plus the ingress namespace matched by its
+`kubernetes.io/metadata.name` label. Policies are additive, so the second one
+is the single hole in the first.
+
+**On AKS these are the whole of it, deliberately.** The managed namespace can
+carry an ingress policy of its own, and `modules/tenant-namespace/azure` sets
+it to `AllowAll` so that it does not: unlike a plain namespace's default-deny,
+the built-in `AllowSameNamespace` cannot be widened from the Kubernetes API,
+so a tenant `Ingress` on AKS answers nothing while it is set — Traefik runs in
+its own namespace on every cloud. Microsoft's guidance is to select *Allow
+all* and [apply your own policy to restrict ingress to that namespace][aks-mn],
+which is what happens here, with the same two objects the other three clouds
+get. `kubectl -n <tenant> get networkpolicy` should list both after an apply.
+
+[aks-mn]: https://learn.microsoft.com/azure/aks/concepts-managed-namespaces
 
 ## GitOps: one hub, spokes on the other clouds
 

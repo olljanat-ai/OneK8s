@@ -15,7 +15,7 @@ variable "namespace" {
 }
 
 variable "create_namespace" {
-  description = "Create the namespace, ResourceQuota and NetworkPolicy in-cluster. Set to false when the cloud layer already provides a managed namespace (Azure)."
+  description = "Create the namespace and its ResourceQuota in-cluster. Set to false when the cloud layer already provides a managed namespace (Azure). The NetworkPolicies are created either way — they are the platform's ingress isolation on every cloud."
   type        = bool
   default     = true
 }

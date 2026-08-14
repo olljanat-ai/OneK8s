@@ -37,15 +37,20 @@ resource "kubernetes_resource_quota_v1" "this" {
   }
 }
 
-# Ingress is only allowed from within the tenant's own namespace; egress stays
-# open (mirrors the Azure managed-namespace default of
-# ingress=AllowSameNamespace / egress=AllowAll).
+# --- Ingress isolation -------------------------------------------------------
+# Two policies on every cloud, Azure included: pods answer their own namespace
+# and the platform ingress controller, and nothing else. Egress stays open.
+#
+# On AKS the namespace is an ARM-managed object that can carry a network policy
+# of its own, and it deliberately does not: its built-in "AllowSameNamespace"
+# cannot be widened from the Kubernetes API, so a tenant Ingress would be
+# unreachable from the ingress namespace. azure/main.tf leaves it at AllowAll
+# and these two policies are the whole of the namespace's ingress isolation
+# there, the same as everywhere else.
 resource "kubernetes_network_policy_v1" "same_namespace_only" {
-  count = var.create_namespace ? 1 : 0
-
   metadata {
     name      = "allow-same-namespace-only"
-    namespace = kubernetes_namespace_v1.this[0].metadata[0].name
+    namespace = local.namespace
   }
 
   spec {
@@ -58,13 +63,24 @@ resource "kubernetes_network_policy_v1" "same_namespace_only" {
       }
     }
   }
+
+  depends_on = [kubernetes_namespace_v1.this]
+}
+
+# The policy above used to be conditional on this module creating the
+# namespace, which is what left AKS relying on the managed namespace's own
+# policy. Dropping that condition changes its address, and a tenant that
+# already exists on EKS, GKE or OKE should keep its policy rather than have it
+# deleted and rebuilt. (No-op on Azure, where there was no instance to move.)
+moved {
+  from = kubernetes_network_policy_v1.same_namespace_only[0]
+  to   = kubernetes_network_policy_v1.same_namespace_only
 }
 
 # The one hole in "same namespace only": the platform ingress controller,
 # which is what makes a tenant's Ingress reachable at all. NetworkPolicies are
-# additive, so this is a separate object rather than a clause of the one above
-# — which is what lets it apply on Azure too, where the namespace (and its
-# AllowSameNamespace policy) is managed by AKS and not created here.
+# additive, so this is a separate object rather than a clause of the one above,
+# and a cluster with no ingress controller simply leaves it out.
 #
 # The namespace is matched by kubernetes.io/metadata.name, the label the API
 # server maintains itself, so nothing has to label the ingress namespace for

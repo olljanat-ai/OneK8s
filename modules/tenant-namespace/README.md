@@ -35,12 +35,12 @@ provider. That is exactly what the `tenants` stack does.
 
 | Concern | Azure | AWS | GCP | OCI |
 |---|---|---|---|---|
-| Namespace | **Azure Managed Namespace** (`azapi`, incl. default quota & network policy) | Namespace + ResourceQuota + NetworkPolicy | Namespace + ResourceQuota + NetworkPolicy | Namespace + ResourceQuota + NetworkPolicy |
+| Namespace | **Azure Managed Namespace** (`azapi`, incl. its default quota) | Namespace + ResourceQuota | Namespace + ResourceQuota | Namespace + ResourceQuota |
 | Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding | none to create — OKE asserts the (cluster, namespace, SA) tuple itself |
 | K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` | no annotation needed |
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` |
-| Ingress reachability | NetworkPolicy allowing the `traefik` namespace (additive to the managed namespace's own policy) | same | same | same |
+| Ingress isolation | two NetworkPolicies: own namespace + the `traefik` namespace (the managed namespace's own ingress policy is left at `AllowAll` — see below) | same two | same two | same two |
 
 ## Publishing an application
 
@@ -74,6 +74,28 @@ controller's namespace, matched by the `kubernetes.io/metadata.name` label
 the API server maintains. `var.ingress_controller_namespace` names it
 (default `traefik`) and must match the foundation's; set it to `""` on a
 cluster with no ingress controller and no allowance is created.
+
+**On AKS, the managed namespace stays out of this.** Its
+`defaultNetworkPolicy.ingress` is set to `AllowAll` and the two policies above
+are the namespace's entire ingress isolation, exactly as on the other three
+clouds. The reason is that the built-in `AllowSameNamespace` is not a
+default-deny that an additional NetworkPolicy can widen: while it is set, an
+`Ingress` in the namespace is unreachable from Traefik and the host simply
+refuses connections. [Microsoft's guidance][aks-mn] is to select *Allow all*
+and apply your own policy restricting ingress to the controller's namespace,
+which is what this module does. After an apply, both should be there:
+
+```bash
+kubectl -n team-alpha get networkpolicy
+# allow-same-namespace-only
+# allow-platform-ingress
+```
+
+Those two and nothing else: policies are additive, so a third one allowing all
+ingress — left behind by the managed namespace, or applied by hand while
+debugging — would silently undo both.
+
+[aks-mn]: https://learn.microsoft.com/azure/aks/concepts-managed-namespaces
 
 ## Isolation model
 

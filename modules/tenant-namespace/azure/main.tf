@@ -21,8 +21,9 @@ locals {
 data "azurerm_client_config" "current" {}
 
 # --- Azure Managed Namespace (via azapi, preview API) ------------------------
-# The managed namespace carries its own default ResourceQuota and
-# NetworkPolicy, so the common module skips creating them in-cluster.
+# The managed namespace carries its own default ResourceQuota, so the common
+# module skips creating one in-cluster. Its network policy is deliberately not
+# used — see defaultNetworkPolicy below.
 resource "azapi_resource" "managed_namespace" {
   type      = "Microsoft.ContainerService/managedClusters/managedNamespaces@${var.managed_namespace_api_version}"
   name      = local.namespace
@@ -41,8 +42,32 @@ resource "azapi_resource" "managed_namespace" {
         memoryRequest = var.quota.memory_requests
         memoryLimit   = var.quota.memory_limits
       }
+      # Ingress isolation for this namespace is NOT the managed namespace's
+      # job: it is the two NetworkPolicies the common module writes
+      # (allow-same-namespace-only + allow-platform-ingress), exactly as on
+      # EKS, GKE and OKE.
+      #
+      # The built-in "AllowSameNamespace" cannot be widened by an additional
+      # NetworkPolicy the way a plain namespace's own default-deny can, so
+      # while it is set, Traefik — which runs in its own namespace on every
+      # cloud — cannot reach a tenant's pods and every tenant Ingress on AKS
+      # answers "connection refused". Microsoft documents the way out, and it
+      # is this one: "If you need your Kubernetes Services, ingresses, or
+      # gateways to be accessible from outside of the namespace where they're
+      # deployed, for example from an ingress controller deployed in a
+      # separate namespace, you need to select Allow all. You might then apply
+      # your own network policy to restrict ingress to be from that namespace
+      # only."
+      # (learn.microsoft.com/azure/aks/concepts-managed-namespaces)
+      #
+      # So AllowAll here is not an open namespace, it is the ARM-managed
+      # policy stepping out of the way of the platform's own — which is also
+      # what makes the isolation model identical on all four clouds instead of
+      # Azure-shaped. Verify after an apply that both policies are in place:
+      #
+      #   kubectl -n <tenant> get networkpolicy
       defaultNetworkPolicy = {
-        ingress = "AllowSameNamespace"
+        ingress = "AllowAll"
         egress  = "AllowAll"
       }
       adoptionPolicy = "Never"
