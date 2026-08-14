@@ -1,0 +1,43 @@
+name: Deploy GitOps
+
+# Registers the other clouds' clusters as spokes of the Argo CD hub that
+# foundations/azure runs on AKS. Like the tenants stack this is one stack, one
+# state file per environment, every cloud in a single run — the cloud is a key
+# of var.spokes in gitops/envs/<environment>.tfvars.
+#
+# It reads foundation remote-state outputs only, so it deploys independently
+# of the foundations; it does need the hub's foundation (Azure) and every
+# registered spoke's foundation to have been applied for this environment
+# first.
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "gitops/**"
+  #     - "modules/argocd-spoke/**"
+  #     - ".github/workflows/deploy-gitops.yml"
+  #     - ".github/workflows/_terraform-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "prototype"
+        type: choice
+        options: [prototype, dev, staging, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  gitops:
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: gitops
+      # All clouds at once: the run talks to the hub and to every spoke, so it
+      # needs every cloud's credentials and CLIs, and binds to the
+      # "gitops-<environment>" GitHub environment rather than a per-cloud one.
+      cloud: all
+      environment: ${{ inputs.environment || 'prototype' }}
+      gh_environment: gitops-${{ inputs.environment || 'prototype' }}
+    secrets: inherit

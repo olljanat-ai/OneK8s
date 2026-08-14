@@ -42,6 +42,7 @@ jobs:
           - foundations/gcp
           - foundations/oci
           - tenants
+          - gitops
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -92,7 +93,8 @@ jobs:
       matrix:
         # "cloud" only selects which credentials and CLIs the job sets up; the
         # backend/*.hcl + envs/*.tfvars stem is the environment name. The single
-        # tenants stack covers every cloud in one plan, so it needs them all.
+        # tenants stack covers every cloud in one plan, so it needs them all,
+        # and so does gitops — it talks to the hub and to every spoke.
         include:
           - stack: foundations/azure
             cloud: azure
@@ -103,6 +105,8 @@ jobs:
           - stack: foundations/oci
             cloud: oci
           - stack: tenants
+            cloud: all
+          - stack: gitops
             cloud: all
     env:
       # azurerm/azapi providers (and the azurerm state backend) pick these up

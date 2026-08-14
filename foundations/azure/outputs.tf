@@ -41,6 +41,11 @@ output "argocd_url" {
   value       = var.enable_argocd ? local.argocd_url : null
 }
 
+output "argocd_namespace" {
+  description = "Namespace the Argo CD extension is released into. The gitops stack writes each spoke's cluster Secret here."
+  value       = local.argocd_namespace
+}
+
 output "ingress_class_name" {
   description = "IngressClass of the Traefik ingress controller (the cluster default), null when ingress is disabled."
   value       = var.enable_ingress ? local.ingress_class_name : null
