@@ -88,7 +88,11 @@ locals {
       }
     }
 
-    ports = {
+    # var.extra_ports is merged in rather than concatenated: an entrypoint is a
+    # key of this map, so an extra one is added without restating the two the
+    # platform contract depends on (and overriding either of those is possible
+    # but never the intent).
+    ports = merge({
       web = {
         http = {
           redirections = {
@@ -107,7 +111,7 @@ locals {
           }
         }
       }
-    }
+    }, var.extra_ports)
 
     # The default certificate. A router that matches no other certificate —
     # which is every tenant Ingress, since none of them carry one — is served

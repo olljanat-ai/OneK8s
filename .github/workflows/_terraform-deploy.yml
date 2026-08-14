@@ -65,6 +65,13 @@ jobs:
       OCI_CLI_REGION: ${{ vars.OCI_REGION }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      # The portainer provider reads its credentials straight from the
+      # environment — an API key, or the admin account the Azure foundation
+      # bootstraps out of Key Vault. The endpoint is not configured here: it
+      # comes from the hub foundation's state. Ignored by every other stack.
+      PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+      PORTAINER_USER: ${{ vars.PORTAINER_USER }}
+      PORTAINER_PASSWORD: ${{ secrets.PORTAINER_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 

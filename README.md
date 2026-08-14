@@ -10,7 +10,7 @@ via External Secrets Operator and per-tenant workload identities.
 
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
-│   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy, Argo CD) + Key Vault (RBAC/ABAC)
+│   ├── azure/              #   AKS (Cilium, Workload Identity, Argo CD, Portainer) + Key Vault (RBAC/ABAC)
 │   │                       #   ...and Azure SQL on the free offer, Entra-only (sql.tf)
 │   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
@@ -25,7 +25,8 @@ via External Secrets Operator and per-tenant workload identities.
 │   │   ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
 │   │   ├── gcp/            #   GSA + WI binding + IAM condition
 │   │   └── oci/            #   workload-identity IAM policy + secret-name prefix
-│   └── argocd-spoke/       # Registers one cluster as a spoke of the Argo CD hub
+│   ├── argocd-spoke/       # Registers one cluster as a spoke of the Argo CD hub
+│   └── portainer-agent/    # Installs the Portainer Edge Agent on one cluster
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
 │   └── backend/            #   <env>.hcl state config (Azure state home)
@@ -34,6 +35,9 @@ via External Secrets Operator and per-tenant workload identities.
 │   ├── backend/            #   <env>.hcl state config (Azure state home)
 │   ├── root-app.tf         #   the one Argo CD object Terraform owns
 │   └── argocd/             #   ...pointing at THIS: AppProject + ApplicationSets
+├── portainer/              # ONE stack for all clouds — Portainer server + agents
+│   ├── envs/               #   <env>.tfvars: clusters to onboard, keyed by cloud
+│   └── backend/            #   <env>.hcl state config (Azure state home)
 ├── apps/                   # Workloads Argo CD deploys, source and chart together
 │   ├── hello/              #   .NET 10 example: a welcome message and a test secret
 │   └── db-hello/           #   .NET 10 example: Azure SQL as the tenant's managed identity
@@ -239,6 +243,39 @@ This is the platform's one deliberately Azure-only application, because its
 database is an Azure resource and its identity is an Entra one.
 [docs/db-hello-app.md](docs/db-hello-app.md).
 
+## Fleet console
+
+The same AKS cluster runs **Portainer Business Edition**, published on
+`https://portainer.onek8s.lol` by the same Traefik ingress and terminating TLS
+with the same wildcard. Its licence and its initial admin password are read
+from the environment's Key Vault, so a rebuilt cluster comes up licensed with
+nothing to click.
+
+Portainer manages the AKS cluster directly — its chart binds a `cluster-admin`
+ServiceAccount there — and the other three clouds through **Edge Agents**,
+installed by the `portainer/` stack, again as one stack, all clouds, with the
+cloud as a key of `var.agents`:
+
+```hcl
+# portainer/envs/prototype.tfvars
+agents = {
+  aws = {}    # or: { name = "eks-prototype", cluster_role = "view" }
+  gcp = {}
+  oci = {}
+}
+```
+
+An Edge Agent connects **outbound only**: it polls the Portainer URL and opens
+a reverse tunnel back to `portainer.onek8s.lol:8000` — an extra TCP entrypoint
+on the same ingress load balancer — so nothing on EKS, GKE or OKE has to be
+reachable from anywhere, and the whole credential is one Edge key the server
+can revoke. Registering an environment is what generates that key, which is why
+this is a layer of its own rather than part of a foundation.
+
+Argo CD deploys; Portainer is how an operator looks at what is deployed, on any
+cloud, without four kubeconfigs. Details, prerequisites and trade-offs:
+[docs/portainer.md](docs/portainer.md).
+
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
 Design and trade-offs: [docs/architecture.md](docs/architecture.md).
@@ -246,15 +283,15 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 6 stacks), Helm lint/render of the
+- **PR validation** — fmt, validate (all 7 stacks), Helm lint/render of the
   Argo CD configuration and every application chart, tflint, checkov, and
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
-- **Deploy Foundations / Deploy Tenants / Deploy GitOps** — separate
-  pipelines; the prototype environment deploys on merge to `main`, other
-  environments via `workflow_dispatch`, authenticated with cloud credentials
-  stored as GitHub secrets. Foundation jobs are gated by the GitHub
-  environments `<cloud>-<env>`, the all-clouds tenants and gitops jobs by
-  `tenants-<env>` and `gitops-<env>`.
+- **Deploy Foundations / Deploy Tenants / Deploy GitOps / Deploy Portainer** —
+  separate pipelines; the prototype environment deploys on merge to `main`,
+  other environments via `workflow_dispatch`, authenticated with cloud
+  credentials stored as GitHub secrets. Foundation jobs are gated by the GitHub
+  environments `<cloud>-<env>`, the all-clouds tenants, gitops and portainer
+  jobs by `tenants-<env>`, `gitops-<env>` and `portainer-<env>`.
 - **Build Hello App** / **Build DB Hello App** — build `apps/hello` and
   `apps/db-hello` and push their images to GHCR on every merge that touches
   them; pull requests build without pushing. The only pipelines here that
