@@ -45,11 +45,30 @@ variable "tenants" {
       pods            = optional(string, "50")
     }), {})
     labels = optional(map(string), {})
+    # Pod Security Admission. Every tenant namespace is "restricted" unless it
+    # says otherwise here, which is the only place it can: relaxing a level is
+    # a line in this file, in a pull request, next to the tenant it applies to.
+    pod_security = optional(object({
+      enforce = optional(string, "restricted")
+      audit   = optional(string, "restricted")
+      warn    = optional(string, "restricted")
+      version = optional(string, "latest")
+    }), {})
   }))
   default = {}
 
   validation {
     condition     = alltrue([for t in var.tenants : contains(["azure", "aws", "gcp", "oci"], t.cloud)])
     error_message = "Every tenant's cloud must be one of: azure, aws, gcp, oci."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for t in var.tenants : [
+        for level in [t.pod_security.enforce, t.pod_security.audit, t.pod_security.warn] :
+        contains(["privileged", "baseline", "restricted"], level)
+      ]
+    ]))
+    error_message = "Every tenant's pod_security enforce/audit/warn must each be one of: privileged, baseline, restricted."
   }
 }

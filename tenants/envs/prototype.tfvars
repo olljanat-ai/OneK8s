@@ -10,6 +10,11 @@ state_home = {
   container_name       = "tfstate"
 }
 
+# Every namespace below enforces Pod Security Admission at "restricted" without
+# saying so: that is the module's default, on every cloud. Add
+# `pod_security = { enforce = "baseline" }` to a tenant to record an exception,
+# and expect to justify it in the pull request.
+#
 # Every tenant of this environment, on every cloud, in one apply. The syntax is
 # identical on every cloud: only "cloud" differs. Map keys must be unique, so
 # the same tenant name on several clouds is keyed <cloud>-<tenant> with an

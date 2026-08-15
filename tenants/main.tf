@@ -89,6 +89,7 @@ module "tenants_azure" {
 
   quota            = each.value.quota
   namespace_labels = each.value.labels
+  pod_security     = each.value.pod_security
 }
 
 module "tenants_aws" {
@@ -112,6 +113,7 @@ module "tenants_aws" {
 
   quota            = each.value.quota
   namespace_labels = each.value.labels
+  pod_security     = each.value.pod_security
 }
 
 module "tenants_gcp" {
@@ -135,6 +137,7 @@ module "tenants_gcp" {
 
   quota            = each.value.quota
   namespace_labels = each.value.labels
+  pod_security     = each.value.pod_security
 }
 
 module "tenants_oci" {
@@ -158,4 +161,5 @@ module "tenants_oci" {
 
   quota            = each.value.quota
   namespace_labels = each.value.labels
+  pod_security     = each.value.pod_security
 }

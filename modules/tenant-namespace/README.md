@@ -41,6 +41,35 @@ provider. That is exactly what the `tenants` stack does.
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` |
 | Ingress isolation | two NetworkPolicies: own namespace + the `traefik` namespace (the managed namespace's own ingress policy is left at `AllowAll` — see below) | same two | same two | same two |
+| Pod admission | `pod-security.kubernetes.io/*` labels, `restricted` | same | same | same |
+
+## Pod Security Admission
+
+Every tenant namespace is labelled `restricted` for enforce, audit and warn:
+non-root, no privilege escalation, all capabilities dropped, `RuntimeDefault`
+seccomp, no host namespaces, no hostPath. The API server enforces it on
+admission, so unlike the quota and the NetworkPolicies there is nothing to
+install and nothing that has to stay running for it to hold.
+
+The labels are computed in `main.tf` rather than in `common/`, because Azure's
+namespace is an ARM object created by `azure/` and not a `kubernetes_namespace`
+created by `common/` — a guardrail that skipped one cloud would be worse than
+no guardrail. On AKS they ride along in the managed namespace's
+`properties.labels`; everywhere else they are namespace labels like any other.
+
+```hcl
+# The default. Set it only to record an exception.
+pod_security = {
+  enforce = "baseline"     # privileged | baseline | restricted
+  audit   = "restricted"
+  warn    = "restricted"
+  version = "latest"       # or pin: "v1.31"
+}
+```
+
+`namespace_labels` is merged *over* these, so a caller that sets a
+`pod-security.kubernetes.io/*` label directly still wins — but `pod_security`
+is the way to say it, because it is typed and validated.
 
 ## Publishing an application
 

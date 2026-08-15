@@ -277,6 +277,13 @@ image that changed underneath us fails the deploy instead of quietly handing
 the process root. There is no `fsGroup` — the secret volume is read-only and
 world-readable and `/tmp` is an emptyDir, so there is nothing to chown.
 
+None of that is voluntary any more: the tenant namespace enforces Pod Security
+Admission at `restricted` on every cloud
+([architecture.md](architecture.md#what-a-tenant-may-run)), so a version of
+this pod without the non-root settings, the dropped capabilities or the
+`RuntimeDefault` seccomp profile is rejected at admission rather than deployed.
+The application is the proof that the profile is livable.
+
 ## Operating it
 
 ```bash

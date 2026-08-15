@@ -90,6 +90,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) | VCN-native pod networking + **Cilium (chaining)** |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
 | Tenant namespace | **Azure Managed Namespace** (azapi, ARM-side quota) + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
+| Pod admission | **Pod Security Admission, `restricted`** | same | same | same |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
@@ -208,6 +209,31 @@ which is what happens here, with the same two objects the other three clouds
 get. `kubectl -n <tenant> get networkpolicy` should list both after an apply.
 
 [aks-mn]: https://learn.microsoft.com/azure/aks/concepts-managed-namespaces
+
+### What a tenant may run
+
+Every tenant namespace is labelled for **Pod Security Admission** at
+`restricted`, on all four clouds:
+
+```
+pod-security.kubernetes.io/enforce = restricted    # reject
+pod-security.kubernetes.io/audit   = restricted    # record
+pod-security.kubernetes.io/warn    = restricted    # tell whoever ran kubectl
+```
+
+`restricted` is the Kubernetes-defined profile: run as non-root, no privilege
+escalation, all capabilities dropped, `RuntimeDefault` seccomp, no host
+namespaces or hostPath volumes. A pod that asks for any of it is refused at
+admission — by the API server itself, which is what makes this the one
+guardrail on the table above that needs nothing installed, nothing running and
+no per-cloud equivalent. It is also the only line in that table that reads the
+same across all four columns.
+
+The levels are per tenant (`pod_security` in `tenants/envs/<env>.tfvars`), so
+a tenant with a real need for `baseline` is one line in a pull request rather
+than a namespace somebody quietly relaxed. Nothing on the platform needs it
+today: the hello application is written to pass `restricted` and is the proof
+that the profile is livable, not merely set.
 
 ## GitOps: one hub, spokes on the other clouds
 

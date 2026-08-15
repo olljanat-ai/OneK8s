@@ -275,6 +275,18 @@ Map keys must be unique, so the same tenant on several clouds is keyed
 `<cloud>-<tenant>` with an explicit `name`; that name is what the namespace,
 the cloud identity and the secret prefix are built from.
 
+Every namespace this creates enforces Pod Security Admission at `restricted`
+— non-root, no privilege escalation, all capabilities dropped, `RuntimeDefault`
+seccomp — on all four clouds, and a workload that asks for more is rejected at
+admission. A tenant that genuinely needs more says so where it is declared:
+
+```hcl
+  oci-team-legacy = {
+    cloud        = "oci"
+    pod_security = { enforce = "baseline" }   # audit/warn stay restricted
+  }
+```
+
 Then:
 
 ```bash

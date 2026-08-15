@@ -55,9 +55,45 @@ variable "quota" {
 }
 
 variable "namespace_labels" {
-  description = "Extra labels for the namespace."
+  description = "Extra labels for the namespace. Merged over the Pod Security Admission labels below, so a tenant that must run something the level forbids can say so explicitly rather than by turning enforcement off everywhere."
   type        = map(string)
   default     = {}
+}
+
+variable "pod_security" {
+  description = <<-EOT
+    Pod Security Admission levels for the tenant namespace, applied as the
+    "pod-security.kubernetes.io/*" labels the API server enforces itself. No
+    controller to install and nothing to keep running: admission is part of
+    the API server on all four clouds.
+
+    "restricted" is the default and is what the platform's own workloads are
+    written for — non-root, no privilege escalation, all capabilities dropped,
+    RuntimeDefault seccomp, no host namespaces. A tenant with a genuine need
+    for more can be dropped to "baseline" here, per tenant, which is a visible
+    decision in the tfvars rather than a namespace nobody remembers relaxing.
+
+    "version" pins the ruleset to a Kubernetes version. "latest" tracks
+    whatever the cluster is running, so a cluster upgrade can tighten the rules
+    under a workload; the four clusters are on four clouds' release trains, so
+    pinning one version across them is its own kind of wrong. Pin it per
+    environment if that trade goes the other way for you.
+  EOT
+  type = object({
+    enforce = optional(string, "restricted")
+    audit   = optional(string, "restricted")
+    warn    = optional(string, "restricted")
+    version = optional(string, "latest")
+  })
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for level in [var.pod_security.enforce, var.pod_security.audit, var.pod_security.warn] :
+      contains(["privileged", "baseline", "restricted"], level)
+    ])
+    error_message = "pod_security enforce/audit/warn must each be one of: privileged, baseline, restricted."
+  }
 }
 
 variable "service_account_name" {
