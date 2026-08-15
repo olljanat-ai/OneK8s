@@ -60,6 +60,17 @@ variable "namespace_labels" {
   default     = {}
 }
 
+variable "pod_security_standard" {
+  description = "Pod Security Standard the tenant namespace is labelled for, in all three modes (enforce, warn, audit): \"restricted\" — the platform default, and the only built-in level that requires workloads to run as a non-root user — \"baseline\", or \"privileged\" to enforce nothing. Lower it only for a tenant with a workload that genuinely cannot comply."
+  type        = string
+  default     = "restricted"
+
+  validation {
+    condition     = contains(["privileged", "baseline", "restricted"], var.pod_security_standard)
+    error_message = "pod_security_standard must be one of: privileged, baseline, restricted."
+  }
+}
+
 variable "service_account_name" {
   description = "Name of the tenant workload ServiceAccount."
   type        = string

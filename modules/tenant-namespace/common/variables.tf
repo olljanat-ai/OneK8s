@@ -26,6 +26,17 @@ variable "namespace_labels" {
   default     = {}
 }
 
+variable "pod_security_standard" {
+  description = "Pod Security Standard the namespace is labelled for, in all three modes (enforce, warn, audit): \"restricted\" — the platform default, and the only level that requires workloads to run as a non-root user — \"baseline\", or \"privileged\" to enforce nothing."
+  type        = string
+  default     = "restricted"
+
+  validation {
+    condition     = contains(["privileged", "baseline", "restricted"], var.pod_security_standard)
+    error_message = "pod_security_standard must be one of: privileged, baseline, restricted."
+  }
+}
+
 variable "quota" {
   description = "ResourceQuota limits for the tenant namespace."
   type = object({

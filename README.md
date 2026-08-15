@@ -60,6 +60,13 @@ Secret Manager **IAM conditions** and OCI **policy conditions** on
 plane, not just in Kubernetes.
 Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
 
+Every tenant namespace also enforces the **`restricted` Pod Security
+Standard** — the only built-in level that requires a **non-root user**, so a
+workload that has not said who it runs as is refused at admission rather than
+started as root. It is labelled on the namespace on every cloud (on the ARM
+managed namespace on AKS) and lowered per tenant, in Git, when something
+genuinely cannot comply.
+
 ## Quick start
 
 ```bash

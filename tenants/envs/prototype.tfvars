@@ -14,6 +14,12 @@ state_home = {
 # identical on every cloud: only "cloud" differs. Map keys must be unique, so
 # the same tenant name on several clouds is keyed <cloud>-<tenant> with an
 # explicit "name" (that name is what the namespace and secret prefix use).
+#
+# Every namespace below enforces the "restricted" Pod Security Standard, so a
+# tenant workload that has not said it runs as a non-root user is refused at
+# admission. A tenant with something that genuinely cannot comply says so here
+# and nowhere else — pod_security_standard = "baseline" — which keeps the
+# exception visible, per tenant, in Git.
 tenants = {
   azure-team-alpha = {
     cloud = "azure"

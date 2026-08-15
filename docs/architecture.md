@@ -90,6 +90,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) | VCN-native pod networking + **Cilium (chaining)** |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
 | Tenant namespace | **Azure Managed Namespace** (azapi, ARM-side quota) + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
+| Workload guardrail | Pod Security admission, `restricted` (labels on the ARM managed namespace) | Pod Security admission, `restricted` | same | same |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
@@ -209,6 +210,58 @@ which is what happens here, with the same two objects the other three clouds
 get. `kubectl -n <tenant> get networkpolicy` should list both after an apply.
 
 [aks-mn]: https://learn.microsoft.com/azure/aks/concepts-managed-namespaces
+
+## Nothing runs as root
+
+Every tenant namespace is labelled for the **`restricted` Pod Security
+Standard**, in all three modes:
+
+```
+pod-security.kubernetes.io/enforce = restricted
+pod-security.kubernetes.io/warn    = restricted
+pod-security.kubernetes.io/audit   = restricted
+```
+
+`restricted` rather than `baseline` because it is the only built-in level that
+requires a **non-root user**: baseline blocks the obvious escapes — host
+namespaces, privileged containers, hostPath — but still admits a container
+running as UID 0. Under `restricted` a pod that has not said who it runs as is
+refused at admission, along with privilege escalation, added capabilities and
+a missing seccomp profile.
+
+This is the API server's own admission controller, so it needs nothing
+installed and applies to every pod in the namespace whoever creates it — Argo
+CD, a tenant's `kubectl`, or a controller acting for them. `enforce` rejects
+the pod; `warn` and `audit` evaluate the *object*, so applying a Deployment
+whose template violates the level says so immediately instead of leaving a
+Deployment that will never produce a pod. No `*-version` labels: the level
+tracks the API server, so a cluster upgrade tightens the check rather than
+freezing it at whatever the standard meant when the namespace was created.
+
+The labels are written where each cloud's namespace comes from —
+`modules/tenant-namespace/common` for EKS, GKE and OKE, and the ARM body of
+the managed namespace on AKS, which owns that namespace's metadata. The two
+copies have to be kept in step; the comments in both say so.
+
+```bash
+kubectl get ns team-alpha -o jsonpath='{.metadata.labels}'
+```
+
+A tenant with a workload that genuinely cannot comply lowers the level for
+itself in `tenants/envs/<env>.tfvars` (`pod_security_standard = "baseline"`),
+so the exception is one line, in Git, next to the tenant it applies to.
+Azure's `enable_baseline_policy` initiative is unaffected and stays what it
+is: an ARM-side audit of the same ground.
+
+The example applications are what the guardrail looks like from the other
+side: both `apps/hello` and `apps/db-hello` run as UID 1654 with a read-only
+root filesystem, all capabilities dropped and no Kubernetes ServiceAccount
+token — stated in each `Dockerfile`, in each pod's `securityContext`, and
+checked by PR validation before the namespace ever gets to reject it. It
+matters most for db-hello, whose runtime image is the full `aspnet:10.0-noble`
+rather than a chiseled one (`Microsoft.Data.SqlClient` needs ICU), so there
+*is* a root user in that image to drop from. See [hello-app.md](hello-app.md)
+and [db-hello-app.md](db-hello-app.md).
 
 ## GitOps: one hub, spokes on the other clouds
 

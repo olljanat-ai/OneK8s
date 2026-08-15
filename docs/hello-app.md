@@ -267,7 +267,7 @@ ASP.NET runtime serves — Ubuntu with no shell, no package manager and a
 non-root default user. The pod adds the rest: read-only root filesystem, all
 capabilities dropped, no ServiceAccount token mounted.
 
-Nothing in it runs as root, and that is stated in three places rather than
+Nothing in it runs as root, and that is stated in four places rather than
 inherited from one:
 
 | Where | What it says |
@@ -275,12 +275,23 @@ inherited from one:
 | the base image | `User: "1654"` — its own default, before anything of ours |
 | `Dockerfile` | `USER $APP_UID`, which resolves to the same 1654 |
 | the pod's `securityContext` | `runAsUser: 1654`, `runAsGroup: 1654`, `runAsNonRoot: true` |
+| the namespace | `pod-security.kubernetes.io/enforce: restricted` — the tenant namespace admits nothing else |
 
-The last one is both a statement and a check: `runAsNonRoot` makes the kubelet
+The third is both a statement and a check: `runAsNonRoot` makes the kubelet
 refuse to start the pod at all if the image ever resolves to UID 0, so a base
 image that changed underneath us fails the deploy instead of quietly handing
 the process root. There is no `fsGroup` — the secret volume is read-only and
 world-readable and `/tmp` is an emptyDir, so there is nothing to chown.
+
+The fourth is the platform's, not the application's, and it is the one that
+does not depend on this chart being written carefully: every tenant namespace
+enforces the `restricted` Pod Security Standard, so a workload that says
+nothing about who it runs as is refused at admission on all four clusters
+(see [architecture.md](architecture.md#nothing-runs-as-root)). The chart
+satisfies it exactly — non-root, no privilege escalation, all capabilities
+dropped, `RuntimeDefault` seccomp — and PR validation asserts those four
+fields in the rendered output, so a regression fails the pull request rather
+than turning into an Argo CD sync error in four places at once.
 
 ## Operating it
 

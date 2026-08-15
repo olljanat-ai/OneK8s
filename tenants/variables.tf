@@ -33,6 +33,12 @@ variable "tenants" {
 
     "name" defaults to the key and is what the namespace, the cloud identity
     and the secret prefix are derived from.
+
+    Every tenant namespace enforces the "restricted" Pod Security Standard,
+    which is what keeps tenant workloads off root. "pod_security_standard"
+    lowers it for one tenant that has a workload which genuinely cannot
+    comply — an exception that then lives in Git, per tenant, rather than in
+    the module.
   EOT
   type = map(object({
     cloud = string
@@ -44,12 +50,18 @@ variable "tenants" {
       memory_limits   = optional(string, "16Gi")
       pods            = optional(string, "50")
     }), {})
-    labels = optional(map(string), {})
+    labels                = optional(map(string), {})
+    pod_security_standard = optional(string, "restricted")
   }))
   default = {}
 
   validation {
     condition     = alltrue([for t in var.tenants : contains(["azure", "aws", "gcp", "oci"], t.cloud)])
     error_message = "Every tenant's cloud must be one of: azure, aws, gcp, oci."
+  }
+
+  validation {
+    condition     = alltrue([for t in var.tenants : contains(["privileged", "baseline", "restricted"], t.pod_security_standard)])
+    error_message = "Every tenant's pod_security_standard must be one of: privileged, baseline, restricted."
   }
 }
