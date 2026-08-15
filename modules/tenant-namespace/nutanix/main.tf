@@ -11,28 +11,41 @@ locals {
   # One name for the tenant's policy and its role, so what a login gets is
   # readable from either side.
   vault_role_name = "tenant-${var.tenant_name}-${var.environment}"
+
+  # The subject the cluster stamps into this tenant's ServiceAccount tokens,
+  # and the only one this role accepts. It is the *identical string* the other
+  # three federating clouds pin in their trust policies:
+  #
+  #   aws    "<issuer>:sub" = "system:serviceaccount:team-alpha:workload"
+  #   azure  subject        = "system:serviceaccount:team-alpha:workload"
+  #   gcp    <project>.svc.id.goog[team-alpha/workload]
+  #   here   bound_subject  = "system:serviceaccount:team-alpha:workload"
+  subject = "system:serviceaccount:${local.namespace}:${var.service_account_name}"
 }
 
-# --- Tenant identity: a Vault role bound to one namespace + ServiceAccount ---
+# --- Tenant identity: a Vault role that trusts one subject of one issuer -----
 # There is no identity object to create on a private cloud — no UAMI, no IAM
-# role, no GSA. The principal is the (cluster, namespace, service account)
-# tuple, exactly as it is on OKE: the cluster asserts it, Vault verifies it
-# against that cluster's TokenReview API through the auth mount the foundation
-# configured, and the binding lives entirely in Vault.
+# role, no GSA — and, unlike the OKE case it otherwise resembles, nothing
+# queries the cluster either. The tenant's ServiceAccount token *is* the
+# assertion: the API server signs it, Vault verifies that signature against the
+# cluster's published public keys (foundations/nutanix configures the mount
+# with them) and then matches three claims.
 #
-# The auth mount is per cluster, so "team-alpha/workload" on another cluster is
-# a different principal even though the tuple reads the same.
-resource "vault_kubernetes_auth_backend_role" "tenant" {
+#   iss  the auth mount's bound_issuer — this cluster and no other
+#   aud  bound_audiences — a token minted for anything else is refused
+#   sub  bound_subject   — this namespace's ServiceAccount and no other
+#
+# That is exactly what AssumeRoleWithWebIdentity does with an IAM role's trust
+# policy, which is why nothing here holds a credential: the trust is a public
+# key and three strings.
+resource "vault_jwt_auth_backend_role" "tenant" {
   backend   = var.vault_auth_path
   role_name = local.vault_role_name
+  role_type = "jwt"
 
-  bound_service_account_names      = [var.service_account_name]
-  bound_service_account_namespaces = [local.namespace]
-
-  # Required from Vault 1.21 on, and a control in its own right: a token the
-  # cluster minted for any other audience is refused, so a token issued to this
-  # ServiceAccount for some other service cannot be replayed against Vault.
-  audience = var.vault_audience
+  bound_audiences = [var.vault_audience]
+  bound_subject   = local.subject
+  user_claim      = "sub"
 
   token_policies = [vault_policy.tenant.name]
   token_ttl      = var.vault_token_ttl
@@ -84,23 +97,29 @@ module "common" {
 
   ingress_controller_namespace = var.ingress_controller_namespace
 
-  # No annotation on the ServiceAccount: there is no cloud identity to point it
-  # at. Nor does it need system:auth-delegator — the foundation configured the
-  # auth mount with its own reviewer credential, so a tenant needs no rights
-  # over the TokenReview API to log in.
+  # No annotation on the ServiceAccount, and no RBAC of any kind: the token the
+  # API server mints for it already carries everything Vault checks. A tenant
+  # needs no rights over the TokenReview API — nothing reviews anything.
   secret_store_provider = {
     vault = merge(
       {
         server  = var.vault_address
         path    = var.vault_mount_path
         version = "v2"
+        # External Secrets asks the API server for a short-lived token with
+        # the audience this role requires (TokenRequest, not the SA's own
+        # long-lived secret) and posts it to the JWT mount. The exchange is
+        # the same one an IRSA-enabled pod makes against STS.
         auth = {
-          kubernetes = {
-            mountPath = var.vault_auth_path
-            role      = vault_kubernetes_auth_backend_role.tenant.role_name
-            serviceAccountRef = {
-              name      = var.service_account_name
-              audiences = [var.vault_audience]
+          jwt = {
+            path = var.vault_auth_path
+            role = vault_jwt_auth_backend_role.tenant.role_name
+            kubernetesServiceAccountToken = {
+              serviceAccountRef = {
+                name = var.service_account_name
+              }
+              audiences         = [var.vault_audience]
+              expirationSeconds = var.vault_token_expiration_seconds
             }
           }
         }

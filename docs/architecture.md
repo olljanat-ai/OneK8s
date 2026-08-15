@@ -15,7 +15,7 @@ the Azure cluster.
 │  ┌──────────────────────────────┐             ┌─────────────────────────────┐         │
 │  │ Cluster (AKS/EKS/GKE/OKE/NKP)│  remote     │ for each tenant:            │         │
 │  │  - workload identity / IRSA  │   state     │  - namespace (+quota,netpol)│         │
-│  │    / Vault Kubernetes auth   │ ─outputs──▶ │  - identity or Vault role   │         │
+│  │    / OIDC federation to Vault│ ─outputs──▶ │  - identity or Vault role   │         │
 │  │  - Cilium / Dataplane V2     │      │      │  - ServiceAccount           │         │
 │  │  - External Secrets Operator │      │      │  - namespaced SecretStore   │         │
 │  │  - policy guardrails         │      │      │  - prefix-scoped IAM/policy │         │
@@ -89,7 +89,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 |---|---|---|---|---|---|
 | Cluster | AKS | EKS | GKE | OKE (enhanced) | **NKP** workload cluster (Starter edition) |
 | Cluster lifecycle | Terraform | Terraform | Terraform | Terraform | **NKP** (Cluster API); Terraform attaches, or applies NKP-generated manifests |
-| Pod-level cloud identity | Workload Identity (OIDC issuer + FIC) | IRSA (IAM OIDC provider) | Workload Identity (`<project>.svc.id.goog`) | OKE Workload Identity (no identity object — the principal *is* cluster+ns+SA) | **Vault Kubernetes auth** (no identity object — the role is bound to ns+SA, verified by TokenReview) |
+| Pod-level cloud identity | Workload Identity (OIDC issuer + FIC) | IRSA (IAM OIDC provider) | Workload Identity (`<project>.svc.id.goog`) | OKE Workload Identity (no identity object — the principal *is* cluster+ns+SA) | **OIDC federation to Vault** (no identity object — a JWT role pinning `sub`, verified against the cluster's published keys) |
 | Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) | VCN-native pod networking + **Cilium (chaining)** | **Cilium**, shipped by NKP |
 | Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) | **HashiCorp Vault** KV v2 mount |
 | Tenant namespace | **Azure Managed Namespace** (azapi, ARM-side quota) + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
@@ -107,28 +107,49 @@ authorization decision behind a secret read, taken outside Kubernetes. The
 fifth has no such plane. `foundations/nutanix` is an **NKP** workload cluster
 paired with a **HashiCorp Vault** KV v2 mount, and Vault is what supplies it.
 
+What the public clouds are actually doing is not a cloud feature: **the
+Kubernetes API server is an OIDC provider**, and AKS/EKS/GKE/OKE merely host
+its discovery document and register it as a trusted issuer in their IAM
+service. `AssumeRoleWithWebIdentity` verifies a signature and matches `iss`,
+`aud` and `sub` — it never calls back into the cluster. So the private cloud
+uses the same mechanism, with Vault's **JWT auth method** as the relying
+party:
+
 ```
-Pod ──runs as──▶ ServiceAccount ──token, audience "vault"──▶ Vault
-                                    │  TokenReview against THIS cluster
-                                    ▼
-                        role (bound to ns + SA) ──▶ policy: read "<mount>/data/<tenant>-*"
+Pod ──▶ SA token (aud "vault", 10 min)
+          │
+          ▼
+   Vault jwt mount
+          ├─ signature checked against the cluster's published JWKS
+          ├─ iss  = this cluster                  (bound_issuer)
+          ├─ aud  = "vault"                       (bound_audiences)
+          └─ sub  = system:serviceaccount:<ns>:<sa> (bound_subject)
+          ▼
+   token whose policy reads "<mount>/data/<tenant>-*" and nothing else
 ```
 
-That is the same sentence as Azure's federated identity credential, IRSA and
-GKE Workload Identity — a projected ServiceAccount token, minted for a named
-audience, exchanged at an identity service for a credential whose
-authorization is pinned to `(namespace, service account)`. Only the issuer
-differs, so the tenant contract, the module shape and the namespaced
-`SecretStore` are unchanged, and Vault's path wildcard (`<tenant>-*`, legal
+That `bound_subject` is character-for-character the string an IRSA trust
+policy pins, so the tenant contract, the module shape and the namespaced
+`SecretStore` are unchanged — and Vault's path wildcard (`<tenant>-*`, legal
 only as a path's last character) is the same prefix rule the other four
-clouds' conditions express.
+clouds' conditions express. **Neither side holds a credential for the other**:
+Vault reads one unauthenticated endpoint of the cluster (public keys, which
+the managed clouds republish to the internet), and the cluster reads nothing
+of Vault's. The foundation binds the built-in
+`system:service-account-issuer-discovery` ClusterRole to
+`system:unauthenticated` to make that endpoint readable, which is the one
+thing a managed cloud does for free here.
 
-Two things follow that no public cloud here has:
+The trade that comes with it is the public clouds' own: **revocation is by
+expiry, not by callback**. Nobody asks the cluster whether a token is still
+valid, which is why the login tokens are minted for ten minutes.
 
-- **The platform operates the identity provider.** Vault is a server someone
-  has to unseal, back up and upgrade, and a Vault outage stops secret
-  refreshes on this cloud. It must be 1.21+, where a role without an
-  `audience` stops authenticating.
+Two more things follow that no public cloud here has:
+
+- **The platform operates the relying party.** Vault is a server someone has
+  to unseal, back up and upgrade, and a Vault outage stops secret refreshes on
+  this cloud. (The identity *provider* is the cluster itself, as it is
+  everywhere else.)
 - **The cluster's lifecycle is not Terraform's.** NKP manages workload
   clusters with Cluster API, so this foundation *attaches* to a cluster
   created by `nkp create cluster` and reads its credentials from the
@@ -202,7 +223,7 @@ fills it from the backend its tenants already read:
 | AWS | ESO `SecretStore` + `ExternalSecret` on `<env>/platform/wildcard-onek8s-lol` in Secrets Manager, over IRSA |
 | GCP | ESO on `platform-wildcard-onek8s-lol` in Secret Manager, over Workload Identity |
 | OCI | ESO on `platform-wildcard-onek8s-lol` in the Vault, over OKE Workload Identity |
-| Nutanix | ESO on `<mount>/platform-wildcard-onek8s-lol` in HashiCorp Vault, over Vault's Kubernetes auth |
+| Nutanix | ESO on `<mount>/platform-wildcard-onek8s-lol` in HashiCorp Vault, over the cluster's own OIDC federation |
 
 The identity that reads it is the platform's counterpart of a tenant
 identity: pinned to the ingress namespace's own ServiceAccount and scoped to
@@ -521,17 +542,23 @@ spec:
   CA) has to bring an `Ingress` with a `tls:` section and a secret it
   manages. That case is not wired up: nothing today issues per-tenant
   certificates.
-- The private cloud carries two long-lived credentials the public clouds have
-  no equivalent of, and both land in state files in the Azure state home: the
-  token-reviewer ServiceAccount token Vault presents when it validates a login,
-  and the NKP management-cluster token the three stacks use to fetch the
-  workload cluster's kubeconfig. Nothing rotates either, and the kubeconfig
-  they fetch is a cluster-admin credential — the same position, and the same
-  mitigation (the state home's RBAC), as the spoke tokens already in
-  `gitops/<env>.tfstate`. The reviewer credential is what keeps tenants out of
-  the TokenReview API: Vault's alternative is to validate each login with the
-  *client's* token, which would mean granting `system:auth-delegator` to every
-  tenant ServiceAccount.
+- The private cloud's identity plane stores no credential on either side, but
+  reaching its *cluster* still does: the NKP management-cluster token the three
+  stacks use to fetch the workload kubeconfig lands in their state files in the
+  Azure state home, nothing rotates it, and the kubeconfig it fetches is a
+  cluster-admin credential — the same position, and the same mitigation (the
+  state home's RBAC), as the spoke tokens already in `gitops/<env>.tfstate`.
+  That is the one long-lived credential this cloud adds; the public clouds
+  replace it with their own CLI's token minting.
+- Vault verifies signatures instead of calling TokenReview, so a token stays
+  usable until it expires — deleting a ServiceAccount does not cut access,
+  deleting the Vault role does. Ten-minute login tokens bound it, and this is
+  the same trade IRSA and Azure/GCP workload identity make.
+- The cluster's OIDC discovery endpoints are readable unauthenticated, because
+  a relying party outside the cluster has to fetch the public keys. They expose
+  an issuer URL and public keys and nothing else — `publish_issuer_discovery =
+  false` plus `cluster_issuer`/`cluster_jwks_url` points Vault at a published
+  copy instead, for a cluster where anonymous reads are not on the table.
 - Vault's KV v2 stores maps rather than opaque values, so a tenant
   `ExternalSecret` on the private cloud names a `property` where the other four
   do not, and `dataFrom.find` does not work there — no `list` capability is

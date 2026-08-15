@@ -2,18 +2,43 @@
 # answer to "where does workload identity come from when there is no cloud IAM
 # plane?".
 #
-# Vault's Kubernetes auth method is that answer, and it is the same shape as
-# the four public clouds' federation:
+# The answer is the same mechanism the four public clouds use, because it is
+# not really a cloud mechanism at all: **the Kubernetes API server is an OIDC
+# provider**. It signs ServiceAccount tokens with its own key, publishes the
+# matching public keys at /openid/v1/jwks, and stamps each token with
+# iss (this cluster), sub (system:serviceaccount:<ns>:<sa>) and aud.
 #
-#   Pod ──runs as──▶ ServiceAccount ──projected token (aud=vault)──▶ Vault
-#         ──TokenReview against THIS cluster──▶ role ──policy──▶ "<tenant>-*"
+# What AKS, EKS, GKE and OKE add is only *hosting*: they publish that discovery
+# document at a public URL and register it as a trusted identity provider in
+# their IAM service. Nothing about it calls back into the cluster —
+# AssumeRoleWithWebIdentity verifies a signature and matches claims:
 #
-# Vault, not Kubernetes, decides what the resulting token may read, so the
-# boundary is enforced outside the cluster exactly as Key Vault ABAC, an IAM
-# ARN prefix, a Secret Manager IAM condition and an OCI policy condition are.
-# Two things are created here and nothing else: the environment's KV v2 mount
-# (its "vault"), and the auth mount that trusts this one cluster. Per-tenant
-# roles and policies belong to modules/tenant-namespace/nutanix.
+#   Pod ──▶ SA token (iss, sub, aud, 10 min)
+#             │
+#             ▼
+#           AWS STS / Entra / Google STS  ──verifies signature against JWKS──▶
+#             role whose trust policy pins sub + aud
+#
+# Vault's **JWT auth method** is precisely that relying party, so the private
+# cloud gets the same design rather than an imitation of it:
+#
+#   Pod ──▶ SA token (aud "vault") ──▶ Vault jwt mount
+#             ├─ signature checked against the cluster's published JWKS
+#             ├─ iss must be this cluster (bound_issuer)
+#             ├─ aud must be "vault"  (bound_audiences)
+#             └─ sub must be system:serviceaccount:<ns>:<sa> (bound_subject)
+#                  ──▶ policy: read "<mount>/data/<tenant>-*"
+#
+# Consequences worth naming, all of them shared with the public clouds:
+#
+#   * Vault holds NO credential for this cluster, and needs no permission in
+#     it. It reads one public, unauthenticated endpoint — the same one the
+#     clouds republish to the whole internet.
+#   * Nothing in the cluster holds a Vault credential either. The login is a
+#     10-minute token the API server mints on demand for the audience "vault".
+#   * The trust is one-directional and cryptographic. Revocation is by
+#     expiry, not by callback — exactly as it is on AWS, Azure and GCP, and
+#     the reason the tokens are short-lived.
 
 # --- The vault ---------------------------------------------------------------
 resource "vault_mount" "secrets" {
@@ -23,94 +48,98 @@ resource "vault_mount" "secrets" {
   description = "OneK8s ${var.environment} secrets: '<tenant>-<name>' per tenant, 'platform-<name>' for the platform"
 }
 
-# --- Trusting the cluster ----------------------------------------------------
-# Vault runs outside the cluster, so it cannot use a token of its own to call
-# the TokenReview API: it needs a reviewer credential. That is this
-# ServiceAccount, and system:auth-delegator is the entirety of what it may do
-# — ask "whose token is this?" and nothing else.
-#
-# Doing it this way is what keeps tenants out of it: with a reviewer credential
-# configured on the mount, a tenant's own ServiceAccount needs no TokenReview
-# rights to log in. (Vault's alternative is to review each login with the
-# client's own token, which would mean granting system:auth-delegator to every
-# tenant.)
-resource "kubernetes_namespace_v1" "vault_auth" {
-  metadata {
-    name   = local.token_reviewer_namespace
-    labels = local.labels
-  }
-}
+# --- Publishing the cluster as an OIDC provider ------------------------------
+# Kubernetes ships the ClusterRole but binds it only to `system:serviceaccounts`,
+# so the discovery documents are readable from inside the cluster and nowhere
+# else. This is the binding HashiCorp's own Kubernetes-as-an-OIDC-provider
+# guide prescribes, and it is what the managed clouds do on a far larger scale:
+# what it exposes is the issuer URL and a set of **public keys**, which AKS,
+# EKS, GKE and OKE all serve unauthenticated on the public internet by design.
+# No token, no claim and no cluster data is reachable through it.
+resource "kubernetes_cluster_role_binding_v1" "issuer_discovery" {
+  count = var.publish_issuer_discovery ? 1 : 0
 
-resource "kubernetes_service_account_v1" "token_reviewer" {
   metadata {
-    name      = local.token_reviewer_name
-    namespace = kubernetes_namespace_v1.vault_auth.metadata[0].name
-    labels    = local.labels
-  }
-}
-
-resource "kubernetes_cluster_role_binding_v1" "token_reviewer" {
-  metadata {
-    name   = "${local.token_reviewer_name}-auth-delegator"
+    name   = "onek8s-oidc-reviewer"
     labels = local.labels
   }
 
   role_ref {
     api_group = "rbac.authorization.k8s.io"
     kind      = "ClusterRole"
-    name      = "system:auth-delegator"
+    name      = "system:service-account-issuer-discovery"
   }
 
   subject {
-    kind      = "ServiceAccount"
-    name      = kubernetes_service_account_v1.token_reviewer.metadata[0].name
-    namespace = kubernetes_service_account_v1.token_reviewer.metadata[0].namespace
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "Group"
+    name      = "system:unauthenticated"
   }
 }
 
-# Kubernetes 1.24+ mints no Secret per ServiceAccount, and the tokens projected
-# into pods are short-lived — neither is usable by a server outside the
-# cluster. An explicitly created service-account-token Secret still is, and
-# wait_for_service_account_token holds the apply until the token controller has
-# filled it in. This is the same mechanism modules/argocd-spoke uses for the
-# hub's spoke credential, with the same consequence: the token is long-lived,
-# it lands in this stack's state, and nothing rotates it.
-resource "kubernetes_secret_v1" "token_reviewer" {
-  metadata {
-    name      = "${local.token_reviewer_name}-token"
-    namespace = kubernetes_service_account_v1.token_reviewer.metadata[0].namespace
-    labels    = local.labels
+# The issuer string tokens from this cluster actually carry. It is read rather
+# than configured because it is the cluster's to decide (kubeadm and NKP default
+# to https://kubernetes.default.svc.cluster.local, a name that resolves only
+# inside the cluster), and because a mismatch between it and bound_issuer is the
+# one failure mode that would otherwise surface as an opaque "invalid issuer" at
+# every tenant login.
+data "http" "openid_configuration" {
+  count = var.cluster_issuer == null ? 1 : 0
 
-    annotations = {
-      "kubernetes.io/service-account.name" = kubernetes_service_account_v1.token_reviewer.metadata[0].name
+  url         = "${module.cluster.host}/.well-known/openid-configuration"
+  ca_cert_pem = base64decode(module.cluster.cluster_ca_certificate)
+
+  lifecycle {
+    postcondition {
+      condition     = self.status_code == 200
+      error_message = "The API server of ${local.cluster_name} answered ${self.status_code} for /.well-known/openid-configuration. With publish_issuer_discovery = true this should be readable anonymously; a 401/403 means the cluster runs with anonymous-auth disabled, in which case publish the discovery documents somewhere Vault can read them and set cluster_issuer + cluster_jwks_url. See docs/nutanix.md."
     }
   }
 
-  type                           = "kubernetes.io/service-account-token"
-  wait_for_service_account_token = true
+  depends_on = [kubernetes_cluster_role_binding_v1.issuer_discovery]
 }
 
-resource "vault_auth_backend" "kubernetes" {
-  type        = "kubernetes"
+locals {
+  # What the cluster says about itself, unless overridden.
+  cluster_issuer = coalesce(
+    var.cluster_issuer,
+    try(jsondecode(data.http.openid_configuration[0].response_body)["issuer"], null),
+  )
+
+  # Deliberately NOT the jwks_uri out of the discovery document: that URL is
+  # built from the issuer, so on a default cluster it is an in-cluster name
+  # Vault cannot resolve. The keys are fetched from the endpoint this stack
+  # already reaches the API server on. Overriding it is how a cluster whose
+  # JWKS is published elsewhere (the way EKS publishes to a public URL) is
+  # wired up.
+  cluster_jwks_url = coalesce(var.cluster_jwks_url, "${module.cluster.host}/openid/v1/jwks")
+
+  # Fetching keys and running OIDC discovery are mutually exclusive in Vault.
+  # Discovery is only possible when the issuer is a URL Vault can resolve,
+  # which on a private cloud means the cluster was deliberately configured with
+  # an external --service-account-issuer.
+  use_oidc_discovery = var.cluster_oidc_discovery_url != null
+}
+
+# --- Trusting the cluster ----------------------------------------------------
+# One JWT mount per cluster: a role name then means one cluster's assertions,
+# the way an IAM trust policy names one cloud's OIDC provider.
+resource "vault_jwt_auth_backend" "cluster" {
+  type        = "jwt"
   path        = local.vault_auth_path
-  description = "OneK8s ${var.environment}: logins from the NKP cluster ${local.cluster_name}"
-}
+  description = "OneK8s ${var.environment}: ServiceAccount tokens issued by the NKP cluster ${local.cluster_name}"
 
-resource "vault_kubernetes_auth_backend_config" "this" {
-  backend            = vault_auth_backend.kubernetes.path
-  kubernetes_host    = module.cluster.host
-  kubernetes_ca_cert = base64decode(module.cluster.cluster_ca_certificate)
-  token_reviewer_jwt = kubernetes_secret_v1.token_reviewer.data["token"]
+  # Where the public keys come from. Either way Vault performs an anonymous
+  # HTTPS GET and holds no credential for this cluster.
+  jwks_url    = local.use_oidc_discovery ? null : local.cluster_jwks_url
+  jwks_ca_pem = local.use_oidc_discovery ? null : base64decode(module.cluster.cluster_ca_certificate)
 
-  # The issuer claim is not a security control here — the token is validated by
-  # asking the cluster's own API server about it, and the audience is what pins
-  # a login to Vault. Leaving issuer validation on only breaks the mount when a
-  # cluster's issuer string changes, which is why Vault turns it off by default.
-  disable_iss_validation = true
+  oidc_discovery_url    = var.cluster_oidc_discovery_url
+  oidc_discovery_ca_pem = local.use_oidc_discovery ? base64decode(module.cluster.cluster_ca_certificate) : null
 
-  # Vault is outside the cluster, so there is no local CA or local token to
-  # fall back on: both come from the configuration above.
-  disable_local_ca_jwt = true
+  # The first half of "this token came from our cluster". The second half is
+  # the signature check above; a token from any other issuer fails both.
+  bound_issuer = local.cluster_issuer
 }
 
 # --- The platform's own identity ---------------------------------------------
@@ -124,8 +153,8 @@ resource "vault_policy" "ingress" {
   name = "platform-ingress-${local.name}"
 
   # KV v2 puts a secret's value under data/ and its versions under metadata/,
-  # so both are needed to read one; neither grants "list" on the mount, so
-  # there is nothing to enumerate even inside the prefix.
+  # so both are needed to read one; neither grants "list", so there is nothing
+  # to enumerate even inside the prefix.
   policy = <<-EOT
     path "${vault_mount.secrets.path}/data/${local.platform_secret_prefix}*" {
       capabilities = ["read"]
@@ -137,22 +166,24 @@ resource "vault_policy" "ingress" {
   EOT
 }
 
-resource "vault_kubernetes_auth_backend_role" "ingress" {
+resource "vault_jwt_auth_backend_role" "ingress" {
   count = var.enable_ingress ? 1 : 0
 
-  backend   = vault_auth_backend.kubernetes.path
+  backend   = vault_jwt_auth_backend.cluster.path
   role_name = "platform-ingress-${local.name}"
+  role_type = "jwt"
 
-  bound_service_account_names      = [local.ingress_service_account_name]
-  bound_service_account_namespaces = [local.ingress_namespace]
-
-  # Required from Vault 1.21 on, and a control in its own right: a token the
-  # cluster minted for any other audience is refused.
-  audience = local.vault_audience
+  # The same three claims every cloud's trust policy pins, in the same order of
+  # importance: who signed it (the mount), who it was minted for, and who it
+  # was minted as.
+  bound_audiences = [local.vault_audience]
+  bound_subject   = "system:serviceaccount:${local.ingress_namespace}:${local.ingress_service_account_name}"
+  user_claim      = "sub"
 
   token_policies = [vault_policy.ingress[0].name]
   token_ttl      = var.vault_token_ttl
-  # "default" stays in the token's policy set: it is what lets the holder
-  # renew and revoke its own token, which External Secrets does.
+  # "default" stays in the token's policy set: it is what lets the holder renew
+  # and revoke its own token, which External Secrets does. It grants no access
+  # to any secret path.
   token_no_default_policy = false
 }

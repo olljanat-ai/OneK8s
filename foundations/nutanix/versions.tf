@@ -5,9 +5,11 @@
 # The pairing is the same one the four public clouds have, with private-cloud
 # parts: NKP (Nutanix Kubernetes Platform, Starter edition, included with the
 # Nutanix licence) is the cluster, and a HashiCorp Vault KV v2 mount is the
-# secret backend. What replaces cloud IAM is Vault's own Kubernetes auth
-# method: a tenant's ServiceAccount token is exchanged for a Vault token whose
-# policy grants exactly that tenant's path prefix. See docs/nutanix.md.
+# secret backend. What replaces cloud IAM is the mechanism the public clouds
+# themselves use: the cluster is an OIDC provider, Vault is registered as a
+# relying party on its published keys, and a tenant's ServiceAccount token is
+# federated into a Vault token whose policy grants exactly that tenant's path
+# prefix. See docs/nutanix.md.
 #
 # State lives in the shared Azure Storage state home, not on-prem — see
 # docs/architecture.md. Azure credentials are therefore needed alongside the
@@ -39,6 +41,12 @@ terraform {
     vault = {
       source  = "hashicorp/vault"
       version = "= 5.11.0"
+    }
+    # Reads one unauthenticated endpoint of the cluster's own API server: the
+    # OIDC discovery document that says which issuer its tokens carry.
+    http = {
+      source  = "hashicorp/http"
+      version = "= 3.6.1"
     }
   }
 }

@@ -10,9 +10,11 @@
 - Permissions to create clusters, identities and IAM/role assignments in the
   target subscription/account/project
 - For the private cloud (`foundations/nutanix`): an **NKP management cluster**
-  with a workload cluster, and a **HashiCorp Vault 1.21+** both the runner and
-  that cluster can reach. See [nutanix.md](nutanix.md) — that foundation
-  attaches to a cluster NKP created rather than creating one.
+  with a workload cluster, and a **HashiCorp Vault** that the runner and the
+  cluster can reach, and that can itself reach the cluster's
+  `/openid/v1/jwks` (an anonymous GET for public keys — see
+  [nutanix.md](nutanix.md), which also covers the case where it cannot). That
+  foundation attaches to a cluster NKP created rather than creating one.
 
 ## 1. Bootstrap state storage (once, out of band)
 
@@ -59,12 +61,15 @@ secrets:
   **home region**, which the stacks address through a separate `oci.home`
   provider alias. No Customer Secret Key is needed: OCI state lives in the
   Azure state home like everything else.
-- **Nutanix (private cloud)**: two credentials, and neither is a cloud's. A
-  **ServiceAccount token on the NKP management cluster** that may read the
-  workload cluster's namespace (it is how the stacks get the cluster's
+- **Nutanix (private cloud)**: two deploy credentials, and neither is a
+  cloud's. A **ServiceAccount token on the NKP management cluster** that may
+  read the workload cluster's namespace (it is how the stacks get the cluster's
   kubeconfig), and a **Vault token** that may create mounts, policies and auth
   roles. Nothing about Prism Central is configured here — NKP holds those
-  credentials itself.
+  credentials itself. Note that neither credential is used at *runtime*: a
+  workload federates into Vault with a token its own cluster signs, so nothing
+  in the cluster holds a Vault credential and Vault holds nothing for the
+  cluster.
 
 Then set repository **secrets** (Settings → Secrets and variables →
 Actions → Secrets):

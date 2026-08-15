@@ -59,9 +59,11 @@ read only its own name-prefix slice of the shared secret backend — enforced
 with Key Vault **ABAC** conditions, IAM **ARN prefixes** (+ `kms:ViaService`),
 Secret Manager **IAM conditions**, OCI **policy conditions** on
 `target.secret.name`, and — on the private cloud, which has no cloud IAM plane
-at all — a **Vault policy** on `<mount>/data/<tenant>-*` reached through
-Vault's Kubernetes auth method. Cross-tenant secret access is blocked outside
-Kubernetes on every one of them.
+at all — a **Vault policy** on `<mount>/data/<tenant>-*`, reached by the same
+OIDC federation the public clouds use: the cluster is registered with Vault as
+an identity provider and the tenant's role pins the token's `sub` claim, so no
+credential is stored on either side. Cross-tenant secret access is blocked
+outside Kubernetes on every one of them.
 Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md)
 and, for the private cloud,
 [ADR-0002](docs/adr/0002-private-cloud-on-nkp-with-vault-as-the-identity-plane.md).

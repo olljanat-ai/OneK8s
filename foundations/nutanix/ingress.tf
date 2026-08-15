@@ -8,7 +8,8 @@
 # reaches the cluster the same way a tenant's own secrets do:
 #
 #   Vault <mount>/platform-wildcard-…
-#     --(SecretStore + ExternalSecret, Vault Kubernetes auth)-->
+#     --(SecretStore + ExternalSecret, Vault JWT auth on the cluster's own
+#        OIDC issuer)-->
 #       Secret platform-wildcard-tls (kubernetes.io/tls)
 #         --(Traefik default TLSStore)--> every websecure router
 locals {
@@ -32,13 +33,21 @@ locals {
         server  = var.vault_address
         path    = vault_mount.secrets.path
         version = "v2"
+        # jwt, not kubernetes: External Secrets asks the API server for a
+        # short-lived token with the audience Vault's role requires, and posts
+        # it to the JWT mount. Vault verifies the signature — it never calls
+        # back into the cluster, and neither side holds a credential for the
+        # other.
         auth = {
-          kubernetes = {
-            mountPath = vault_auth_backend.kubernetes.path
-            role      = var.enable_ingress ? vault_kubernetes_auth_backend_role.ingress[0].role_name : ""
-            serviceAccountRef = {
-              name      = local.ingress_service_account_name
-              audiences = [local.vault_audience]
+          jwt = {
+            path = vault_jwt_auth_backend.cluster.path
+            role = var.enable_ingress ? vault_jwt_auth_backend_role.ingress[0].role_name : ""
+            kubernetesServiceAccountToken = {
+              serviceAccountRef = {
+                name = local.ingress_service_account_name
+              }
+              audiences         = [local.vault_audience]
+              expirationSeconds = var.vault_token_expiration_seconds
             }
           }
         }
@@ -74,9 +83,10 @@ module "ingress" {
       apiVersion = "v1"
       kind       = "ServiceAccount"
       metadata = {
-        # No annotation: the identity is the ServiceAccount itself, asserted by
-        # the cluster and matched by the Vault role's
-        # bound_service_account_names / _namespaces.
+        # No annotation: the identity is the ServiceAccount itself. Its token
+        # carries sub = system:serviceaccount:traefik:platform-secrets, which
+        # is what the Vault role's bound_subject pins — the same string an
+        # IRSA trust policy or a federated identity credential pins.
         name = local.ingress_service_account_name
       }
     },
@@ -130,6 +140,6 @@ module "ingress" {
   # tries to log in with it.
   depends_on = [
     helm_release.external_secrets,
-    vault_kubernetes_auth_backend_config.this,
+    vault_jwt_auth_backend.cluster,
   ]
 }

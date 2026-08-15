@@ -136,7 +136,7 @@ spec:
 `tenant-store` is created by `modules/tenant-namespace` and authenticates as
 the tenant's ServiceAccount, exchanged for the tenant's cloud identity through
 workload identity federation — or, on the private cloud, for a Vault token
-through Vault's Kubernetes auth method. That identity can read only its own
+through the same OIDC federation, with Vault as the relying party. That identity can read only its own
 name-prefix slice of the shared backend, enforced outside Kubernetes
 ([ADR-0001](adr/0001-per-tenant-identities-and-namespaced-secretstores.md),
 [ADR-0002](adr/0002-private-cloud-on-nkp-with-vault-as-the-identity-plane.md)).

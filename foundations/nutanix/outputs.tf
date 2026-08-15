@@ -55,13 +55,18 @@ output "vault_mount_path" {
 }
 
 output "vault_auth_path" {
-  description = "Path of the Kubernetes auth mount that trusts this cluster. Tenant roles are created under it."
-  value       = vault_auth_backend.kubernetes.path
+  description = "Path of the JWT auth mount that trusts this cluster's token issuer. Tenant roles are created under it."
+  value       = vault_jwt_auth_backend.cluster.path
 }
 
 output "vault_audience" {
   description = "Audience the cluster mints ServiceAccount tokens for and Vault roles require."
   value       = local.vault_audience
+}
+
+output "cluster_issuer" {
+  description = "The 'iss' claim this cluster's ServiceAccount tokens carry, which the Vault auth mount is bound to — the private cloud's counterpart of an EKS OIDC provider URL."
+  value       = local.cluster_issuer
 }
 
 # --- Ingress -----------------------------------------------------------------

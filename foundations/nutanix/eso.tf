@@ -1,8 +1,9 @@
 # External Secrets Operator, cluster-wide controller. Tenants get their own
-# namespaced SecretStore authenticating through Vault's Kubernetes auth method,
-# so the operator itself holds no Vault credentials — it only mints a
-# ServiceAccount token for the tenant's own ServiceAccount and hands it to
-# Vault, which decides what that identity may read.
+# namespaced SecretStore authenticating through Vault's JWT auth method, so
+# the operator itself holds no Vault credentials — it only asks the API server
+# for a short-lived token for the tenant's own ServiceAccount and hands it to
+# Vault, which verifies the cluster's signature and decides what that identity
+# may read.
 #
 # No CNI is installed here, unlike the AWS and OCI foundations: NKP ships
 # Cilium as the cluster's CNI, so the NetworkPolicy enforcement the tenant

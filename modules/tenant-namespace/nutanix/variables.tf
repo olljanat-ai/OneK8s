@@ -31,12 +31,12 @@ variable "vault_mount_path" {
 }
 
 variable "vault_auth_path" {
-  description = "Path of the Kubernetes auth mount that trusts this cluster (from the foundation). One mount per cluster, so a role is pinned to one cluster's assertions."
+  description = "Path of the JWT auth mount that trusts this cluster's token issuer (from the foundation). One mount per cluster, so a role is pinned to one cluster's assertions."
   type        = string
 }
 
 variable "vault_audience" {
-  description = "Audience the cluster mints ServiceAccount tokens for and the Vault role requires (from the foundation)."
+  description = "Audience the cluster mints ServiceAccount tokens for and the Vault role requires (from the foundation). A token minted for any other audience is refused, the way sts.amazonaws.com and api://AzureADTokenExchange are on the other clouds."
   type        = string
   default     = "vault"
 }
@@ -45,6 +45,12 @@ variable "vault_token_ttl" {
   description = "TTL, in seconds, of the Vault tokens issued to this tenant's workloads."
   type        = number
   default     = 3600
+}
+
+variable "vault_token_expiration_seconds" {
+  description = "Lifetime of the ServiceAccount token External Secrets mints to log in with. Vault verifies its signature rather than calling back into the cluster, so this expiry — not a revocation check — is what bounds a leaked token, exactly as on the public clouds."
+  type        = number
+  default     = 600
 }
 
 variable "quota" {

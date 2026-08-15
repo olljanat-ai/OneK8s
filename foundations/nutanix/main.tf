@@ -14,23 +14,17 @@ locals {
   # Secret Manager project and the OCI Vault do.
   vault_mount_path = coalesce(var.vault_mount_path, local.name)
 
-  # One Kubernetes auth mount per cluster. Vault matches a login against the
-  # (namespace, service account) pair asserted by *this* cluster's TokenReview
-  # API, so a second cluster's "team-alpha/workload" is a different principal
-  # rather than the same one — the isolation the OCI policies get by pinning
-  # request.principal.cluster_id.
-  vault_auth_path = coalesce(var.vault_auth_path, "kubernetes-${local.name}")
+  # One JWT auth mount per cluster, trusting exactly one issuer's signing keys.
+  # A second cluster's "team-alpha/workload" therefore fails the signature and
+  # the issuer check rather than logging in as this one's — the isolation the
+  # OCI policies get by pinning request.principal.cluster_id, and that AWS gets
+  # by naming one OIDC provider ARN in a trust policy.
+  vault_auth_path = coalesce(var.vault_auth_path, "jwt-${local.name}")
 
-  # The audience the ServiceAccount token is minted for, and the one the Vault
-  # role requires. Vault 1.21 rejects a login against a role with no audience,
-  # and a token minted for a different audience is refused — so this is also
-  # what stops a token the cluster issued for something else from being
-  # replayed against Vault.
+  # The audience the ServiceAccount token is minted for, and the one every
+  # Vault role requires. A token the cluster issued for anything else — the API
+  # server itself included — fails the audience check, which is what stops a
+  # token from being replayed against Vault. It is the same role "sts.amazonaws.com"
+  # and "api://AzureADTokenExchange" play in the other clouds' trust policies.
   vault_audience = "vault"
-
-  # Vault's counterpart of a cloud's TokenReview-equivalent trust: the
-  # ServiceAccount whose token Vault presents when it asks this cluster
-  # "whose token is this?".
-  token_reviewer_namespace = "vault-auth"
-  token_reviewer_name      = "vault-token-reviewer"
 }

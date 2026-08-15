@@ -37,10 +37,11 @@ provider. That is exactly what the `tenants` stack does.
 | Concern | Azure | AWS | GCP | OCI | Nutanix |
 |---|---|---|---|---|---|
 | Namespace | **Azure Managed Namespace** (`azapi`, incl. its default quota) | Namespace + ResourceQuota | Namespace + ResourceQuota | Namespace + ResourceQuota | Namespace + ResourceQuota |
-| Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding | none to create — OKE asserts the (cluster, namespace, SA) tuple itself | none to create — a Vault role bound to that namespace + SA, verified by TokenReview |
+| Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding | none to create — OKE asserts the (cluster, namespace, SA) tuple itself | none to create — a Vault JWT role pinning `sub` to that namespace's SA, verified against the cluster's OIDC keys |
 | K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` | no annotation needed | no annotation needed |
-| ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` | namespaced, `vault` + `auth.kubernetes` |
+| ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` | namespaced, `vault` + `auth.jwt` |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` | Vault policy: `read "<mount>/data/<tenant>-*"` (and `metadata/`), no `list` |
+| Federation subject | `system:serviceaccount:<ns>:<sa>` | `system:serviceaccount:<ns>:<sa>` | `<project>.svc.id.goog[<ns>/<sa>]` | `request.principal.namespace` + `_service_account` | `bound_subject = system:serviceaccount:<ns>:<sa>` |
 | Ingress isolation | two NetworkPolicies: own namespace + the `traefik` namespace (the managed namespace's own ingress policy is left at `AllowAll` — see below) | same two | same two | same two | same two |
 
 ## Publishing an application

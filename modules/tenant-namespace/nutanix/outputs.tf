@@ -9,8 +9,13 @@ output "service_account_name" {
 }
 
 output "vault_role" {
-  description = "The tenant's Vault identity — the role its ServiceAccount logs in as, as <auth mount>/<role>."
-  value       = "${var.vault_auth_path}/${vault_kubernetes_auth_backend_role.tenant.role_name}"
+  description = "The tenant's Vault identity — the role its ServiceAccount federates into, as <auth mount>/<role>."
+  value       = "${var.vault_auth_path}/${vault_jwt_auth_backend_role.tenant.role_name}"
+}
+
+output "subject" {
+  description = "The 'sub' claim this tenant's tokens carry and its Vault role pins — the same string the other clouds' trust policies name."
+  value       = local.subject
 }
 
 output "vault_policy" {

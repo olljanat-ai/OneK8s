@@ -65,8 +65,9 @@ variable "cluster_manifests_dir" {
 # --- HashiCorp Vault ----------------------------------------------------------
 # The secret backend. Vault itself is a prerequisite, the way a Nutanix cluster
 # and Prism Central are: this stack creates the environment's KV v2 mount and
-# its Kubernetes auth mount inside an existing Vault, which is the private
-# cloud's equivalent of creating a Key Vault in a subscription that exists.
+# the JWT auth mount that trusts this cluster's token issuer, which is the
+# private cloud's equivalent of creating a Key Vault in a subscription that
+# already exists and registering the cluster's OIDC provider with it.
 variable "vault_address" {
   description = "Address of the Vault server, e.g. 'https://vault.example.internal:8200'. The Terraform run and, at runtime, External Secrets in the cluster both have to reach it."
   type        = string
@@ -91,7 +92,7 @@ variable "vault_mount_path" {
 }
 
 variable "vault_auth_path" {
-  description = "Path of the Kubernetes auth mount that trusts this cluster. One mount per cluster, so a role name means one thing. Null defaults to 'kubernetes-<name_prefix>-<environment>'."
+  description = "Path of the JWT auth mount that trusts this cluster's ServiceAccount tokens. One mount per cluster, so a role name means one cluster's assertions. Null defaults to 'jwt-<name_prefix>-<environment>'."
   type        = string
   default     = null
 }
@@ -100,6 +101,53 @@ variable "vault_token_ttl" {
   description = "TTL, in seconds, of the Vault tokens issued to workloads of this cluster. Short by design: External Secrets logs in again on every refresh."
   type        = number
   default     = 3600
+}
+
+variable "vault_token_expiration_seconds" {
+  description = "Lifetime of the ServiceAccount token External Secrets mints to log in with. Vault verifies a signature rather than calling back into the cluster, so this expiry — not a revocation check — is what bounds a leaked token, exactly as it is on the public clouds. Ten minutes is the ESO default."
+  type        = number
+  default     = 600
+}
+
+# --- The cluster as an OIDC provider -----------------------------------------
+# The three knobs below exist because the one thing a managed cloud does for
+# free here is *hosting*: AKS, EKS, GKE and OKE publish their clusters' OIDC
+# discovery documents at a public URL. On a private cloud that is a decision,
+# and these cover the three ways it is usually made. All three defaults suit a
+# stock NKP cluster, where nothing about the API server has to change.
+variable "publish_issuer_discovery" {
+  description = <<-EOT
+    Bind the built-in `system:service-account-issuer-discovery` ClusterRole to
+    `system:unauthenticated`, so Vault can read the cluster's OIDC discovery
+    document and public keys without holding any credential for it. This is
+    what HashiCorp's Kubernetes-as-an-OIDC-provider guide prescribes, and what
+    the managed clouds do at a far larger scale — the endpoints expose an
+    issuer URL and public keys, nothing else.
+
+    Set to false on a cluster that already publishes them (or that runs with
+    anonymous authentication disabled) and use cluster_issuer +
+    cluster_jwks_url to point Vault at wherever they are published instead.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "cluster_issuer" {
+  description = "The `iss` claim of this cluster's ServiceAccount tokens, which Vault requires every login to carry. Null (the default) reads it from the cluster's own discovery document, so it cannot drift from what the API server actually issues."
+  type        = string
+  default     = null
+}
+
+variable "cluster_jwks_url" {
+  description = "URL Vault fetches the cluster's public signing keys from. Null (the default) uses the API server's own /openid/v1/jwks — deliberately not the jwks_uri in the discovery document, which is built from the issuer and is an in-cluster name on a stock cluster. Set it when the keys are published somewhere else, the way EKS publishes them to a public URL."
+  type        = string
+  default     = null
+}
+
+variable "cluster_oidc_discovery_url" {
+  description = "Use full OIDC discovery against this URL instead of fetching the JWKS directly. Only possible when the cluster was configured with an externally resolvable `--service-account-issuer` (Vault requires the discovery URL and the token's `iss` to agree), which is the 'exactly like EKS' setup. Mutually exclusive with cluster_jwks_url."
+  type        = string
+  default     = null
 }
 
 # --- Cluster add-ons ----------------------------------------------------------
