@@ -5,6 +5,40 @@ locals {
     "onek8s.io/tenant"             = var.tenant_name
     "app.kubernetes.io/managed-by" = "terraform"
   }, var.namespace_labels)
+
+  # Pod Security admission: the API server's own guardrail, switched on by
+  # labels on the namespace and applied to every pod created in it, whoever
+  # creates it — Argo CD, a tenant's kubectl, or a controller acting on their
+  # behalf. Nothing has to be installed for it; it is built into Kubernetes.
+  #
+  # "restricted" is the platform default because it is the only built-in level
+  # that requires a non-root user: "baseline" blocks the obvious escapes but
+  # still admits a container running as UID 0. Under "restricted" a pod that
+  # has not said who it runs as — runAsNonRoot, no privilege escalation, all
+  # capabilities dropped, a seccomp profile — is refused at admission instead
+  # of quietly starting as root against the node's kernel.
+  #
+  # All three modes at the same level, because they answer at different
+  # moments: "enforce" rejects the pod, while "warn" and "audit" evaluate the
+  # object that would create it, so applying a Deployment whose template
+  # violates the level says so immediately rather than leaving a Deployment
+  # that will never produce a pod.
+  #
+  # Deliberately no *-version labels, which leaves all three at "latest": the
+  # level tracks the API server, so a cluster upgrade tightens the check
+  # rather than holding it at whatever the standard meant on the day the
+  # namespace was created.
+  pod_security_labels = {
+    "pod-security.kubernetes.io/enforce" = var.pod_security_standard
+    "pod-security.kubernetes.io/warn"    = var.pod_security_standard
+    "pod-security.kubernetes.io/audit"   = var.pod_security_standard
+  }
+
+  # Merged last, so a tenant's own labels cannot turn the guardrail off by
+  # spelling one of these keys: those labels are descriptive, and this set is
+  # not. Only the namespace carries them — they mean nothing on the
+  # ServiceAccount or the SecretStore.
+  namespace_labels = merge(local.labels, local.pod_security_labels)
 }
 
 # --- Namespace + guardrails (skipped when the cloud provides a managed
@@ -14,7 +48,7 @@ resource "kubernetes_namespace_v1" "this" {
 
   metadata {
     name   = local.namespace
-    labels = local.labels
+    labels = local.namespace_labels
   }
 }
 

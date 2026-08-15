@@ -43,6 +43,14 @@ always — and requires two values it refuses to guess:
 Whoever deploys knows both. The "hello" ApplicationSet in `gitops/argocd/` sets
 them per cluster.
 
+It runs as **UID 1654**, and nothing about it is root: the chiseled base image
+defaults to that user, the `Dockerfile` selects it explicitly, and the pod's
+`securityContext` pins it alongside a read-only root filesystem, every
+capability dropped, `RuntimeDefault` seccomp and no ServiceAccount token. That
+is not optional politeness — tenant namespaces enforce the `restricted` Pod
+Security Standard, so a pod that had not said all of this would never be
+admitted ([tenant module](../../modules/tenant-namespace/README.md#non-root-workloads)).
+
 `GET /healthz` is the liveness and readiness probe.
 
 `GET /favicon.svg` is the page's icon: the Kubernetes heptagon with a "1" cut

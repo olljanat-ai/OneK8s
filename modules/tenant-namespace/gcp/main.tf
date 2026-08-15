@@ -41,11 +41,12 @@ resource "google_project_iam_member" "secret_accessor" {
 module "common" {
   source = "../common"
 
-  tenant_name      = var.tenant_name
-  namespace        = local.namespace
-  create_namespace = true
-  namespace_labels = var.namespace_labels
-  quota            = var.quota
+  tenant_name           = var.tenant_name
+  namespace             = local.namespace
+  create_namespace      = true
+  namespace_labels      = var.namespace_labels
+  pod_security_standard = var.pod_security_standard
+  quota                 = var.quota
 
   service_account_name = var.service_account_name
 

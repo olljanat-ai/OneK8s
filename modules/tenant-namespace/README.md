@@ -41,6 +41,7 @@ provider. That is exactly what the `tenants` stack does.
 | ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` |
 | Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` |
 | Ingress isolation | two NetworkPolicies: own namespace + the `traefik` namespace (the managed namespace's own ingress policy is left at `AllowAll` — see below) | same two | same two | same two |
+| Workload guardrail | Pod Security admission at `restricted` — non-root workloads only — labelled on the ARM managed namespace | same, labelled on the namespace | same | same |
 
 ## Publishing an application
 
@@ -96,6 +97,60 @@ ingress — left behind by the managed namespace, or applied by hand while
 debugging — would silently undo both.
 
 [aks-mn]: https://learn.microsoft.com/azure/aks/concepts-managed-namespaces
+
+## Non-root workloads
+
+Every tenant namespace is labelled for the **`restricted` Pod Security
+Standard** — `pod-security.kubernetes.io/enforce`, `-warn` and `-audit`, all
+three at the same level:
+
+```bash
+kubectl get ns team-alpha -o jsonpath='{.metadata.labels}'
+```
+
+`restricted` rather than `baseline` because it is the only built-in level that
+requires a **non-root user**. Baseline blocks the obvious escapes and still
+admits a container running as UID 0; under `restricted` a pod that has not
+said who it runs as is refused at admission, as are privilege escalation,
+added capabilities and a missing seccomp profile. It is the API server's own
+admission controller, so nothing is installed for it and nothing can create a
+pod in the namespace that goes around it.
+
+`enforce` rejects the pod, while `warn` and `audit` evaluate the object that
+would create it, so `kubectl apply` of a non-compliant Deployment answers at
+once rather than leaving a Deployment that never produces a pod. There are no
+`*-version` labels: the level tracks the API server, so a cluster upgrade
+tightens the check instead of pinning it.
+
+A tenant workload therefore needs, at a minimum:
+
+```yaml
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1654           # anything but 0; the image's own user
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: app
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities: { drop: [ALL] }
+```
+
+`apps/hello` and `apps/db-hello` are the worked examples: both satisfy the
+level exactly, and PR validation keeps them that way.
+
+`var.pod_security_standard` lowers the level (`baseline`, or `privileged` to
+enforce nothing) for a tenant with a workload that genuinely cannot comply —
+the tenants stack exposes it per tenant, so the exception lives in
+`envs/<env>.tfvars` beside the tenant it is for, and never becomes the
+platform's default.
+
+**On AKS the labels are set on the managed namespace**, through the ARM body
+in `azure/main.tf`, because that object owns the namespace's metadata and
+`common` never creates one there. The two spellings of the label set have to
+stay in step; both are commented to that effect. After an apply, a namespace
+missing them is a namespace that can run containers as root.
 
 ## Isolation model
 

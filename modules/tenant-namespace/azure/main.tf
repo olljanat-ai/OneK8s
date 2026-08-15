@@ -6,6 +6,20 @@ locals {
   # a hard security boundary.
   secret_prefix = "${var.tenant_name}-"
 
+  # The Pod Security admission labels, exactly as ../common writes them on the
+  # namespaces it creates — see the reasoning there. They are spelled again
+  # here because on AKS the tenant namespace is not one of those: it is the ARM
+  # object below, and everything about its metadata goes through the ARM body.
+  # ../common cannot hand them over either, since it is applied after this
+  # resource rather than before it. Change one copy and the other has to
+  # follow; a tenant whose namespace is missing them is a tenant that can run
+  # containers as root.
+  pod_security_labels = {
+    "pod-security.kubernetes.io/enforce" = var.pod_security_standard
+    "pod-security.kubernetes.io/warn"    = var.pod_security_standard
+    "pod-security.kubernetes.io/audit"   = var.pod_security_standard
+  }
+
   # The managed namespace API accepts CPU only in milliCPU form ("2000m",
   # minimum "1m"), while the tenant-facing quota is written in plain Kubernetes
   # CPU units ("2") so the same value works on every cloud. Convert here, and
@@ -32,9 +46,11 @@ resource "azapi_resource" "managed_namespace" {
   body = {
     location = var.location
     properties = {
+      # The tenant's own labels first, then the guardrail, so that a label map
+      # cannot switch Pod Security admission off by naming one of its keys.
       labels = merge({
         "onek8s.io/tenant" = var.tenant_name
-      }, var.namespace_labels)
+      }, var.namespace_labels, local.pod_security_labels)
       annotations = {}
       defaultResourceQuota = {
         cpuRequest    = local.cpu_millicores.request
@@ -123,9 +139,13 @@ resource "azurerm_role_assignment" "tenant_secrets" {
 module "common" {
   source = "../common"
 
-  tenant_name      = var.tenant_name
-  namespace        = local.namespace
-  create_namespace = false # provided by the managed namespace above
+  tenant_name = var.tenant_name
+  namespace   = local.namespace
+  # Provided by the managed namespace above — and so are its labels, the Pod
+  # Security admission ones included, which is why no pod_security_standard is
+  # passed here: there is no namespace object in this module for ../common to
+  # create or to label.
+  create_namespace = false
 
   service_account_name = var.service_account_name
 

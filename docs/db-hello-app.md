@@ -289,6 +289,27 @@ Three states are ordinary rather than broken, and each names its own fix:
 | `no schema` | same workflow; it applies the migration that creates `visits` |
 | `no token` | the pod is missing the workload-identity label or the ServiceAccount annotation — check the tenants stack applied |
 
+## Non-root, like everything else in a tenant namespace
+
+The pod runs as **UID 1654**: `USER $APP_UID` in the `Dockerfile`, and
+`runAsNonRoot: true` with `runAsUser`/`runAsGroup` 1654, a read-only root
+filesystem, `RuntimeDefault` seccomp and every capability dropped in the
+chart. No Kubernetes ServiceAccount token is mounted either — the projected
+*Azure* token the workload identity webhook adds is a separate volume and is
+unaffected.
+
+None of that is this chart being tidy. The tenant namespace enforces the
+`restricted` Pod Security Standard, so a pod that had not said all of it would
+be refused at admission
+([architecture.md](architecture.md#nothing-runs-as-root)).
+
+It is worth stating here more than for `hello`, because this application's
+runtime image is the **full `aspnet:10.0-noble`** rather than a chiseled one —
+`Microsoft.Data.SqlClient` refuses to open a connection in Globalization
+Invariant Mode, so ICU has to be present. That image has a shell and a root
+user; the `USER` instruction and the pod's `securityContext` are what keep the
+application from being either, and PR validation checks both before a merge.
+
 ## Operating it
 
 ```bash

@@ -87,8 +87,9 @@ module "tenants_azure" {
   environment = var.environment
   foundation  = local.foundation.azure
 
-  quota            = each.value.quota
-  namespace_labels = each.value.labels
+  quota                 = each.value.quota
+  namespace_labels      = each.value.labels
+  pod_security_standard = each.value.pod_security_standard
 }
 
 module "tenants_aws" {
@@ -110,8 +111,9 @@ module "tenants_aws" {
   environment = var.environment
   foundation  = local.foundation.aws
 
-  quota            = each.value.quota
-  namespace_labels = each.value.labels
+  quota                 = each.value.quota
+  namespace_labels      = each.value.labels
+  pod_security_standard = each.value.pod_security_standard
 }
 
 module "tenants_gcp" {
@@ -133,8 +135,9 @@ module "tenants_gcp" {
   environment = var.environment
   foundation  = local.foundation.gcp
 
-  quota            = each.value.quota
-  namespace_labels = each.value.labels
+  quota                 = each.value.quota
+  namespace_labels      = each.value.labels
+  pod_security_standard = each.value.pod_security_standard
 }
 
 module "tenants_oci" {
@@ -156,6 +159,7 @@ module "tenants_oci" {
   environment = var.environment
   foundation  = local.foundation.oci
 
-  quota            = each.value.quota
-  namespace_labels = each.value.labels
+  quota                 = each.value.quota
+  namespace_labels      = each.value.labels
+  pod_security_standard = each.value.pod_security_standard
 }
