@@ -17,8 +17,13 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
 WORKDIR /app
 COPY --from=build /app ./
 
-# The chiseled images ship a non-root user (UID 1654) but still default to
-# root; $APP_UID is how they expect you to switch.
+# Run as the image's own unprivileged user rather than root. $APP_UID is how
+# the .NET images expect you to name it; it resolves to 1654, the "app" user
+# (app:x:1654:1654, shell /bin/false), which is the same UID the chart pins in
+# the pod's securityContext. Change one and the other has to follow.
+#
+# The build stage above stays root so it can write /app; only what runs in
+# production drops the privilege, and it owns none of the files it serves.
 USER $APP_UID
 
 # 8080 is the .NET 8+ default for a non-root container: binding 80 needs a

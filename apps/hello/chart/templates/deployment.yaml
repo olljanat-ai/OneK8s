@@ -22,7 +22,23 @@ spec:
       # token to steal out of it.
       automountServiceAccountToken: false
       securityContext:
+        # Non-root twice over, on purpose. runAsNonRoot is the check — the
+        # kubelet refuses to start the pod if the image resolves to UID 0 —
+        # and runAsUser/runAsGroup are the statement: this is who it runs as,
+        # readable here rather than only discoverable by inspecting the image.
+        #
+        # 1654 is "app" in the .NET chiseled base image (APP_UID, and its
+        # /etc/passwd entry "app:x:1654:1654"), which is what the Dockerfile's
+        # USER selects. The two have to agree; if the base image ever moves,
+        # runAsNonRoot fails the pod closed rather than quietly running as
+        # somebody else.
         runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        # No fsGroup: nothing here needs group ownership fixed up. The secret
+        # volume is read-only and world-readable, /tmp is an emptyDir the
+        # kubelet creates world-writable, and fsGroup would only add a
+        # recursive chown at every mount.
         seccompProfile:
           type: RuntimeDefault
       containers:

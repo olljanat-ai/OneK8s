@@ -262,6 +262,21 @@ ASP.NET runtime serves — Ubuntu with no shell, no package manager and a
 non-root default user. The pod adds the rest: read-only root filesystem, all
 capabilities dropped, no ServiceAccount token mounted.
 
+Nothing in it runs as root, and that is stated in three places rather than
+inherited from one:
+
+| Where | What it says |
+|---|---|
+| the base image | `User: "1654"` — its own default, before anything of ours |
+| `Dockerfile` | `USER $APP_UID`, which resolves to the same 1654 |
+| the pod's `securityContext` | `runAsUser: 1654`, `runAsGroup: 1654`, `runAsNonRoot: true` |
+
+The last one is both a statement and a check: `runAsNonRoot` makes the kubelet
+refuse to start the pod at all if the image ever resolves to UID 0, so a base
+image that changed underneath us fails the deploy instead of quietly handing
+the process root. There is no `fsGroup` — the secret volume is read-only and
+world-readable and `/tmp` is an emptyDir, so there is nothing to chown.
+
 ## Operating it
 
 ```bash
