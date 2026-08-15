@@ -350,9 +350,17 @@ Secret naming contract per tenant:
 - AWS Secrets Manager: `"<env>/<tenant>/<name>"`
 - GCP Secret Manager: `"<tenant>-<name>"`
 - OCI Vault: `"<tenant>-<name>"`
-- HashiCorp Vault (Nutanix): `"<mount>/<tenant>-<name>"`, and because a KV v2
-  secret is a *map*, the field inside it is named too — the ExternalSecret
-  carries a `property` where the other four do not
+- HashiCorp Vault (Nutanix): `"<mount>/<tenant>-<name>"`
+
+**And a secret's value is a JSON object of fields**, on every one of them. That
+is a format contract, not a convenience: it is what lets one `ExternalSecret`
+shape — `dataFrom.extract`, no `property` — read a secret on all five clouds.
+Vault's KV v2 stores maps natively, so a manifest that named only a key would
+get the whole map back as JSON there and the value itself everywhere else; the
+alternative to this contract is a per-cloud `property`, which would put a
+cloud's dialect into every tenant's manifest. The platform already stored the
+wildcard certificate this way (`{"tls.crt": …, "tls.key": …}`) before there was
+a private cloud to justify it.
 
 Because the prefix *is* the boundary, a tenant name is also a claim on a slice
 of the shared backend. `platform-` is reserved for the platform's own objects
@@ -363,7 +371,8 @@ the reserved `platform` tenant's secret on every cloud, so it is
 `platform-wildcard-onek8s-lol` on Azure, GCP and OCI, and
 `<env>/platform/wildcard-onek8s-lol` on AWS.
 
-Consuming a secret from a tenant workload:
+Consuming a secret from a tenant workload — the same manifest on all five
+clouds, with only the key spelled per that cloud's naming contract:
 
 ```yaml
 apiVersion: external-secrets.io/v1
@@ -377,11 +386,13 @@ spec:
     name: tenant-store
   target:
     name: app-db
-  data:
-    - secretKey: password
-      remoteRef:
-        key: team-alpha-db-password   # Azure/GCP; "dev/team-alpha/db-password" on AWS
+  dataFrom:
+    - extract:
+        key: team-alpha-db  # "dev/team-alpha/db" on AWS
 ```
+
+The stored object's fields become the Kubernetes Secret's keys, so
+`{"password": "…"}` yields a `password` key.
 
 ## CI/CD
 

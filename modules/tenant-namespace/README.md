@@ -162,9 +162,10 @@ selected cloud (see `variables.tf` for the per-cloud key list).
   tenant from enumerating the compartment. The Nutanix policy grants no `list`
   capability for the same reason, with the same consequence.
 - Nutanix secrets are Vault KV v2, so they are **maps of fields** rather than
-  opaque values: an `ExternalSecret` there names a `remoteRef.property` as well
-  as a key. It also needs Vault 1.21+, where a role without an `audience` stops
-  authenticating — the roles this module writes always set one.
+  opaque values. That is why the platform stores every secret as a JSON object
+  on every cloud: a tenant's `ExternalSecret` uses `dataFrom.extract` and is the
+  same manifest on all five, with no per-cloud `property`. See
+  `docs/architecture.md`, "Secret isolation".
 - The Nutanix submodule needs the `vault` provider, and since passing any
   provider disables inheritance, `tenants/main.tf` lists it in every module
   block alongside the OCI aliases.

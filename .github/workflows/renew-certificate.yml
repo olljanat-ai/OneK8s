@@ -26,6 +26,11 @@ name: Renew Certificate
 # page without a restart" into something the platform demonstrates instead of
 # claims.
 #
+# Both are stored the same way, and it matters: a **JSON object of fields**.
+# That is the platform's secret format on every cloud, and it is what lets one
+# ExternalSecret shape (dataFrom/extract, no property) read a secret on all
+# five of them — including Vault, whose KV v2 secrets are maps natively.
+#
 # Key Vault is also the only state this workflow keeps. Nothing is carried
 # between runs on disk: the certificate already in the vault decides whether a
 # renewal is due, and the ACME account key sits next to it as a secret so
@@ -348,10 +353,26 @@ jobs:
           name="${TENANT}-${TEST_SECRET}"
           echo "name=$name" >> "$GITHUB_OUTPUT"
 
-          if az keyvault secret show \
+          # Every secret this platform stores is a JSON object of fields, which
+          # is what lets ONE ExternalSecret shape work on all five clouds: the
+          # application extracts the object and gets its fields as keys, with no
+          # per-cloud property to name. The wildcard certificate has always been
+          # stored that way ({"tls.crt": …, "tls.key": …}); this is the same
+          # rule applied to the one other value the platform publishes.
+          exists=false
+          reformat=false
+          if current="$(az keyvault secret show \
                 --vault-name "$VAULT" --name "$name" \
-                --query id -o tsv --only-show-errors >/dev/null 2>/tmp/kv-err; then
+                --query value -o tsv \
+                --only-show-errors 2>/tmp/kv-err)"; then
             exists=true
+            # A value written before that convention is a bare string. Rewriting
+            # it is the migration, and it happens on the next run of this
+            # workflow rather than by hand.
+            if ! printf '%s' "$current" | jq -e 'type == "object"' >/dev/null 2>&1; then
+              reformat=true
+              echo "$name is stored as a bare string; rewriting it as {\"${TEST_SECRET}\": …}."
+            fi
           elif grep -qiE 'not found|SecretNotFound' /tmp/kv-err; then
             exists=false
           else
@@ -359,27 +380,33 @@ jobs:
             exit 1
           fi
 
-          if [ "$exists" = "true" ] && [ "$RENEWED" != "true" ]; then
+          if [ "$exists" = "true" ] && [ "$RENEWED" != "true" ] && [ "$reformat" != "true" ]; then
             echo "generated=false" >> "$GITHUB_OUTPUT"
             echo "$name is already in $VAULT and nothing was renewed; leaving it as it is."
             exit 0
           fi
 
-          # Written to a file rather than passed as an argument, like every
-          # other value this workflow hands to a CLI.
-          value="$RUNNER_TEMP/test-secret.txt"
+          # Written to files rather than passed as arguments, like every other
+          # value this workflow hands to a CLI. The readable line is what the
+          # page shows and what the summary prints; the object is what is
+          # stored.
+          text="$RUNNER_TEMP/test-secret.txt"
           printf 'OneK8s %s test secret — issued %s by run %s (%s)' \
             "$TF_ENV" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$GITHUB_RUN_ID" \
-            "$(openssl rand -hex 4)" > "$value"
+            "$(openssl rand -hex 4)" > "$text"
+          jq -n --rawfile v "$text" --arg k "$TEST_SECRET" '{($k): $v}' \
+            > "$RUNNER_TEMP/test-secret.json"
 
           az keyvault secret set \
             --vault-name "$VAULT" --name "$name" \
-            --file "$value" --encoding utf-8 \
+            --file "$RUNNER_TEMP/test-secret.json" --encoding utf-8 \
             --only-show-errors --output none
 
           echo "generated=true" >> "$GITHUB_OUTPUT"
-          echo "value=$(cat "$value")" >> "$GITHUB_OUTPUT"
-          if [ "$exists" = "true" ]; then
+          echo "value=$(cat "$text")" >> "$GITHUB_OUTPUT"
+          if [ "$reformat" = "true" ] && [ "$RENEWED" != "true" ]; then
+            echo "Rewrote $name in $VAULT as a JSON object."
+          elif [ "$exists" = "true" ]; then
             echo "Rotated $name in $VAULT."
           else
             echo "Seeded $name in $VAULT."
@@ -725,8 +752,20 @@ jobs:
           test_name="${TENANT}-${TEST_SECRET}"
           if az keyvault secret download \
                 --vault-name "$VAULT" --name "$test_name" \
-                --file "$RUNNER_TEMP/test-secret.txt" --encoding utf-8 \
+                --file "$RUNNER_TEMP/test-secret.raw" --encoding utf-8 \
                 --only-show-errors 2>/tmp/kv-err; then
+            # Published as a JSON object of fields, like the certificate beside
+            # it: that is what lets one ExternalSecret shape read it on all five
+            # clouds. A vault whose renewal predates that convention holds a
+            # bare string, which is wrapped here so a distribution run never
+            # publishes something the applications cannot extract.
+            if jq -e 'type == "object"' "$RUNNER_TEMP/test-secret.raw" >/dev/null 2>&1; then
+              cp "$RUNNER_TEMP/test-secret.raw" "$RUNNER_TEMP/test-secret.json"
+            else
+              echo "::warning::$test_name is stored as a bare string; publishing it as {\"${TEST_SECRET}\": …}. Run this workflow in renew mode to rewrite the source."
+              jq -n --rawfile v "$RUNNER_TEMP/test-secret.raw" \
+                --arg k "$TEST_SECRET" '{($k): $v}' > "$RUNNER_TEMP/test-secret.json"
+            fi
             echo "test_name=$test_name" >> "$GITHUB_OUTPUT"
             echo "Test secret: $test_name"
           elif grep -qiE 'not found|SecretNotFound' /tmp/kv-err; then
@@ -777,7 +816,7 @@ jobs:
           put "$SECRET" "$RUNNER_TEMP/payload.json" \
             "OneK8s platform wildcard certificate (${TF_ENV})"
           if [ -n "$TEST_NAME" ]; then
-            put "$TEST_SECRET_ID" "$RUNNER_TEMP/test-secret.txt" \
+            put "$TEST_SECRET_ID" "$RUNNER_TEMP/test-secret.json" \
               "OneK8s ${TENANT} test secret (${TF_ENV})"
           fi
 
@@ -804,7 +843,7 @@ jobs:
           }
           add "$CERT_NAME" "$RUNNER_TEMP/payload.json"
           if [ -n "$TEST_NAME" ]; then
-            add "$TEST_NAME" "$RUNNER_TEMP/test-secret.txt"
+            add "$TEST_NAME" "$RUNNER_TEMP/test-secret.json"
           fi
 
       - name: Push to OCI Vault
@@ -846,7 +885,7 @@ jobs:
           publish "$CERT_NAME" "$RUNNER_TEMP/payload.json" \
             "OneK8s platform wildcard certificate (${TF_ENV})"
           if [ -n "$TEST_NAME" ]; then
-            publish "$TEST_NAME" "$RUNNER_TEMP/test-secret.txt" \
+            publish "$TEST_NAME" "$RUNNER_TEMP/test-secret.json" \
               "OneK8s ${TENANT} test secret (${TF_ENV})"
           fi
 
@@ -894,11 +933,8 @@ jobs:
           # the ingress ExternalSecret's dataFrom.extract expects.
           put "$CERT_NAME" "$RUNNER_TEMP/payload.json"
           if [ -n "$TEST_NAME" ]; then
-            # KV v2 has no plain-string secret, so the value becomes one field
-            # — named "test", which is the property the hello chart asks for
-            # on this cloud.
-            jq -n --rawfile v "$RUNNER_TEMP/test-secret.txt" \
-              --arg k "$TEST_SECRET" '{($k): $v}' > "$RUNNER_TEMP/test-secret.json"
+            # Already the object every other cloud stores as a JSON string —
+            # here it becomes the KV v2 secret's fields directly.
             put "$TEST_NAME" "$RUNNER_TEMP/test-secret.json"
           fi
 

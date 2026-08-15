@@ -135,10 +135,13 @@ reads has to be able to say no to someone who controls Kubernetes RBAC.
   stacks. A narrower per-stack ServiceAccount would be better and would have to
   be created out of band, which is a credential the platform does not otherwise
   hand out.
-- **KV v2 secrets are maps, not opaque values**, so a tenant `ExternalSecret`
-  on this cloud names a `property` where the others do not. The `hello` chart
-  contains that difference in one helper, next to the one that already handles
-  Secrets Manager's path-shaped names.
+- **KV v2 secrets are maps, not opaque values**, which forced a decision about
+  the tenant-facing manifest. Rather than let the private cloud carry a
+  `property:` the other four do not, the platform now stores **every** secret as
+  a JSON object of fields and every `ExternalSecret` uses `dataFrom.extract` —
+  which is what it already did for the wildcard certificate. A tenant's manifest
+  is therefore byte-identical on all five clouds; only the secret's *name*
+  differs, and only on AWS, where Secrets Manager names are paths.
 - **`dataFrom.find` does not work here**, because no `list` capability is
   granted — the same functional limit, for the same reason, as OCI.
 - **Nothing in this cloud is reachable from a hosted CI runner.** The

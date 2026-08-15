@@ -451,16 +451,20 @@ oci vault secret create-base64 \
   --key-id "$VAULT_KEY_OCID" --secret-name team-gamma-db-password \
   --secret-content-content "$(printf 'hunter2' | base64)"
 
-# Nutanix naming contract: <mount>/<tenant>-<name>. A KV v2 secret is a map,
-# so the field is named too — and named again by the ExternalSecret's
-# remoteRef.property.
-vault kv put onek8s-prototype/team-gamma-db-password password=hunter2
+# Nutanix naming contract: <mount>/<tenant>-<name>. KV v2 stores the fields
+# natively; on the other four clouds the same object is a JSON string.
+vault kv put onek8s-prototype/team-gamma-db password=hunter2
 ```
+
+Note the shape: **a secret's value is a JSON object of fields** on every cloud
+(`{"password": "hunter2"}` above), which is what lets one `ExternalSecret` —
+`dataFrom.extract`, no per-cloud `property` — read it everywhere. See
+[architecture.md](architecture.md), "Secret isolation".
 
 In the tenant namespace (see `docs/architecture.md` for the full example),
 an `ExternalSecret` referencing `secretStoreRef: {kind: SecretStore, name:
-tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
-materialize the Kubernetes Secret. Any attempt to read another tenant's
+tenant-store}` with `dataFrom.extract.key: prototype/team-gamma/db` will
+materialize the Kubernetes Secret, one key per field of the stored object. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer — or, on the private cloud, at Vault.
 
 The `hello` application is the working version of exactly that, on all five

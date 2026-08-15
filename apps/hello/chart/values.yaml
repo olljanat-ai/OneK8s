@@ -3,10 +3,9 @@
 # ApplicationSet in gitops/argocd/, which renders one Application per cluster.
 
 # Which cluster this release landed on. Shown on the page, and — because the
-# secret naming convention differs on AWS, and Vault secrets are maps rather
-# than opaque values — it also decides the remote key and property the
-# ExternalSecret asks for. See the "hello.remoteKey" / "hello.remoteProperty"
-# helpers.
+# secret naming convention differs on AWS — it also decides the remote key the
+# ExternalSecret asks for. See the "hello.remoteKey" helper. Nothing else in
+# the chart varies by cloud.
 cloud: unknown
 
 # The environment the foundations were deployed for. Part of the AWS secret
@@ -47,19 +46,14 @@ ingress:
 
 secret:
   enabled: true
-  # The tenant-relative secret name. The full remote key is derived from it
-  # per cloud: "<tenant>-test" on Azure, GCP, OCI and Nutanix (where it also
-  # names the field inside the Vault secret), "<env>/<tenant>/test" on AWS
-  # Secrets Manager.
+  # The tenant-relative secret name. Two things are built from it: the remote
+  # key, "<tenant>-test" everywhere except AWS Secrets Manager, whose names are
+  # paths ("<env>/<tenant>/test"); and the field inside that secret, since every
+  # secret this platform stores is a JSON object — {"test": "…"} here.
   name: test
   # Set to bypass that derivation entirely (e.g. a secret that does not follow
   # the convention).
   remoteKey: ""
-  # The field to read inside that secret. Empty means "the whole value", which
-  # is what the four public clouds store; on nutanix it defaults to
-  # secret.name, because a Vault KV v2 secret is a map of fields rather than an
-  # opaque value.
-  remoteProperty: ""
   # The namespaced SecretStore modules/tenant-namespace creates per tenant.
   storeName: tenant-store
   # ESO re-reads the backend this often; the kubelet then refreshes the mounted

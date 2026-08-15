@@ -32,18 +32,24 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{/*
-The key the ExternalSecret asks the backend for.
+The key the ExternalSecret asks the backend for, and the only thing in this
+chart that is not the same string on every cloud.
 
-Every cloud's tenant identity is restricted to a name prefix, and the prefix is
-not spelled the same everywhere: Key Vault, Secret Manager and OCI Vault use
-"<tenant>-", while Secrets Manager names are paths and the IAM policy grants
-"<environment>/<tenant>/*". That difference is the only thing in this chart
-that is not cloud-agnostic, and it is contained here rather than pushed out
-into four sets of values.
+Every tenant identity is restricted to a name prefix, and the prefix is not
+spelled the same everywhere: Key Vault, Secret Manager, OCI Vault and
+HashiCorp Vault use "<tenant>-", while Secrets Manager names are paths and the
+IAM policy grants "<environment>/<tenant>/*". That difference is load-bearing
+rather than cosmetic — Secrets Manager is account-wide, so the environment has
+to be part of the name for two environments to share an account — and it is
+contained here rather than pushed out into five sets of values.
+
+The *shape* of the ExternalSecret is identical everywhere, because every
+secret this platform stores is a JSON object of fields and the manifest
+extracts one. Nothing about Vault's KV v2 leaks into it.
 
 Asking for anything outside the prefix is not a mistake this chart can make
-quietly: the cloud IAM plane refuses the read and the ExternalSecret goes
-SecretSyncedError.
+quietly: the read is refused outside Kubernetes — by cloud IAM, or by a Vault
+policy — and the ExternalSecret goes SecretSyncedError.
 */}}
 {{- define "hello.remoteKey" -}}
 {{- if .Values.secret.remoteKey -}}
@@ -56,26 +62,10 @@ SecretSyncedError.
 {{- end -}}
 
 {{/*
-The field to take out of that secret, or empty for "the whole value".
-
-The four public clouds store a secret as an opaque value, so there is nothing
-to select inside it. HashiCorp Vault's KV v2 has no such thing: every secret is
-a map of fields, and asking for one without naming a field returns the whole
-map as JSON. So on the private cloud the remote reference carries a property,
-and the field it names is the same "test" the generated Kubernetes Secret uses
-as its key — which keeps the value the page shows identical on all five.
-*/}}
-{{- define "hello.remoteProperty" -}}
-{{- if .Values.secret.remoteProperty -}}
-{{- .Values.secret.remoteProperty -}}
-{{- else if eq .Values.cloud "nutanix" -}}
-{{- .Values.secret.name -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
 Key inside the generated Kubernetes Secret, which is also the file name the app
-reads under /etc/onek8s/secret.
+reads under /etc/onek8s/secret — and, because the manifest extracts the whole
+object, the name of the field inside the stored secret. The platform writes it:
+see the Renew Certificate workflow, which publishes {"test": "…"}.
 */}}
 {{- define "hello.secretKey" -}}
 {{- .Values.secret.name -}}

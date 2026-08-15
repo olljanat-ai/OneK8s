@@ -271,8 +271,11 @@ cover the private cloud too — run on `ONEK8S_RUNNER`. Both default to
 
 ## Secrets
 
-Naming is the platform's usual contract, with one wrinkle that comes from KV
-v2: a Vault secret is a **map of fields**, not an opaque value.
+Naming is the platform's usual contract, and so is the *format*: a secret's
+value is a JSON object of fields on every cloud. KV v2 is the one place that is
+native rather than a convention — a Vault secret **is** a map of fields — which
+is precisely why the platform settled on that format everywhere instead of
+letting this cloud's manifests differ.
 
 | | Path | Fields |
 |---|---|---|
@@ -282,10 +285,12 @@ v2: a Vault secret is a **map of fields**, not an opaque value.
 ```bash
 # publish a tenant secret (as the platform, not as the tenant)
 vault kv put onek8s-prototype/team-alpha-db-password password=…
+# on the other four clouds the same thing is stored as {"password": "…"}
 ```
 
 ```yaml
-# consume it from a tenant workload — the only cloud-specific line is "property"
+# consume it from a tenant workload — byte-identical to the manifest a tenant
+# writes on AKS, EKS, GKE and OKE
 apiVersion: external-secrets.io/v1
 kind: ExternalSecret
 metadata:
@@ -297,12 +302,14 @@ spec:
     name: tenant-store
   target:
     name: app-db
-  data:
-    - secretKey: password
-      remoteRef:
+  dataFrom:
+    - extract:
         key: team-alpha-db-password
-        property: password
 ```
+
+The KV v2 secret's fields become the Kubernetes Secret's keys. On the other
+four clouds the same manifest extracts a JSON object stored as the secret's
+value — same result, same YAML, no `property` anywhere.
 
 The wildcard certificate is published by the Renew Certificate workflow's
 `distribute` mode, which writes `{tls.crt, tls.key}` as one KV v2 secret —
@@ -349,7 +356,7 @@ spec:
   target: { name: cross-tenant }
   data:
     - secretKey: x
-      remoteRef: { key: team-beta-test, property: test }
+      remoteRef: { key: team-beta-test }
 EOF
 kubectl -n team-alpha get externalsecret cross-tenant
 # SecretSyncedError — permission denied, from Vault, not from Kubernetes

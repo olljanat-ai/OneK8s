@@ -14,10 +14,10 @@ wildcard:
 | `oci` | OKE — spoke | https://oci-hello.onek8s.lol |
 | `nutanix` | NKP — spoke, the private cloud | https://nutanix-hello.onek8s.lol |
 
-Nothing about it is cloud-specific except *how it names the secret* it asks
-for: Secrets Manager names are paths where Key Vault, Secret Manager and OCI
-Vault names are flat, and a HashiCorp Vault KV v2 secret is a map, so there the
-field inside it is named too.
+Nothing about it is cloud-specific except the *name* of the secret it asks
+for, because Secrets Manager names are paths where Key Vault, Secret Manager,
+OCI Vault and HashiCorp Vault names are flat. The manifest itself — the
+`ExternalSecret` on the next page — is byte-identical on all five.
 
 ```
                     ┌── this repository ──────────────────────────────┐
@@ -126,11 +126,9 @@ spec:
   secretStoreRef:
     name: tenant-store       # namespaced — only this namespace may use it
     kind: SecretStore
-  data:
-    - secretKey: test
-      remoteRef:
+  dataFrom:
+    - extract:
         key: team-alpha-test
-        # property: test — on nutanix only, where a KV v2 secret is a map
 ```
 
 `tenant-store` is created by `modules/tenant-namespace` and authenticates as
@@ -143,9 +141,10 @@ name-prefix slice of the shared backend, enforced outside Kubernetes
 Asking for another tenant's secret is not a mistake this chart can make
 quietly: the read is refused and the ExternalSecret goes `SecretSyncedError`.
 
-The prefix is spelled differently on AWS, and the private cloud adds a field
-name, which together are the whole of the chart's cloud-specific surface
-(`hello.remoteKey` and `hello.remoteProperty` in `_helpers.tpl`):
+That manifest is the same on every cloud, down to the bytes. The one thing
+that is not is the *key* — the prefix is spelled differently on AWS — and it is
+the whole of the chart's cloud-specific surface (`hello.remoteKey` in
+`_helpers.tpl`):
 
 | Cloud | Backend | Remote key | Enforced by |
 |---|---|---|---|
@@ -153,7 +152,27 @@ name, which together are the whole of the chart's cloud-specific surface
 | `aws` | Secrets Manager | `prototype/team-alpha/test` | IAM ARN prefix `prototype/team-alpha/*` |
 | `gcp` | Secret Manager | `team-alpha-test` | IAM condition `resource.name.startsWith(…/team-alpha-)` |
 | `oci` | OCI Vault | `team-alpha-test` | policy condition `target.secret.name = /team-alpha-*/` |
-| `nutanix` | HashiCorp Vault | `team-alpha-test`, property `test` | Vault policy `read "<mount>/data/team-alpha-*"` |
+| `nutanix` | HashiCorp Vault | `team-alpha-test` | Vault policy `read "<mount>/data/team-alpha-*"` |
+
+### Why there is no `property`, on any cloud
+
+Vault's KV v2 stores a **map of fields**, not an opaque value, so an
+`ExternalSecret` that named a key and nothing else would get the whole map as
+JSON — and the obvious fix, a `property: test` on that one cloud, would have
+made the private cloud's manifest different from the other four.
+
+The platform avoids it by storing every secret as a **JSON object of fields**
+on all five clouds, and having the manifest `extract` one. That is not a
+concession to Vault: it is what the platform already did with the wildcard
+certificate, which has always been `{"tls.crt": …, "tls.key": …}` and is read
+with the same `dataFrom.extract` by every foundation's ingress. The test secret
+is `{"test": "…"}`, so the generated Kubernetes Secret has a `test` key and the
+app finds `/etc/onek8s/secret/test` — on AKS, EKS, GKE, OKE and NKP alike.
+
+A secret written before this convention is a bare string. The **Renew
+Certificate** workflow rewrites it on its next run, and a `distribute` run
+wraps one on the way out rather than publishing something the applications
+cannot read, so no environment needs a manual migration.
 
 ### Where the value comes from
 
@@ -168,11 +187,14 @@ to the other four clouds in the same `distribute` run.
         │                                          │
         ▼                                          ▼
    Key Vault  team-alpha-test  ──────────▶  Secrets Manager  prototype/team-alpha/test
-   (the source of truth)                    Secret Manager   team-alpha-test
-                                            OCI Vault        team-alpha-test
+   {"test": "…"}                            Secret Manager   team-alpha-test
+   (the source of truth)                    OCI Vault        team-alpha-test
                                             HashiCorp Vault  <mount>/team-alpha-test
-                                                             {"test": "…"}
 ```
+
+Every copy holds the same JSON object; on Vault its fields *are* the KV v2
+secret's fields, which is the one place the format is native rather than a
+convention.
 
 Both objects travel the same road for the same reason — one vault as the
 source of truth, one run to copy it out — and the value rotates whenever the
@@ -186,9 +208,11 @@ The value itself is a line naming the environment and the run that wrote it,
 identical on all five clouds — comparing the five pages is the whole
 end-to-end check:
 
+```json
+{"test": "OneK8s prototype test secret — issued 2026-08-14T03:17:12Z by run 17482913 (a1b2c3d4)"}
 ```
-OneK8s prototype test secret — issued 2026-08-14T03:17:12Z by run 17482913 (a1b2c3d4)
-```
+
+The page shows the field's value; the run summary prints the same line.
 
 It is not confidential (a public page publishes it verbatim) and the run
 summary prints it, which is what makes "is `gcp-hello` showing the current
@@ -202,21 +226,25 @@ value, which is also what it looks like while External Secrets is still
 syncing. To seed it by hand instead — or to put a value of your own choosing
 in front of the page — write it once per cloud:
 
+The value is a JSON object with a `test` field on every one of them — that is
+the format the chart extracts:
+
 ```bash
 # Azure — the vault name carries a random suffix, so read it from the state
 KV=$(cd foundations/azure && terraform output -raw key_vault_uri)
-az keyvault secret set --id "${KV}secrets/team-alpha-test" --value "hello from Key Vault"
+az keyvault secret set --id "${KV}secrets/team-alpha-test" \
+  --value '{"test": "hello from Key Vault"}'
 
 # AWS — must be encrypted with the tenant CMK: the tenant's kms:Decrypt grant
 # is scoped to that key, so a secret under the default aws/secretsmanager key
-# is unreadable to it.
+# is unreadable to it. A JSON object is Secrets Manager's own key/value form.
 aws secretsmanager create-secret \
   --name prototype/team-alpha/test \
   --kms-key-id alias/onek8s-prototype-secrets \
-  --secret-string "hello from Secrets Manager"
+  --secret-string '{"test": "hello from Secrets Manager"}'
 
 # GCP
-printf 'hello from Secret Manager' \
+printf '{"test": "hello from Secret Manager"}' \
   | gcloud secrets create team-alpha-test --data-file=- --replication-policy=automatic
 
 # OCI — content is base64, and the secret belongs to the foundation's vault/key
@@ -226,10 +254,10 @@ oci vault secret create-base64 \
   --vault-id       "$(terraform output -raw vault_id)" \
   --key-id         "$(terraform output -raw vault_key_id)" \
   --secret-name    team-alpha-test \
-  --secret-content-content "$(printf 'hello from OCI Vault' | base64 -w0)"
+  --secret-content-content "$(printf '{"test": "hello from OCI Vault"}' | base64 -w0)"
 
-# Nutanix — a KV v2 secret is a map, and "test" is the field the chart's
-# remoteRef.property asks for. The mount is the foundation's.
+# Nutanix — the only cloud where those fields are the secret's own fields
+# rather than a JSON string, because KV v2 stores maps natively
 cd foundations/nutanix
 vault kv put "$(terraform output -raw vault_mount_path)/team-alpha-test" \
   test="hello from HashiCorp Vault"
