@@ -10,8 +10,8 @@ state_home = {
   container_name       = "tfstate"
 }
 
-# Every tenant of this environment, on every cloud, in one apply. The syntax is
-# identical on every cloud: only "cloud" differs. Map keys must be unique, so
+# Every tenant of this environment, on every cloud — the private one included —
+# in one apply. The syntax is identical everywhere: only "cloud" differs. Map keys must be unique, so
 # the same tenant name on several clouds is keyed <cloud>-<tenant> with an
 # explicit "name" (that name is what the namespace and secret prefix use).
 tenants = {
@@ -76,6 +76,26 @@ tenants = {
   }
   oci-team-beta = {
     cloud = "oci"
+    name  = "team-beta"
+  }
+
+  # The private cloud. Same syntax, same guarantees: the namespace, the quota,
+  # the NetworkPolicies and the namespaced SecretStore are identical, and the
+  # secret boundary is a Vault policy on "team-alpha-*" instead of a cloud IAM
+  # condition.
+  nutanix-team-alpha = {
+    cloud = "nutanix"
+    name  = "team-alpha"
+    quota = {
+      cpu_requests    = "2"
+      cpu_limits      = "4"
+      memory_requests = "4Gi"
+      memory_limits   = "8Gi"
+    }
+    labels = { "onek8s.io/cost-center" = "alpha-1001" }
+  }
+  nutanix-team-beta = {
+    cloud = "nutanix"
     name  = "team-beta"
   }
 }

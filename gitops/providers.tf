@@ -87,6 +87,40 @@ provider "kubernetes" {
   token                  = try(data.google_client_config.spoke[0].access_token, null)
 }
 
+# The private cloud. There is no cloud IAM to mint a cluster token from, so the
+# credential comes from the component that owns the cluster's lifecycle: NKP
+# publishes it as the Cluster API kubeconfig Secret, and
+# modules/nkp-cluster-access reads it — the same path foundations/nutanix takes.
+# Only the management cluster's own token has to be supplied, and it comes from
+# the environment like every other credential here.
+provider "kubernetes" {
+  alias = "nkp"
+
+  host                   = try(local.foundation.nutanix.nkp_management_host, null)
+  token                  = var.nkp_management_token == "" ? null : var.nkp_management_token
+  cluster_ca_certificate = try(local.foundation.nutanix.nkp_management_ca_certificate, "") == "" ? null : base64decode(local.foundation.nutanix.nkp_management_ca_certificate)
+}
+
+module "nutanix_cluster" {
+  source = "../modules/nkp-cluster-access"
+  count  = local.wired.nutanix ? 1 : 0
+
+  providers = { kubernetes = kubernetes.nkp }
+
+  cluster_name      = local.foundation.nutanix.cluster_name
+  cluster_namespace = local.foundation.nutanix.cluster_namespace
+}
+
+provider "kubernetes" {
+  alias = "nutanix"
+
+  host                   = try(module.nutanix_cluster[0].host, null)
+  cluster_ca_certificate = try(base64decode(module.nutanix_cluster[0].cluster_ca_certificate), null)
+  client_certificate     = try(base64decode(module.nutanix_cluster[0].client_certificate), null)
+  client_key             = try(base64decode(module.nutanix_cluster[0].client_key), null)
+  token                  = try(module.nutanix_cluster[0].token, null)
+}
+
 # No "oci" provider block, and no oracle/oci in versions.tf: unlike the tenants
 # stack this one creates nothing in OCI itself — the endpoint and CA come out
 # of the foundation's state and the API token comes from the OCI CLI, which

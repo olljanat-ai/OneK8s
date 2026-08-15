@@ -4,7 +4,7 @@ Registers one `foundations/<cloud>` cluster as a **spoke** of the Argo CD
 **hub** that `foundations/azure` runs on AKS. The cloud is a variable, the
 same way it is in `modules/tenant-namespace` — but unlike that module this one
 has no per-cloud submodules, because a spoke is registered with plain
-Kubernetes RBAC on every cloud.
+Kubernetes RBAC on every cloud — the private one included.
 
 ```
 spoke cluster (kubernetes)              hub cluster (kubernetes.hub)
@@ -48,10 +48,12 @@ Argo CD supports cloud-native cluster credentials (`awsAuthConfig`,
 `execProviderConfig`), but every one of them would need that cloud's
 credentials *on the hub* — AWS keys, a GCP service account key, an OCI signing
 key sitting in AKS — which is exactly the sprawl the platform avoids
-everywhere else. A ServiceAccount bearer token minted on the spoke:
+everywhere else. The private cloud has no such mode at all: NKP hands out a
+kubeconfig, and putting *that* on the hub would be handing it cluster-admin.
+A ServiceAccount bearer token minted on the spoke:
 
-- works identically on EKS, GKE and OKE, so there is one registration path
-  rather than three;
+- works identically on EKS, GKE, OKE and NKP, so there is one registration path
+  rather than four;
 - carries precisely the rights of the ClusterRole below and nothing else,
   where an admin kubeconfig carries the cloud's full control-plane rights;
 - is revoked by deleting one ServiceAccount on one cluster.
@@ -86,7 +88,7 @@ everywhere" / "deploy this on AWS only":
 | Label | Value |
 |---|---|
 | `argocd.argoproj.io/secret-type` | `cluster` — how Argo CD finds it at all |
-| `onek8s.io/cloud` | `aws` \| `gcp` \| `oci` |
+| `onek8s.io/cloud` | `aws` \| `gcp` \| `oci` \| `nutanix` |
 | `onek8s.io/environment` | the environment the foundations were deployed for |
 | `onek8s.io/spoke` | the name Argo CD knows the cluster by (`{{name}}`) |
 

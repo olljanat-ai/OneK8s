@@ -34,6 +34,12 @@ variable "service_annotations" {
   default     = {}
 }
 
+variable "service_spec" {
+  description = "Extra fields for the Traefik Service's spec, e.g. loadBalancerIP where the address is not handed out by a cloud load balancer (MetalLB on a private cloud). Empty leaves the chart's own spec untouched."
+  type        = map(string)
+  default     = {}
+}
+
 variable "extra_objects" {
   description = "Extra manifests rendered with the release, as a list of objects. This is where the certificate plumbing lives: the platform ServiceAccount, its ESO SecretStore and the ExternalSecret that fills the default certificate."
   type        = any

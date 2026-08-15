@@ -1,8 +1,9 @@
 locals {
   spoke_modules = {
-    aws = module.spoke_aws
-    gcp = module.spoke_gcp
-    oci = module.spoke_oci
+    aws     = module.spoke_aws
+    gcp     = module.spoke_gcp
+    oci     = module.spoke_oci
+    nutanix = module.spoke_nutanix
   }
 }
 
@@ -31,7 +32,7 @@ output "root_application" {
 }
 
 output "application_host_pattern" {
-  description = "How the applications Argo CD deploys are published: one host per cluster, one label deep under the platform wildcard. Which applications exist is gitops/argocd/values.yaml's business, not this stack's — 'hello' on all four clouds is https://azure-hello.onek8s.lol, https://aws-hello.onek8s.lol and so on. The A records are created out of band, like every other host here."
+  description = "How the applications Argo CD deploys are published: one host per cluster, one label deep under the platform wildcard. Which applications exist is gitops/argocd/values.yaml's business, not this stack's — 'hello' on all five clouds is https://azure-hello.onek8s.lol, https://aws-hello.onek8s.lol and so on. The A records are created out of band, like every other host here."
   value       = local.platform_apps_enabled ? "<cloud>-<app>.${var.platform_apps.domain}" : null
 }
 

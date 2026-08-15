@@ -2,9 +2,10 @@
 
 Cloud-agnostic, multi-tenant Kubernetes platform as a Terraform monorepo.
 Provisions **cluster + secret-backend pairs** on Azure (AKS + Key Vault),
-AWS (EKS + Secrets Manager), GCP (GKE + Secret Manager) and OCI (OKE + OCI
-Vault), and onboards tenants with **hard, cloud-enforced secret isolation**
-via External Secrets Operator and per-tenant workload identities.
+AWS (EKS + Secrets Manager), GCP (GKE + Secret Manager), OCI (OKE + OCI
+Vault) and the **private cloud** (Nutanix NKP + HashiCorp Vault), and
+onboards tenants with **hard, cloud-enforced secret isolation** via External
+Secrets Operator and per-tenant workload identities.
 
 ## Repository layout
 
@@ -13,16 +14,19 @@ via External Secrets Operator and per-tenant workload identities.
 │   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy, Argo CD) + Key Vault (RBAC/ABAC)
 │   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
-│   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
+│   ├── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
+│   └── nutanix/            #   NKP (Cilium, Cluster API) + HashiCorp Vault (KV v2 + k8s auth)
 ├── modules/
 │   ├── platform-ingress/   # Traefik + the platform wildcard as its default certificate
 │   ├── tenant-namespace/   # Reusable tenant module — cloud is a variable
-│   │   ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
+│   │   ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci|nutanix
 │   │   ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
 │   │   ├── azure/          #   Managed Namespace (azapi) + UAMI/FIC + ABAC prefix
 │   │   ├── aws/            #   IAM role (IRSA) + ARN-prefix policy
 │   │   ├── gcp/            #   GSA + WI binding + IAM condition
-│   │   └── oci/            #   workload-identity IAM policy + secret-name prefix
+│   │   ├── oci/            #   workload-identity IAM policy + secret-name prefix
+│   │   └── nutanix/        #   Vault k8s-auth role + path-prefix policy
+│   ├── nkp-cluster-access/ # Reads an NKP workload cluster's kubeconfig from NKP
 │   └── argocd-spoke/       # Registers one cluster as a spoke of the Argo CD hub
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
@@ -42,9 +46,9 @@ Foundations are per cloud and support **prototype / dev / staging / prod**
 via `envs/<env>.tfvars` + `backend/<env>.hcl`. The tenants stack has one
 state file per environment covering **all clouds at once**: the cloud is a
 per-tenant parameter, so a single `terraform apply` onboards tenants on
-azure, aws, gcp and oci, with identical tenant syntax everywhere. Tenants
-depend on foundation remote-state outputs; foundations never depend on
-tenants.
+azure, aws, gcp, oci and nutanix, with identical tenant syntax everywhere.
+Tenants depend on foundation remote-state outputs; foundations never depend
+on tenants.
 
 ## Security model (short version)
 
@@ -53,10 +57,14 @@ exactly that tenant's `<namespace>`/`<serviceaccount>`, and a **namespaced** ESO
 `SecretStore` that authenticates only with that identity. The identity can
 read only its own name-prefix slice of the shared secret backend — enforced
 with Key Vault **ABAC** conditions, IAM **ARN prefixes** (+ `kms:ViaService`),
-Secret Manager **IAM conditions** and OCI **policy conditions** on
-`target.secret.name`. Cross-tenant secret access is blocked in the cloud IAM
-plane, not just in Kubernetes.
-Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
+Secret Manager **IAM conditions**, OCI **policy conditions** on
+`target.secret.name`, and — on the private cloud, which has no cloud IAM plane
+at all — a **Vault policy** on `<mount>/data/<tenant>-*` reached through
+Vault's Kubernetes auth method. Cross-tenant secret access is blocked outside
+Kubernetes on every one of them.
+Details: [ADR-0001](docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md)
+and, for the private cloud,
+[ADR-0002](docs/adr/0002-private-cloud-on-nkp-with-vault-as-the-identity-plane.md).
 
 ## Quick start
 
@@ -73,8 +81,9 @@ terraform apply -var-file=envs/prototype.tfvars  # each tenant sets its own clou
 ```hcl
 # tenants/envs/prototype.tfvars — the cloud is just a tenant attribute
 tenants = {
-  azure-team-alpha = { cloud = "azure", name = "team-alpha" }
-  aws-team-alpha   = { cloud = "aws",   name = "team-alpha" }
+  azure-team-alpha   = { cloud = "azure",   name = "team-alpha" }
+  aws-team-alpha     = { cloud = "aws",     name = "team-alpha" }
+  nutanix-team-alpha = { cloud = "nutanix", name = "team-alpha" }  # private cloud
 }
 ```
 
@@ -89,10 +98,10 @@ inert.
 Every cluster runs **Traefik**, installed from one module, with its
 IngressClass as the cluster default and the `*.onek8s.lol` wildcard as its
 **default certificate** — the certificate the Renew Certificate workflow
-keeps in Key Vault and distributes to Secrets Manager, Secret Manager and OCI
-Vault, read back in-cluster by External Secrets on every one of them.
-Publishing an app is therefore identical on all four clouds, and carries no
-TLS configuration of its own:
+keeps in Key Vault and distributes to Secrets Manager, Secret Manager, OCI
+Vault and HashiCorp Vault, read back in-cluster by External Secrets on every
+one of them. Publishing an app is therefore identical on all five clouds, and
+carries no TLS configuration of its own:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -126,16 +135,17 @@ with Entra groups mapped to Argo CD roles and no client secret anywhere —
 the SSO app authenticates with the cluster's federated credential.
 
 That AKS cluster is the **hub**. The `gitops/` stack registers the other
-clouds' clusters as **spokes** — one Argo CD for all four clouds, no Argo CD
+clouds' clusters as **spokes** — one Argo CD for all five clouds, no Argo CD
 components anywhere else — again as one stack, all clouds, with the cloud as
 a key of `var.spokes`:
 
 ```hcl
 # gitops/envs/prototype.tfvars
 spokes = {
-  aws = {}    # or: { namespaces = ["team-alpha"], cluster_resources = false }
-  gcp = {}
-  oci = {}
+  aws     = {}  # or: { namespaces = ["team-alpha"], cluster_resources = false }
+  gcp     = {}
+  oci     = {}
+  nutanix = {}  # the private cloud is an ordinary spoke
 }
 ```
 
@@ -143,8 +153,8 @@ Each spoke gets an `argocd-manager` ServiceAccount with a scoped ClusterRole
 on its own cluster, and the hub gets a labelled `cluster` Secret holding that
 token — so no cloud's admin kubeconfig ever lives on the hub, and an
 `ApplicationSet` cluster generator can select spokes by
-`onek8s.io/cloud` / `onek8s.io/environment`. EKS, GKE and OKE are all
-registered. Details, scoping and trade-offs:
+`onek8s.io/cloud` / `onek8s.io/environment`. EKS, GKE, OKE and the NKP
+cluster are all registered. Details, scoping and trade-offs:
 [docs/argocd.md](docs/argocd.md).
 
 Argo CD's own configuration is version-controlled too. Terraform creates
@@ -159,18 +169,24 @@ spoke) is YAML in that directory. Adding an application is a commit, not a
 `apps/` holds what Argo CD deploys, source and chart side by side. The example
 is **hello**: a minimal .NET 10 page showing a welcome message and the value of
 a test secret, read out of the host cloud's own secret backend through the
-tenant's namespaced `SecretStore`. One image and one chart, on all four clouds:
+tenant's namespaced `SecretStore`. One image and one chart, on all five clouds:
 
-| https://azure-hello.onek8s.lol | https://aws-hello.onek8s.lol | https://gcp-hello.onek8s.lol | https://oci-hello.onek8s.lol |
-|---|---|---|---|
-| AKS (hub) | EKS | GKE | OKE |
+| https://azure-hello.onek8s.lol | https://aws-hello.onek8s.lol | https://gcp-hello.onek8s.lol | https://oci-hello.onek8s.lol | https://nutanix-hello.onek8s.lol |
+|---|---|---|---|---|
+| AKS (hub) | EKS | GKE | OKE | NKP |
 
-The only cloud-specific thing in it is the *name* of the secret it asks for —
-`team-alpha-test` on Key Vault, Secret Manager and OCI Vault,
+The only cloud-specific thing in it is *how it names the secret* it asks for —
+`team-alpha-test` on Key Vault, Secret Manager, OCI Vault and HashiCorp Vault
+(where it also names the field inside it, because a KV v2 secret is a map),
 `prototype/team-alpha/test` on Secrets Manager, because that is what each
 cloud's per-tenant prefix restriction is written against. Everything else,
 ingress and TLS included, is identical.
 [docs/hello-app.md](docs/hello-app.md).
+
+The private cloud is the one that needs reading about before it is deployed:
+its cluster comes from NKP rather than from Terraform, its credentials come
+from inside the private network, and its identity plane is Vault —
+[docs/nutanix.md](docs/nutanix.md).
 
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
@@ -179,7 +195,7 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 6 stacks), Helm lint/render of the
+- **PR validation** — fmt, validate (all 7 stacks), Helm lint/render of the
   Argo CD configuration and every application chart, tflint, checkov, and
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
 - **Deploy Foundations / Deploy Tenants / Deploy GitOps** — separate
@@ -196,7 +212,7 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together
   with the tenant test secret the hello application shows. Its `distribute`
-  mode copies both out to the AWS, GCP and OCI backends.
+  mode copies both out to the AWS, GCP, OCI and Nutanix backends.
 
 ## License
 

@@ -193,18 +193,18 @@ first apply to sit in `Pending` for a few minutes while a node is added.
 ## AKS as the hub of a hub-spoke topology
 
 Argo CD runs on AKS and nowhere else. The other clouds' clusters are
-registered with it as **spokes**, so there is one delivery plane for all four
+registered with it as **spokes**, so there is one delivery plane for all five
 clouds rather than one Argo CD per cloud — the same "one stack, all clouds"
 shape the tenants layer already has, and one place to see what is deployed
 where.
 
 ```
-                     ┌─────────── hub: AKS (foundations/azure) ───────────┐
-   Git / OCI ───────▶│  Argo CD extension  ── ApplicationSet (cluster gen) │
-                     └───────┬──────────────┬──────────────┬──────────────┘
-                             │ SA token     │              │
-                        EKS (aws)      GKE (gcp)      OKE (oci)
-                            spoke          spoke          spoke
+                  ┌────────────── hub: AKS (foundations/azure) ──────────────┐
+   Git / OCI ────▶ │  Argo CD extension  ──  ApplicationSet (cluster generator)│
+                  └────┬────────────┬────────────┬─────────────┬─────────────┘
+                       │ SA token   │            │             │
+                   EKS (aws)   GKE (gcp)    OKE (oci)    NKP (nutanix)
+                      spoke       spoke        spoke          spoke
 ```
 
 | Spoke | Cluster | Registered as | Status |
@@ -212,6 +212,7 @@ where.
 | `aws` | EKS, `foundations/aws` | Secret `cluster-aws` in `argocd` | registered by `gitops/` |
 | `gcp` | GKE, `foundations/gcp` | Secret `cluster-gcp` in `argocd` | registered by `gitops/` |
 | `oci` | OKE, `foundations/oci` | Secret `cluster-oci` in `argocd` | registered by `gitops/` |
+| `nutanix` | NKP, `foundations/nutanix` | Secret `cluster-nutanix` in `argocd` | registered by `gitops/` |
 
 The spokes stay plain clusters: no Argo CD components on EKS/GKE/OKE and no
 per-cloud GitOps stack to keep in sync.
@@ -271,9 +272,11 @@ cloud's admin kubeconfig. Argo CD does support cloud-native credentials
 (`awsAuthConfig`, `execProviderConfig`), but each of them would need that
 cloud's credentials sitting on the hub — AWS keys, a GCP service account key,
 an OCI signing key inside AKS — which is exactly the sprawl the platform
-avoids elsewhere. A ServiceAccount token works identically on EKS, GKE and
-OKE, carries precisely the rights of the ClusterRole and nothing else, and is
-revoked by deleting one ServiceAccount.
+avoids elsewhere, and the private cloud has no such mode at all: NKP hands out
+a kubeconfig, and putting that on the hub would be handing it cluster-admin. A
+ServiceAccount token works identically on EKS, GKE, OKE and NKP, carries
+precisely the rights of the ClusterRole and nothing else, and is revoked by
+deleting one ServiceAccount.
 
 Kubernetes 1.24+ no longer mints a Secret per ServiceAccount, and the tokens
 projected into pods are short-lived and audience-bound, so neither is usable
@@ -292,12 +295,16 @@ bearer token against the same Kubernetes API:
 | `aws` | complete `https://` URL | `aws_eks_cluster_auth` token (EKS access entries / `aws-auth`) |
 | `gcp` | bare host, prefixed with `https://` | `google_client_config` access token of the deploy service account |
 | `oci` | complete `https://` URL | `oci ce cluster generate-token`, exec'd by the provider — the OCI CLI must be on `PATH` |
+| `nutanix` | complete `https://` URL | the Cluster API `<cluster>-kubeconfig` Secret on the NKP management cluster, read with `TF_VAR_nkp_management_token` (`modules/nkp-cluster-access`) |
 
 The deploy identity therefore needs cluster-admin-ish rights on the spoke for
 that one run — on GKE the deploy service account needs
 `roles/container.admin` (or at least the ability to create ClusterRoles), on
 AWS it needs an access entry that maps to a cluster admin, on OCI it needs
-`manage cluster-family` in the compartment. Argo CD itself never uses those
+`manage cluster-family` in the compartment. On the private cloud it needs
+none of that and nothing extra: the kubeconfig NKP publishes for the cluster
+already is an admin credential, which is the trade-off that pays for having no
+cloud IAM there. Argo CD itself never uses those
 credentials: everything after registration goes through the `argocd-manager`
 token.
 
@@ -333,7 +340,7 @@ object:
 | Label | Value |
 |---|---|
 | `argocd.argoproj.io/secret-type` | `cluster` |
-| `onek8s.io/cloud` | `aws` \| `gcp` \| `oci` |
+| `onek8s.io/cloud` | `aws` \| `gcp` \| `oci` \| `nutanix` |
 | `onek8s.io/environment` | the environment the foundations were deployed for |
 | `onek8s.io/spoke` | the name Argo CD knows the cluster by (`{{name}}`) |
 
@@ -419,9 +426,11 @@ kubectl -n kube-system delete sa argocd-manager
 - **Every API server is public.** Hub → spoke traffic crosses the internet to
   a public endpoint. Anything beyond prototype wants private endpoints plus
   peering or a tunnel, which is a networking story none of the foundations
-  has yet.
+  has yet. The private cloud inverts the problem rather than solving it: its
+  API server is *not* public, so the hub reaches it only if the two networks
+  already meet — and if they do not, its spoke registers but never syncs.
 - **The hub is now a platform-wide dependency.** Losing the AKS cluster
-  stops delivery on all four clouds. Argo CD keeps no state a spoke needs at
+  stops delivery on all five clouds. Argo CD keeps no state a spoke needs at
   runtime, so workloads keep running, but nothing syncs until it is back.
 - **The boundary against the tenants stack is a convention, not a
   mechanism.** Tenant onboarding (namespaces, quotas, SecretStores) stays in

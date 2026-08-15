@@ -7,7 +7,8 @@ name: Renew Certificate
 # and, in "distribute" mode, the copy of that certificate out to the secret
 # backend of every other cloud:
 #
-#   Key Vault --> Secrets Manager (AWS) / Secret Manager (GCP) / Vault (OCI)
+#   Key Vault --> Secrets Manager (AWS) / Secret Manager (GCP) /
+#                 OCI Vault (OCI) / HashiCorp Vault (Nutanix)
 #
 # The target vault is the one the Azure foundation created for the
 # environment — the same vault tenants read their secrets from — so the vault
@@ -51,7 +52,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "renew: issue/renew into Key Vault. distribute: copy the Key Vault certificate to AWS, GCP and OCI"
+        description: "renew: issue/renew into Key Vault. distribute: copy the Key Vault certificate to AWS, GCP, OCI and Nutanix"
         required: true
         default: "renew"
         type: choice
@@ -383,7 +384,7 @@ jobs:
           else
             echo "Seeded $name in $VAULT."
           fi
-          echo "Run this workflow in distribute mode to publish it to AWS, GCP and OCI."
+          echo "Run this workflow in distribute mode to publish it to AWS, GCP, OCI and Nutanix."
 
       - name: Summary
         env:
@@ -413,9 +414,9 @@ jobs:
             echo "### Tenant test secret — \`${TEST_SECRET_NAME}\`"
             echo
             if [ "$TEST_SECRET_GENERATED" = "true" ]; then
-              echo "Written to the vault by this run. It reaches AWS, GCP and OCI on"
-              echo "the next \`distribute\` run, and the hello pages within the hour"
-              echo "after that:"
+              echo "Written to the vault by this run. It reaches AWS, GCP, OCI and"
+              echo "Nutanix on the next \`distribute\` run, and the hello pages within"
+              echo "the hour after that:"
               echo
               echo "> ${TEST_SECRET_VALUE}"
             else
@@ -428,15 +429,19 @@ jobs:
         if: always()
         run: az logout --output none || true
 
-  # Key Vault is the source of truth; the other three clouds hold copies, so
-  # that a workload on EKS, GKE or OKE reads the platform certificate out of
-  # the same backend it already reads its tenant secrets from instead of
-  # reaching across clouds for it. Nothing here talks to Let's Encrypt: a
+  # Key Vault is the source of truth; the other clouds hold copies, so that a
+  # workload on EKS, GKE, OKE or NKP reads the platform certificate out of the
+  # same backend it already reads its tenant secrets from instead of reaching
+  # across clouds for it. Nothing here talks to Let's Encrypt: a
   # distribution run publishes whatever version the vault currently holds.
   distribute:
     if: inputs.mode == 'distribute'
-    name: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }} -> AWS, GCP, OCI (${{ inputs.environment || 'prototype' }})
-    runs-on: ubuntu-latest
+    name: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }} -> AWS, GCP, OCI, Nutanix (${{ inputs.environment || 'prototype' }})
+    # The private cloud's Vault is on an internal network, so a distribution
+    # that includes it has to run inside that network: set ONEK8S_RUNNER to a
+    # self-hosted runner there. Without it the run still publishes to the three
+    # public clouds and warns that Nutanix was skipped.
+    runs-on: ${{ vars.ONEK8S_RUNNER || 'ubuntu-latest' }}
     # The same environment the renewal binds to: the run's privileged input is
     # the Azure Key Vault it reads the private key out of, and pinning both
     # jobs to one environment keeps the vault's credentials configured in a
@@ -464,6 +469,10 @@ jobs:
       OCI_CLI_REGION: ${{ vars.OCI_REGION }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      # The private cloud's Vault takes a token and nothing else; its address
+      # and mount come out of the nutanix foundation's state like every other
+      # target here.
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
       CERT_NAME: ${{ inputs.certificate_name || 'platform-wildcard-onek8s-lol' }}
       # The tenant test secret is published by the same three pushes as the
       # certificate — same source vault, same targets, same naming rules. See
@@ -576,6 +585,31 @@ jobs:
             echo "oci_key=$oci_key"
             echo "oci_compartment=$oci_compartment"
             echo "oci_region=$oci_region"
+          } >> "$GITHUB_OUTPUT"
+
+          # The private cloud. Same rule as the other three: no coordinates
+          # here, they come out of foundations/nutanix — and a Vault this
+          # runner cannot reach is the normal case on a hosted runner, which
+          # is why this job belongs on ONEK8S_RUNNER once nutanix exists.
+          vault_addr=""; vault_mount=""; vault_ns=""
+          if foundation_ready nutanix; then
+            vault_addr="$(read_output nutanix vault_address)"
+            vault_mount="$(read_output nutanix vault_mount_path)"
+            vault_ns="$(read_output nutanix vault_namespace)"
+          fi
+          if [ -z "$vault_addr" ] || [ -z "$vault_mount" ]; then
+            echo "::warning::foundations/nutanix is not deployed for ${TF_ENV}; skipping Nutanix."
+            vault_addr=""; vault_mount=""; vault_ns=""
+          elif [ -z "${VAULT_TOKEN:-}" ]; then
+            echo "::warning::no VAULT_TOKEN configured; skipping Nutanix."
+            vault_addr=""; vault_mount=""; vault_ns=""
+          else
+            echo "Nutanix: HashiCorp Vault $vault_addr, mount $vault_mount"
+          fi
+          {
+            echo "vault_addr=$vault_addr"
+            echo "vault_mount=$vault_mount"
+            echo "vault_ns=$vault_ns"
           } >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials
@@ -816,6 +850,58 @@ jobs:
               "OneK8s ${TENANT} test secret (${TF_ENV})"
           fi
 
+      # The one target that is not a cloud API. KV v2 secrets are maps, so both
+      # objects are written as one: the certificate as {tls.crt, tls.key} —
+      # which is what the ExternalSecret's dataFrom.extract expects — and the
+      # test secret as a single "test" field, which is the property the hello
+      # chart asks for on this cloud. Written over the HTTP API rather than
+      # with the Vault CLI so nothing has to be installed.
+      - name: Push to HashiCorp Vault
+        id: nutanix
+        if: steps.targets.outputs.vault_addr != ''
+        continue-on-error: true
+        env:
+          ADDR: ${{ steps.targets.outputs.vault_addr }}
+          MOUNT: ${{ steps.targets.outputs.vault_mount }}
+          NAMESPACE: ${{ steps.targets.outputs.vault_ns }}
+          TEST_NAME: ${{ steps.fetch.outputs.test_name }}
+        run: |
+          set -euo pipefail
+          # A Vault namespace is an Enterprise header, absent on Community; an
+          # array keeps "no namespace" from turning into an empty argument.
+          headers=(-H "X-Vault-Token: ${VAULT_TOKEN}")
+          if [ -n "$NAMESPACE" ]; then
+            headers+=(-H "X-Vault-Namespace: ${NAMESPACE}")
+          fi
+
+          put() { # <secret name> <data object file>
+            local code
+            jq -n --slurpfile data "$2" '{data: $data[0]}' > "$RUNNER_TEMP/kv.json"
+            code="$(curl -sS -X POST "${headers[@]}" \
+              --data @"$RUNNER_TEMP/kv.json" \
+              -o "$RUNNER_TEMP/kv-response.json" -w '%{http_code}' \
+              "${ADDR%/}/v1/${MOUNT}/data/$1")"
+            case "$code" in
+              2*) echo "Wrote ${MOUNT}/$1 (HTTP $code)" ;;
+              *)  echo "::error::writing ${MOUNT}/$1 failed with HTTP $code" >&2
+                  cat "$RUNNER_TEMP/kv-response.json" >&2
+                  return 1 ;;
+            esac
+          }
+
+          # payload.json is already {"tls.crt": …, "tls.key": …} — the same two
+          # fields the other three clouds store as one opaque value, and what
+          # the ingress ExternalSecret's dataFrom.extract expects.
+          put "$CERT_NAME" "$RUNNER_TEMP/payload.json"
+          if [ -n "$TEST_NAME" ]; then
+            # KV v2 has no plain-string secret, so the value becomes one field
+            # — named "test", which is the property the hello chart asks for
+            # on this cloud.
+            jq -n --rawfile v "$RUNNER_TEMP/test-secret.txt" \
+              --arg k "$TEST_SECRET" '{($k): $v}' > "$RUNNER_TEMP/test-secret.json"
+            put "$TEST_NAME" "$RUNNER_TEMP/test-secret.json"
+          fi
+
       - name: Summary
         if: always()
         env:
@@ -828,9 +914,11 @@ jobs:
           AWS_OUTCOME: ${{ steps.aws.outcome }}
           GCP_OUTCOME: ${{ steps.gcp.outcome }}
           OCI_OUTCOME: ${{ steps.oci.outcome }}
+          NUTANIX_OUTCOME: ${{ steps.nutanix.outcome }}
           AWS_TARGET: ${{ steps.targets.outputs.aws_region }}
           GCP_TARGET: ${{ steps.targets.outputs.gcp_project }}
           OCI_TARGET: ${{ steps.targets.outputs.oci_vault }}
+          NUTANIX_TARGET: ${{ steps.targets.outputs.vault_addr }}
         run: |
           # A push that did not run has two quite different causes: the cloud
           # has no foundation here, or the run failed before reaching it.
@@ -873,6 +961,7 @@ jobs:
             row aws "AWS Secrets Manager" "${AWS_SECRET}" "${AWS_TEST_SECRET}" "$AWS_OUTCOME" "$AWS_TARGET"
             row gcp "GCP Secret Manager" "${CERT_NAME}" "${TEST_NAME}" "$GCP_OUTCOME" "$GCP_TARGET"
             row oci "OCI Vault" "${CERT_NAME}" "${TEST_NAME}" "$OCI_OUTCOME" "$OCI_TARGET"
+            row nutanix "HashiCorp Vault" "${CERT_NAME}" "${TEST_NAME}" "$NUTANIX_OUTCOME" "$NUTANIX_TARGET"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check the distribution
@@ -880,11 +969,13 @@ jobs:
           AWS_OUTCOME: ${{ steps.aws.outcome }}
           GCP_OUTCOME: ${{ steps.gcp.outcome }}
           OCI_OUTCOME: ${{ steps.oci.outcome }}
+          NUTANIX_OUTCOME: ${{ steps.nutanix.outcome }}
         run: |
           failed=""
           if [ "$AWS_OUTCOME" = "failure" ]; then failed="$failed AWS"; fi
           if [ "$GCP_OUTCOME" = "failure" ]; then failed="$failed GCP"; fi
           if [ "$OCI_OUTCOME" = "failure" ]; then failed="$failed OCI"; fi
+          if [ "$NUTANIX_OUTCOME" = "failure" ]; then failed="$failed Nutanix"; fi
           if [ -n "$failed" ]; then
             echo "::error::the certificate was not distributed to:$failed" >&2
             exit 1

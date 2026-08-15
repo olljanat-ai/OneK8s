@@ -34,6 +34,10 @@ terraform {
       version               = "= 8.26.0"
       configuration_aliases = [oci.home]
     }
+    vault = {
+      source  = "hashicorp/vault"
+      version = "= 5.11.0"
+    }
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "= 3.2.1"

@@ -9,11 +9,11 @@
 #   Secret (SA token) ────────────▶  argocd.argoproj.io/secret-type: cluster
 #
 # The credential is a ServiceAccount bearer token minted on the spoke itself,
-# not the cloud's admin kubeconfig: it is the one authentication mode all four
-# clusters share (EKS access entries, GKE and OKE all speak plain Kubernetes
-# RBAC), it carries exactly the rights granted below and nothing else, and
-# revoking a spoke is deleting one ServiceAccount rather than rotating a cloud
-# credential.
+# not the cloud's admin kubeconfig: it is the one authentication mode all the
+# spoke clusters share (EKS access entries, GKE, OKE and NKP all speak plain
+# Kubernetes RBAC), it carries exactly the rights granted below and nothing
+# else, and revoking a spoke is deleting one ServiceAccount rather than
+# rotating a cloud credential.
 locals {
   name = coalesce(var.name, var.cloud)
 
@@ -24,8 +24,9 @@ locals {
     "onek8s.io/spoke"              = local.name
   }, var.labels)
 
-  # GKE publishes a bare host where EKS and OKE publish a complete https URL —
-  # the same asymmetry the tenants stack's kubernetes providers work around.
+  # GKE publishes a bare host where EKS, OKE and the NKP kubeconfig publish a
+  # complete https URL — the same asymmetry the tenants stack's kubernetes
+  # providers work around.
   server = var.cloud == "gcp" ? "https://${var.foundation.cluster_endpoint}" : var.foundation.cluster_endpoint
 
   # Namespace-scoped bindings are only possible when Argo CD is confined to a

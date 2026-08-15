@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 # Tenants: ONE stack, ONE state file per environment, all clouds in one run.
 # The target cloud is a per-tenant parameter (`cloud = "azure" | "aws" | "gcp"
-# | "oci"`), so an environment is deployed with a single:
+# | "oci" | "nutanix"`), so an environment is deployed with a single:
 #
 #   terraform init -backend-config=backend/prototype.hcl
 #   terraform apply -var-file=envs/prototype.tfvars
@@ -37,6 +37,10 @@ terraform {
     oci = {
       source  = "oracle/oci"
       version = "= 8.26.0"
+    }
+    vault = {
+      source  = "hashicorp/vault"
+      version = "= 5.11.0"
     }
     kubernetes = {
       source  = "hashicorp/kubernetes"

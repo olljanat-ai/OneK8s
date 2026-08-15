@@ -1,5 +1,5 @@
 locals {
-  clouds = ["azure", "aws", "gcp", "oci"]
+  clouds = ["azure", "aws", "gcp", "oci", "nutanix"]
 
   # The cloud is a per-tenant parameter, so one apply covers all of them. The
   # tenants are grouped by cloud here because a module's providers are static:
@@ -19,9 +19,10 @@ locals {
 
 # Dependency direction: tenants read foundation outputs, never the reverse.
 # Every foundation keeps its state in the Azure Storage state home whatever
-# cloud it provisions, so one azurerm backend serves all four — only the blob
-# key differs, and it is derived rather than configured so that it cannot
-# drift away from foundations/<cloud>/backend/<env>.hcl.
+# cloud it provisions — the private one included — so one azurerm backend
+# serves all of them; only the blob key differs, and it is derived rather than
+# configured so that it cannot drift away from
+# foundations/<cloud>/backend/<env>.hcl.
 data "terraform_remote_state" "foundation" {
   for_each = toset([for c in local.clouds : c if local.active[c]])
 
@@ -80,6 +81,7 @@ module "tenants_azure" {
     kubernetes = kubernetes.azure
     oci        = oci
     oci.home   = oci.home
+    vault      = vault
   }
 
   cloud       = "azure"
@@ -103,6 +105,7 @@ module "tenants_aws" {
     kubernetes = kubernetes.aws
     oci        = oci
     oci.home   = oci.home
+    vault      = vault
   }
 
   cloud       = "aws"
@@ -126,6 +129,7 @@ module "tenants_gcp" {
     kubernetes = kubernetes.gcp
     oci        = oci
     oci.home   = oci.home
+    vault      = vault
   }
 
   cloud       = "gcp"
@@ -149,12 +153,40 @@ module "tenants_oci" {
     kubernetes = kubernetes.oci
     oci        = oci
     oci.home   = oci.home
+    vault      = vault
   }
 
   cloud       = "oci"
   tenant_name = coalesce(each.value.name, each.key)
   environment = var.environment
   foundation  = local.foundation.oci
+
+  quota            = each.value.quota
+  namespace_labels = each.value.labels
+}
+
+# The private cloud. Its cluster is reached with the credentials NKP holds for
+# it (see providers.tf), and its identity plane is Vault rather than a cloud
+# IAM service — which is the only difference visible from here.
+module "tenants_nutanix" {
+  source   = "../modules/tenant-namespace"
+  for_each = local.tenants_by_cloud.nutanix
+
+  providers = {
+    azurerm    = azurerm
+    azapi      = azapi
+    aws        = aws
+    google     = google
+    kubernetes = kubernetes.nutanix
+    oci        = oci
+    oci.home   = oci.home
+    vault      = vault
+  }
+
+  cloud       = "nutanix"
+  tenant_name = coalesce(each.value.name, each.key)
+  environment = var.environment
+  foundation  = local.foundation.nutanix
 
   quota            = each.value.quota
   namespace_labels = each.value.labels

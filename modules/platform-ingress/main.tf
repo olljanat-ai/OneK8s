@@ -120,9 +120,12 @@ locals {
       }
     }
 
-    service = {
-      annotations = var.service_annotations
-    }
+    # "spec" is merged in rather than always set, so a cloud that does not use
+    # it renders exactly the values it rendered before this existed.
+    service = merge(
+      { annotations = var.service_annotations },
+      length(var.service_spec) > 0 ? { spec = var.service_spec } : {},
+    )
 
     resources = var.resources
 

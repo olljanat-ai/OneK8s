@@ -2,7 +2,7 @@
 
 The platform's first workload, and the smallest end-to-end proof that it works:
 a .NET 10 web page showing a welcome message and the value of a **test secret**
-read out of the host cloud's own secret backend. It runs on all four clouds,
+read out of the host cloud's own secret backend. It runs on all five clouds,
 from one image and one chart, published one label deep under the platform
 wildcard:
 
@@ -12,10 +12,12 @@ wildcard:
 | `aws` | EKS — spoke | https://aws-hello.onek8s.lol |
 | `gcp` | GKE — spoke | https://gcp-hello.onek8s.lol |
 | `oci` | OKE — spoke | https://oci-hello.onek8s.lol |
+| `nutanix` | NKP — spoke, the private cloud | https://nutanix-hello.onek8s.lol |
 
-Nothing about it is cloud-specific except one string: the name of the secret it
-asks for, because Secrets Manager names are paths where Key Vault, Secret
-Manager and OCI Vault names are flat.
+Nothing about it is cloud-specific except *how it names the secret* it asks
+for: Secrets Manager names are paths where Key Vault, Secret Manager and OCI
+Vault names are flat, and a HashiCorp Vault KV v2 secret is a map, so there the
+field inside it is named too.
 
 ```
                     ┌── this repository ──────────────────────────────┐
@@ -28,13 +30,14 @@ Manager and OCI Vault names are flat.
                     │  Application platform-gitops                    │
                     │    ├── AppProject onek8s-platform               │
                     │    └── ApplicationSet hello                     │
-                    └───┬──────────┬──────────┬──────────┬────────────┘
-                        │          │          │          │
-                   hello-azure hello-aws  hello-gcp  hello-oci
-                     (in-cluster)  EKS        GKE        OKE
-                        │          │          │          │
-                        ▼          ▼          ▼          ▼
-                    Key Vault  Secrets Mgr Secret Mgr OCI Vault
+                    └──┬─────────┬─────────┬─────────┬──────────┬─────┘
+                       │         │         │         │          │
+                  hello-azure hello-aws hello-gcp hello-oci hello-nutanix
+                   (in-cluster)   EKS       GKE       OKE        NKP
+                       │         │         │         │          │
+                       ▼         ▼         ▼         ▼          ▼
+                   Key Vault  Secrets   Secret     OCI      HashiCorp
+                              Manager   Manager    Vault      Vault
                        via External Secrets, per tenant identity
 ```
 
@@ -69,7 +72,7 @@ The root Application carries Argo CD's cascade finalizer, so `terraform
 destroy` on the gitops stack takes the ApplicationSets — and the workloads they
 put on the spokes — with it.
 
-## Fanning out to four clusters
+## Fanning out to five clusters
 
 `gitops/argocd/templates/applicationset-hello.yaml` is one object producing one
 Application per cluster. It needs **two generators**, because the hub is not
@@ -84,8 +87,10 @@ shaped like a spoke:
   to select on, so it cannot come from the cluster generator.
 
 Applications address their cluster by `destination.name`, not by server URL:
-EKS, GKE and OKE endpoints are whatever those services handed out, and Argo CD
-already knows them from the cluster Secret.
+EKS, GKE, OKE and NKP endpoints are whatever those platforms handed out, and
+Argo CD already knows them from the cluster Secret. Registering a new spoke is
+therefore the whole of adding a cloud to the fan-out — the private cloud
+produced `hello-nutanix` without a line changing in this ApplicationSet.
 
 Per-cluster values reach the chart as Helm parameters — `cloud`, `environment`,
 `tenant`, `ingress.host` (`<cloud>-hello.onek8s.lol`) and the welcome message.
@@ -125,18 +130,22 @@ spec:
     - secretKey: test
       remoteRef:
         key: team-alpha-test
+        # property: test — on nutanix only, where a KV v2 secret is a map
 ```
 
 `tenant-store` is created by `modules/tenant-namespace` and authenticates as
 the tenant's ServiceAccount, exchanged for the tenant's cloud identity through
-workload identity federation. That identity can read only its own name-prefix
-slice of the shared backend, enforced in the cloud IAM plane
-([ADR-0001](adr/0001-per-tenant-identities-and-namespaced-secretstores.md)).
+workload identity federation — or, on the private cloud, for a Vault token
+through Vault's Kubernetes auth method. That identity can read only its own
+name-prefix slice of the shared backend, enforced outside Kubernetes
+([ADR-0001](adr/0001-per-tenant-identities-and-namespaced-secretstores.md),
+[ADR-0002](adr/0002-private-cloud-on-nkp-with-vault-as-the-identity-plane.md)).
 Asking for another tenant's secret is not a mistake this chart can make
 quietly: the read is refused and the ExternalSecret goes `SecretSyncedError`.
 
-The prefix is spelled differently on AWS, which is the whole of the chart's
-cloud-specific surface (`hello.remoteKey` in `_helpers.tpl`):
+The prefix is spelled differently on AWS, and the private cloud adds a field
+name, which together are the whole of the chart's cloud-specific surface
+(`hello.remoteKey` and `hello.remoteProperty` in `_helpers.tpl`):
 
 | Cloud | Backend | Remote key | Enforced by |
 |---|---|---|---|
@@ -144,6 +153,7 @@ cloud-specific surface (`hello.remoteKey` in `_helpers.tpl`):
 | `aws` | Secrets Manager | `prototype/team-alpha/test` | IAM ARN prefix `prototype/team-alpha/*` |
 | `gcp` | Secret Manager | `team-alpha-test` | IAM condition `resource.name.startsWith(…/team-alpha-)` |
 | `oci` | OCI Vault | `team-alpha-test` | policy condition `target.secret.name = /team-alpha-*/` |
+| `nutanix` | HashiCorp Vault | `team-alpha-test`, property `test` | Vault policy `read "<mount>/data/team-alpha-*"` |
 
 ### Where the value comes from
 
@@ -151,7 +161,7 @@ The secret is **not** created by any Terraform stack here — tenant data is the
 tenant's, and the tenants stack deliberately writes none of it. It is created
 where the platform's other shared value is: the **Renew Certificate**
 workflow, which generates it in Key Vault beside the wildcard and publishes it
-to the other three clouds in the same `distribute` run.
+to the other four clouds in the same `distribute` run.
 
 ```
    Renew Certificate (renew)                Renew Certificate (distribute)
@@ -160,6 +170,8 @@ to the other three clouds in the same `distribute` run.
    Key Vault  team-alpha-test  ──────────▶  Secrets Manager  prototype/team-alpha/test
    (the source of truth)                    Secret Manager   team-alpha-test
                                             OCI Vault        team-alpha-test
+                                            HashiCorp Vault  <mount>/team-alpha-test
+                                                             {"test": "…"}
 ```
 
 Both objects travel the same road for the same reason — one vault as the
@@ -171,7 +183,7 @@ certificate was **not** due leaves the secret alone, unless it is missing
 altogether, which is what seeds a fresh environment on the first run.
 
 The value itself is a line naming the environment and the run that wrote it,
-identical on all four clouds — comparing the four pages is the whole
+identical on all five clouds — comparing the five pages is the whole
 end-to-end check:
 
 ```
@@ -215,10 +227,16 @@ oci vault secret create-base64 \
   --key-id         "$(terraform output -raw vault_key_id)" \
   --secret-name    team-alpha-test \
   --secret-content-content "$(printf 'hello from OCI Vault' | base64 -w0)"
+
+# Nutanix — a KV v2 secret is a map, and "test" is the field the chart's
+# remoteRef.property asks for. The mount is the foundation's.
+cd foundations/nutanix
+vault kv put "$(terraform output -raw vault_mount_path)/team-alpha-test" \
+  test="hello from HashiCorp Vault"
 ```
 
 A hand-written value survives until the next renewal overwrites it, which is
-the trade for having the workflow keep all four clouds in step.
+the trade for having the workflow keep all five clouds in step.
 
 Rotating the value needs nothing on the Kubernetes side: External Secrets
 re-reads the backend hourly, the kubelet refreshes the mounted file in place,

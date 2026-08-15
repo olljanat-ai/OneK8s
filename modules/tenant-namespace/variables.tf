@@ -1,10 +1,10 @@
 variable "cloud" {
-  description = "Which cloud this tenant lands on: azure, aws, gcp or oci."
+  description = "Which cloud this tenant lands on: azure, aws, gcp, oci or nutanix (the private cloud)."
   type        = string
 
   validation {
-    condition     = contains(["azure", "aws", "gcp", "oci"], var.cloud)
-    error_message = "cloud must be one of: azure, aws, gcp, oci."
+    condition     = contains(["azure", "aws", "gcp", "oci", "nutanix"], var.cloud)
+    error_message = "cloud must be one of: azure, aws, gcp, oci, nutanix."
   }
 }
 
@@ -28,6 +28,8 @@ variable "foundation" {
              secrets_kms_key_arn
       gcp:   project_id, project_number, cluster_name, cluster_location
       oci:   compartment_id, cluster_id, vault_id, region
+      nutanix: vault_address, vault_mount_path, vault_auth_path
+               (+ optional vault_namespace, vault_ca_bundle, vault_audience)
   EOT
   type        = any
 

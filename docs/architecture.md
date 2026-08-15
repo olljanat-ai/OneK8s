@@ -3,26 +3,27 @@
 ## Overview
 
 OneK8s provisions **cluster + secret-backend pairs** ("foundations") on
-Azure, AWS, GCP and OCI, onboards **tenants** onto those clusters with hard,
-cloud-enforced secret isolation, and delivers to all four from **one Argo CD**
-on the Azure cluster.
+Azure, AWS, GCP, OCI and one **private cloud** (Nutanix NKP + HashiCorp
+Vault), onboards **tenants** onto those clusters with hard, externally
+enforced secret isolation, and delivers to all five from **one Argo CD** on
+the Azure cluster.
 
 ```
 ┌───── per environment: foundations per cloud, one tenants stack, one gitops stack ─────┐
 │                                                                                       │
 │  foundations/<cloud>                          tenants/ (cloud per tenant)             │
-│  ┌─────────────────────────────┐              ┌─────────────────────────────┐         │
-│  │ Cluster (AKS/EKS/GKE/OKE)   │   remote     │ for each tenant:            │         │
-│  │  - workload identity/IRSA   │   state      │  - namespace (+quota,netpol)│         │
-│  │  - Cilium / Dataplane V2    │ ──outputs──▶ │  - cloud identity           │         │
-│  │  - External Secrets Operator│      │       │  - ServiceAccount           │         │
-│  │  - policy guardrails        │      │       │  - namespaced SecretStore   │         │
-│  │ Secret backend              │      │       │  - prefix-scoped IAM        │         │
-│  │  (KV / SM / GSM / Vault)    │      │       └─────────────────────────────┘         │
-│  └─────────────────────────────┘      │       gitops/ (cloud per spoke)               │
-│                                       │       ┌─────────────────────────────┐         │
-│                                       └──────▶│ Argo CD hub on AKS +        │         │
-│                                               │ EKS/GKE/OKE as spokes       │         │
+│  ┌──────────────────────────────┐             ┌─────────────────────────────┐         │
+│  │ Cluster (AKS/EKS/GKE/OKE/NKP)│  remote     │ for each tenant:            │         │
+│  │  - workload identity / IRSA  │   state     │  - namespace (+quota,netpol)│         │
+│  │    / Vault Kubernetes auth   │ ─outputs──▶ │  - identity or Vault role   │         │
+│  │  - Cilium / Dataplane V2     │      │      │  - ServiceAccount           │         │
+│  │  - External Secrets Operator │      │      │  - namespaced SecretStore   │         │
+│  │  - policy guardrails         │      │      │  - prefix-scoped IAM/policy │         │
+│  │ Secret backend               │      │      └─────────────────────────────┘         │
+│  │  (KV/SM/GSM/OCI/HC Vault)    │      │      gitops/ (cloud per spoke)                │
+│  └──────────────────────────────┘      │      ┌─────────────────────────────┐         │
+│                                        └─────▶│ Argo CD hub on AKS +        │         │
+│                                               │ EKS/GKE/OKE/NKP as spokes   │         │
 │                                               └─────────────────────────────┘         │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -31,7 +32,7 @@ on the Azure cluster.
 
 | Layer | Stacks | State | Deploys |
 |---|---|---|---|
-| Foundations | `foundations/{azure,aws,gcp,oci}` | `foundations/<cloud>/<env>.tfstate` in the Azure Storage state home | independently |
+| Foundations | `foundations/{azure,aws,gcp,oci,nutanix}` | `foundations/<cloud>/<env>.tfstate` in the Azure Storage state home | independently |
 | Tenants | `tenants/` (one stack, all clouds; `cloud` is a per-tenant parameter) | `tenants/<env>.tfstate` in the Azure Storage state home | independently, **after** the foundations of the clouds its tenants use |
 | GitOps | `gitops/` (one stack, all clouds; `cloud` is a key of `var.spokes`) | `gitops/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (the hub) and the foundations of the clouds it registers |
 
@@ -58,8 +59,9 @@ is an attribute of each tenant, not of the deployment.
 
 ```hcl
 tenants = {
-  azure-team-alpha = { cloud = "azure", name = "team-alpha" }
-  aws-team-alpha   = { cloud = "aws",   name = "team-alpha" }
+  azure-team-alpha   = { cloud = "azure",   name = "team-alpha" }
+  aws-team-alpha     = { cloud = "aws",     name = "team-alpha" }
+  nutanix-team-alpha = { cloud = "nutanix", name = "team-alpha" }
 }
 ```
 
@@ -83,25 +85,71 @@ so in one message instead of a list of "Unsupported attribute" errors.
 
 ## Cloud mapping
 
-| Capability | Azure | AWS | GCP | OCI |
-|---|---|---|---|---|
-| Cluster | AKS | EKS | GKE | OKE (enhanced) |
-| Pod-level cloud identity | Workload Identity (OIDC issuer + FIC) | IRSA (IAM OIDC provider) | Workload Identity (`<project>.svc.id.goog`) | OKE Workload Identity (no identity object — the principal *is* cluster+ns+SA) |
-| Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) | VCN-native pod networking + **Cilium (chaining)** |
-| Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) |
-| Tenant namespace | **Azure Managed Namespace** (azapi, ARM-side quota) + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
-| Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
-| Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
-| Ingress DNS | manual records | manual records | manual records | manual records |
-| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
+| Capability | Azure | AWS | GCP | OCI | Nutanix (private) |
+|---|---|---|---|---|---|
+| Cluster | AKS | EKS | GKE | OKE (enhanced) | **NKP** workload cluster (Starter edition) |
+| Cluster lifecycle | Terraform | Terraform | Terraform | Terraform | **NKP** (Cluster API); Terraform attaches, or applies NKP-generated manifests |
+| Pod-level cloud identity | Workload Identity (OIDC issuer + FIC) | IRSA (IAM OIDC provider) | Workload Identity (`<project>.svc.id.goog`) | OKE Workload Identity (no identity object — the principal *is* cluster+ns+SA) | **Vault Kubernetes auth** (no identity object — the role is bound to ns+SA, verified by TokenReview) |
+| Networking | Azure CNI overlay + **Cilium data plane** | VPC CNI + **Cilium (chaining)** | **Dataplane V2** (Cilium-based) | VCN-native pod networking + **Cilium (chaining)** | **Cilium**, shipped by NKP |
+| Secret backend | Key Vault (RBAC + ABAC) | Secrets Manager (+ CMK) | Secret Manager | OCI Vault (+ master key) | **HashiCorp Vault** KV v2 mount |
+| Tenant namespace | **Azure Managed Namespace** (azapi, ARM-side quota) + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol | Namespace + quota + netpol |
+| Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
+| Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) | **Traefik** + ESO (Vault); MetalLB hands out the address |
+| Ingress DNS | manual records | manual records | manual records | manual records | manual records |
+| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** | registered **spoke** |
+| Credentials in CI | client secret | access keys | SA key | API signing key | **NKP SA token + Vault token**, from a self-hosted runner |
+
+## The private cloud
+
+Four of the five entries in that table are public clouds, and the platform
+leans on each one's IAM plane for the thing that actually matters: the
+authorization decision behind a secret read, taken outside Kubernetes. The
+fifth has no such plane. `foundations/nutanix` is an **NKP** workload cluster
+paired with a **HashiCorp Vault** KV v2 mount, and Vault is what supplies it.
+
+```
+Pod ──runs as──▶ ServiceAccount ──token, audience "vault"──▶ Vault
+                                    │  TokenReview against THIS cluster
+                                    ▼
+                        role (bound to ns + SA) ──▶ policy: read "<mount>/data/<tenant>-*"
+```
+
+That is the same sentence as Azure's federated identity credential, IRSA and
+GKE Workload Identity — a projected ServiceAccount token, minted for a named
+audience, exchanged at an identity service for a credential whose
+authorization is pinned to `(namespace, service account)`. Only the issuer
+differs, so the tenant contract, the module shape and the namespaced
+`SecretStore` are unchanged, and Vault's path wildcard (`<tenant>-*`, legal
+only as a path's last character) is the same prefix rule the other four
+clouds' conditions express.
+
+Two things follow that no public cloud here has:
+
+- **The platform operates the identity provider.** Vault is a server someone
+  has to unseal, back up and upgrade, and a Vault outage stops secret
+  refreshes on this cloud. It must be 1.21+, where a role without an
+  `audience` stops authenticating.
+- **The cluster's lifecycle is not Terraform's.** NKP manages workload
+  clusters with Cluster API, so this foundation *attaches* to a cluster
+  created by `nkp create cluster` and reads its credentials from the
+  `<cluster>-kubeconfig` Secret that Cluster API publishes on the management
+  cluster (`modules/nkp-cluster-access`) — the private cloud's
+  `aws eks get-token`. Pointing `cluster_manifests_dir` at NKP-CLI-generated
+  manifests makes the stack create it instead.
+
+Nothing in it is reachable from a hosted CI runner, so its jobs — and the
+all-clouds `tenants`/`gitops` jobs, which now cover it — run on a self-hosted
+runner inside the private network.
+[ADR-0002](adr/0002-private-cloud-on-nkp-with-vault-as-the-identity-plane.md)
+has the rationale; [nutanix.md](nutanix.md) is the operator's version.
 
 ## Ingress
 
 Every cluster runs the **same ingress controller**: Traefik, installed from
 `modules/platform-ingress` by each foundation's `ingress.tf` and opt-in per
 environment with `enable_ingress`. A tenant that publishes an application
-writes the same four lines of Ingress on AKS, EKS, GKE and OKE — which is the
-whole premise of the platform applied to HTTP.
+writes the same four lines of Ingress on AKS, EKS, GKE, OKE and NKP — which is
+the whole premise of the platform applied to HTTP.
 
 ```
    <app>-<tenant>.onek8s.lol
@@ -154,6 +202,7 @@ fills it from the backend its tenants already read:
 | AWS | ESO `SecretStore` + `ExternalSecret` on `<env>/platform/wildcard-onek8s-lol` in Secrets Manager, over IRSA |
 | GCP | ESO on `platform-wildcard-onek8s-lol` in Secret Manager, over Workload Identity |
 | OCI | ESO on `platform-wildcard-onek8s-lol` in the Vault, over OKE Workload Identity |
+| Nutanix | ESO on `<mount>/platform-wildcard-onek8s-lol` in HashiCorp Vault, over Vault's Kubernetes auth |
 
 The identity that reads it is the platform's counterpart of a tenant
 identity: pinned to the ingress namespace's own ServiceAccount and scoped to
@@ -161,8 +210,9 @@ the reserved `platform-` prefix by the same ABAC condition / IAM prefix /
 policy condition that scopes a tenant to `<tenant>-`. No tenant can read the
 private key, and the ingress can read no tenant's secrets.
 
-The distributed value is one JSON object holding `tls.crt` and `tls.key`, so
-those three `ExternalSecret`s use `dataFrom.extract` and materialize a
+The distributed value is one JSON object holding `tls.crt` and `tls.key` (on
+Vault, one KV v2 secret with those two fields), so those four
+`ExternalSecret`s use `dataFrom.extract` and materialize a
 `kubernetes.io/tls` secret in one step. Azure reads the vault the workflow
 writes to directly, and what Key Vault returns for a certificate is the PEM
 bundle that was imported — key followed by chain — so there the same two
@@ -172,7 +222,7 @@ next hourly refresh and never by an apply.
 
 **The dashboard is published too, and it is not protected.** Each cluster
 serves Traefik's own UI and API on `<cloud>-traefik.onek8s.lol`
-(`azure-`, `aws-`, `gcp-`, `oci-`), on the same load balancer and the same
+(`azure-`, `aws-`, `gcp-`, `oci-`, `nutanix-`), on the same load balancer and the same
 wildcard certificate, with no authentication in front of it: anyone who
 reaches the host reads that cluster's whole routing configuration. That is a
 deliberate lab trade — set `ingress_dashboard_hostname = null` in an
@@ -227,10 +277,10 @@ created out of band and referenced by ID.
 
 That AKS cluster is the **hub**. The other clouds' clusters are registered
 with it as **spokes** by the `gitops/` stack, so there is one delivery plane
-for all four clouds rather than one Argo CD per cloud — the same "one stack,
+for all five clouds rather than one Argo CD per cloud — the same "one stack,
 all clouds" shape the tenants layer has, with the cloud as a key of
-`var.spokes` instead of a per-tenant attribute. All three — EKS, GKE and OKE
-— are registered.
+`var.spokes` instead of a per-tenant attribute. All four — EKS, GKE, OKE and
+the NKP cluster — are registered.
 
 Registration is a `cluster`-labelled Secret in the hub's `argocd` namespace
 whose credential is a `argocd-manager` ServiceAccount token minted on the
@@ -256,8 +306,8 @@ down as Helm values so one copy of the directory serves every environment.
 The workloads themselves live in `apps/`, source and chart side by side. The
 example is `hello`, a .NET page on `<cloud>-hello.onek8s.lol` showing a
 welcome message and a test secret read from that cloud's own backend through
-the tenant's namespaced `SecretStore` — one image, one chart, four clusters,
-and the only cloud-specific thing in it is the *name* of the secret it asks
+the tenant's namespaced `SecretStore` — one image, one chart, five clusters,
+and the only cloud-specific thing in it is *how it names* the secret it asks
 for. [hello-app.md](hello-app.md).
 
 ## Secret isolation (the core security invariant)
@@ -279,6 +329,9 @@ Secret naming contract per tenant:
 - AWS Secrets Manager: `"<env>/<tenant>/<name>"`
 - GCP Secret Manager: `"<tenant>-<name>"`
 - OCI Vault: `"<tenant>-<name>"`
+- HashiCorp Vault (Nutanix): `"<mount>/<tenant>-<name>"`, and because a KV v2
+  secret is a *map*, the field inside it is named too — the ExternalSecret
+  carries a `property` where the other four do not
 
 Because the prefix *is* the boundary, a tenant name is also a claim on a slice
 of the shared backend. `platform-` is reserved for the platform's own objects
@@ -347,21 +400,23 @@ spec:
   renewal window.
 
   The same workflow's `distribute` mode copies that certificate to the other
-  three clouds, so a workload on EKS, GKE or OKE reads it from the backend it
+  four clouds, so a workload on EKS, GKE or OKE reads it from the backend it
   already reads its tenant secrets from rather than reaching into Azure for
-  it. Key Vault stays the single source of truth and the other three hold
-  copies; a distribution run publishes whatever version the vault holds and
+  it. Key Vault stays the single source of truth and the others hold copies; a distribution run publishes whatever version the vault holds and
   never contacts Let's Encrypt, which keeps issuance and replication
   independently retryable. The targets are resolved the way the vault is —
   out of each `foundations/<cloud>` state (`secrets_kms_key_arn` + `region`,
-  `project_id`, `vault_id` + `vault_key_id`) — so a cloud with no foundation
+  `project_id`, `vault_id` + `vault_key_id`, `vault_address` +
+  `vault_mount_path`) — so a cloud with no foundation
   in that environment is skipped instead of failing the run, and there are no
   per-cloud coordinates to keep in sync. The value written is one JSON object
   holding `tls.crt` (leaf + chain) and `tls.key` (PKCS#8), so the key and its
   certificate are always one atomic version and an `ExternalSecret` maps both
-  fields through `remoteRef.property`. The three writes are independent: one
-  cloud refusing the write leaves the other two on the current certificate
-  and fails the run at the end.
+  fields through `remoteRef.property`. The writes are independent: one cloud
+  refusing leaves the others on the current certificate and fails the run at
+  the end. The private cloud is skipped when it has no foundation in the
+  environment or no `VAULT_TOKEN`, and reaching its Vault at all needs the
+  self-hosted runner.
 
   The trade-off against the obvious alternative — cert-manager in-cluster
   with `ClusterIssuer` + workload identity — is that CI, not the cluster,
@@ -372,8 +427,9 @@ spec:
 - Authentication uses long-lived cloud credentials stored as GitHub secrets
   (azurerm `ARM_CLIENT_SECRET`, AWS access keys via
   `aws-actions/configure-aws-credentials`, a service account key via
-  `google-github-actions/auth`, and an OCI API signing key read from `OCI_*`
-  environment variables). See `docs/getting-started.md` for the identities
+  `google-github-actions/auth`, an OCI API signing key read from `OCI_*`
+  environment variables, and — for the private cloud — `VAULT_TOKEN` plus the
+  NKP management-cluster token in `TF_VAR_nkp_management_token`). See `docs/getting-started.md` for the identities
   and repository secrets/variables to create.
 
 ## Known trade-offs
@@ -399,7 +455,7 @@ spec:
   than the platform otherwise needs; the cost is that nothing notices when
   one of those objects is deleted or renamed.
 - The AKS cluster is the only one running Argo CD, which makes it the hub for
-  the whole platform: losing it stops delivery on all four clouds. Workloads
+  the whole platform: losing it stops delivery on all five clouds. Workloads
   keep running — Argo CD holds no state a spoke needs at runtime — but nothing
   syncs until it is back. A cloud left out of `var.spokes` has an ingress
   controller but no delivery plane at all.
@@ -465,10 +521,32 @@ spec:
   CA) has to bring an `Ingress` with a `tls:` section and a secret it
   manages. That case is not wired up: nothing today issues per-tenant
   certificates.
+- The private cloud carries two long-lived credentials the public clouds have
+  no equivalent of, and both land in state files in the Azure state home: the
+  token-reviewer ServiceAccount token Vault presents when it validates a login,
+  and the NKP management-cluster token the three stacks use to fetch the
+  workload cluster's kubeconfig. Nothing rotates either, and the kubeconfig
+  they fetch is a cluster-admin credential — the same position, and the same
+  mitigation (the state home's RBAC), as the spoke tokens already in
+  `gitops/<env>.tfstate`. The reviewer credential is what keeps tenants out of
+  the TokenReview API: Vault's alternative is to validate each login with the
+  *client's* token, which would mean granting `system:auth-delegator` to every
+  tenant ServiceAccount.
+- Vault's KV v2 stores maps rather than opaque values, so a tenant
+  `ExternalSecret` on the private cloud names a `property` where the other four
+  do not, and `dataFrom.find` does not work there — no `list` capability is
+  granted, the same functional limit as OCI and for the same reason.
+- `foundations/nutanix` does not create its cluster unless it is handed
+  NKP-generated manifests, which breaks the "cluster + secret backend pair"
+  symmetry the other four have. The alternative — hand-written Cluster API
+  manifests — would be a copy of what `nkp create cluster` produces, drifting
+  from it at every NKP release, and NKP Starter's whole value is that it owns
+  cluster lifecycle. Those generated manifests also carry the Prism Central
+  credential Secret, which is why that path is git-ignored and local.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
-- All state lives in the Azure Storage state home, so every deploy — AWS,
-  GCP and OCI foundations included — needs Azure credentials in addition to
-  the target cloud's, and Azure Storage is a single point of failure for
+- All state lives in the Azure Storage state home, so every deploy — the AWS,
+  GCP, OCI and private-cloud foundations included — needs Azure credentials in
+  addition to the target cloud's, and Azure Storage is a single point of failure for
   operating the other three clouds. The trade is deliberate: one bootstrap,
   one place to secure and version state, and one remote-state backend type
   (a working directory supports only one anyway, which is what forced the
@@ -479,7 +557,7 @@ spec:
 - Azure Managed Namespaces are a preview API surface, addressed via `azapi`
   by design (`managed_namespace_api_version` variable).
 - Distributing the wildcard certificate copies a private key out of Key Vault
-  into three more backends, so it exists in four places and a rotation is only
+  into four more backends, so it exists in five places and a rotation is only
   complete once every copy is refreshed — nothing reconciles them, and a
   cluster reading a stale copy will not notice. It is also a single job
   touching every cloud, which GitHub can bind to only one environment: it uses

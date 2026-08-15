@@ -4,6 +4,8 @@ name: Deploy Foundations
 #  - Merge to main touching foundations/** auto-deploys the prototype environment.
 #  - staging/prod (and targeted clouds) deploy via workflow_dispatch, guarded
 #    by GitHub environment protection rules on "<cloud>-<environment>".
+#  - The nutanix (private cloud) job runs on whatever NUTANIX_RUNNER names,
+#    because nothing in it is reachable from a hosted runner.
 on:
   # push:
   #   branches: [main]
@@ -18,7 +20,7 @@ on:
         required: true
         default: "azure"
         type: choice
-        options: [all, azure, aws, gcp, oci]
+        options: [all, azure, aws, gcp, oci, nutanix]
       environment:
         description: "Environment to deploy"
         required: true
@@ -64,4 +66,17 @@ jobs:
       stack: foundations/oci
       cloud: oci
       environment: ${{ inputs.environment || 'prototype' }}
+    secrets: inherit
+
+  # The private cloud. Its NKP management cluster and its Vault live on an
+  # internal network, so this job needs a runner inside it: set the repository
+  # variable NUTANIX_RUNNER to a self-hosted runner's label.
+  nutanix:
+    if: github.event_name == 'push' || inputs.cloud == 'all' || inputs.cloud == 'nutanix'
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: foundations/nutanix
+      cloud: nutanix
+      environment: ${{ inputs.environment || 'prototype' }}
+      runner: ${{ vars.NUTANIX_RUNNER || 'ubuntu-latest' }}
     secrets: inherit

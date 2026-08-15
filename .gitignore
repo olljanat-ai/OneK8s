@@ -20,6 +20,12 @@
 # version-controlled (contains no secrets, only IDs and sizing).
 !**/envs/*.tfvars
 
+# NKP cluster manifests generated with `nkp create cluster nutanix --dry-run`.
+# They are what foundations/nutanix applies when cluster_manifests_dir points
+# at them, and they carry the Prism Central credential Secret — so that path is
+# for a local apply, never for CI. See docs/nutanix.md.
+foundations/nutanix/cluster/
+
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
 override.tf

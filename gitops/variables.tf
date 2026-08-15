@@ -47,8 +47,8 @@ variable "spokes" {
   default = {}
 
   validation {
-    condition     = alltrue([for c in keys(var.spokes) : contains(["aws", "gcp", "oci"], c)])
-    error_message = "Spokes are keyed by cloud, and the supported spokes are: aws, gcp, oci. (azure is the hub and registers itself.)"
+    condition     = alltrue([for c in keys(var.spokes) : contains(["aws", "gcp", "oci", "nutanix"], c)])
+    error_message = "Spokes are keyed by cloud, and the supported spokes are: aws, gcp, oci, nutanix. (azure is the hub and registers itself.)"
   }
 }
 
@@ -93,4 +93,21 @@ variable "platform_apps" {
     tenant = optional(string, "team-alpha")
   })
   default = {}
+}
+
+variable "nkp_management_token" {
+  description = <<-EOT
+    Bearer token of a ServiceAccount on the NKP management cluster, used to
+    read the private cloud's workload-cluster kubeconfig (the Cluster API
+    Secret NKP keeps for it) so that this stack can register it as a spoke.
+    Required only when "nutanix" is in var.spokes; supply it through the
+    environment (TF_VAR_nkp_management_token), never in a tfvars file.
+
+    Registration is a one-off privileged act on the spoke, exactly as it is on
+    the other clouds — everything Argo CD does afterwards uses the
+    argocd-manager token this stack creates there instead.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
 }

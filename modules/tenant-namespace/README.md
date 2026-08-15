@@ -6,12 +6,13 @@ all clouds** — the cloud is just a variable:
 
 ```
 tenant-namespace/
-├── main.tf … # dispatcher: cloud = "azure" | "aws" | "gcp" | "oci"
+├── main.tf … # dispatcher: cloud = "azure"|"aws"|"gcp"|"oci"|"nutanix"
 ├── common/   # Kubernetes-side resources shared by all clouds
 ├── azure/    # AKS: Managed Namespace + UAMI + FIC + ABAC on Key Vault
 ├── aws/      # EKS: Namespace + IAM Role (IRSA) + prefix-scoped Secrets Manager
 ├── gcp/      # GKE: Namespace + GSA + Workload Identity + IAM condition
-└── oci/      # OKE: Namespace + workload-identity policy + secret-name prefix
+├── oci/      # OKE: Namespace + workload-identity policy + secret-name prefix
+└── nutanix/  # NKP: Namespace + Vault k8s-auth role + path-prefix policy
 ```
 
 Callers use the module root and pass `cloud` plus the matching foundation's
@@ -19,7 +20,7 @@ outputs object; the dispatcher instantiates exactly one cloud
 implementation and exposes identically-shaped outputs (`namespace`,
 `service_account_name`, `identity`, `secret_prefix`, `secret_store_name`).
 The cloud submodules remain callable directly if a root only wants one
-cloud's providers. All four delegate the Kubernetes-side work to `common`.
+cloud's providers. All five delegate the Kubernetes-side work to `common`.
 
 Because the OCI submodule needs the home-region provider alias (`oci.home`)
 and aliased configurations are never inherited, callers must pass a
@@ -33,14 +34,14 @@ provider. That is exactly what the `tenants` stack does.
 
 ## What every tenant gets
 
-| Concern | Azure | AWS | GCP | OCI |
-|---|---|---|---|---|
-| Namespace | **Azure Managed Namespace** (`azapi`, incl. its default quota) | Namespace + ResourceQuota | Namespace + ResourceQuota | Namespace + ResourceQuota |
-| Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding | none to create — OKE asserts the (cluster, namespace, SA) tuple itself |
-| K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` | no annotation needed |
-| ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` |
-| Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` |
-| Ingress isolation | two NetworkPolicies: own namespace + the `traefik` namespace (the managed namespace's own ingress policy is left at `AllowAll` — see below) | same two | same two | same two |
+| Concern | Azure | AWS | GCP | OCI | Nutanix |
+|---|---|---|---|---|---|
+| Namespace | **Azure Managed Namespace** (`azapi`, incl. its default quota) | Namespace + ResourceQuota | Namespace + ResourceQuota | Namespace + ResourceQuota | Namespace + ResourceQuota |
+| Cloud identity | User-Assigned Managed Identity + Federated Identity Credential | IAM Role trusted via IRSA | Google Service Account + Workload Identity binding | none to create — OKE asserts the (cluster, namespace, SA) tuple itself | none to create — a Vault role bound to that namespace + SA, verified by TokenReview |
+| K8s ServiceAccount | annotated with `azure.workload.identity/client-id` | annotated with `eks.amazonaws.com/role-arn` | annotated with `iam.gke.io/gcp-service-account` | no annotation needed | no annotation needed |
+| ESO SecretStore | namespaced, `azurekv` + WorkloadIdentity | namespaced, `aws` + jwt auth | namespaced, `gcpsm` + workloadIdentity | namespaced, `oracle` + `principalType: Workload` | namespaced, `vault` + `auth.kubernetes` |
+| Secret scoping | ABAC condition: secret name starts with `<tenant>-` | IAM resource ARN prefix `<env>/<tenant>/*` + `kms:ViaService` | IAM condition: `resource.name.startsWith(.../secrets/<tenant>-)` | policy condition: `target.secret.name = /<tenant>-*/` | Vault policy: `read "<mount>/data/<tenant>-*"` (and `metadata/`), no `list` |
+| Ingress isolation | two NetworkPolicies: own namespace + the `traefik` namespace (the managed namespace's own ingress policy is left at `AllowAll` — see below) | same two | same two | same two | same two |
 
 ## Publishing an application
 
@@ -77,7 +78,7 @@ cluster with no ingress controller and no allowance is created.
 
 **On AKS, the managed namespace stays out of this.** Its
 `defaultNetworkPolicy.ingress` is set to `AllowAll` and the two policies above
-are the namespace's entire ingress isolation, exactly as on the other three
+are the namespace's entire ingress isolation, exactly as on the other four
 clouds. The reason is that the built-in `AllowSameNamespace` is not a
 default-deny that an additional NetworkPolicy can widen: while it is set, an
 `Ingress` in the namespace is unreachable from Traefik and the host simply
@@ -107,13 +108,18 @@ A tenant can never read another tenant's secrets because:
    ServiceAccount (`serviceAccountRef`), whose token is exchanged for the
    tenant's cloud identity through workload identity federation.
 3. The cloud identity's access to the shared secret backend is **restricted
-   by name/prefix** (ABAC on Azure, IAM resource/conditions on AWS/GCP), so
-   even a compromised tenant identity cannot cross the prefix boundary.
-4. The federation subject is pinned to `system:serviceaccount:<ns>:<sa>`, so
-   no other namespace can borrow the identity.
+   by name/prefix** (ABAC on Azure, IAM resource/conditions on AWS/GCP, a
+   policy condition on OCI, a Vault path policy on Nutanix), so even a
+   compromised tenant identity cannot cross the prefix boundary.
+4. The federation subject is pinned to `system:serviceaccount:<ns>:<sa>` —
+   `bound_service_account_names`/`_namespaces` on Nutanix — so no other
+   namespace can borrow the identity.
 
-See `docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md` for
-the full rationale.
+On every cloud that decision is taken **outside** Kubernetes. The private
+cloud has no cloud IAM plane to take it, which is why Vault is there:
+`docs/adr/0002-private-cloud-on-nkp-with-vault-as-the-identity-plane.md`. See
+`docs/adr/0001-per-tenant-identities-and-namespaced-secretstores.md` for the
+full rationale.
 
 ## Usage
 
@@ -128,7 +134,7 @@ module "tenants_aws" {
 
   providers = { kubernetes = kubernetes.aws, /* ...the full provider set... */ }
 
-  cloud       = "aws"                     # "azure" | "aws" | "gcp" | "oci"
+  cloud       = "aws"                     # "azure"|"aws"|"gcp"|"oci"|"nutanix"
   tenant_name = coalesce(each.value.name, each.key)
   environment = var.environment
   foundation  = data.terraform_remote_state.foundation["aws"].outputs
@@ -152,4 +158,12 @@ selected cloud (see `variables.tf` for the per-cloud key list).
   foundation creates one (`type = "ENHANCED_CLUSTER"`).
 - The OCI policy grants reads of named secrets, not listing, so ESO's
   `dataFrom.find` is unavailable there — that restriction is what keeps a
-  tenant from enumerating the compartment.
+  tenant from enumerating the compartment. The Nutanix policy grants no `list`
+  capability for the same reason, with the same consequence.
+- Nutanix secrets are Vault KV v2, so they are **maps of fields** rather than
+  opaque values: an `ExternalSecret` there names a `remoteRef.property` as well
+  as a key. It also needs Vault 1.21+, where a role without an `audience` stops
+  authenticating — the roles this module writes always set one.
+- The Nutanix submodule needs the `vault` provider, and since passing any
+  provider disables inheritance, `tenants/main.tf` lists it in every module
+  block alongside the OCI aliases.

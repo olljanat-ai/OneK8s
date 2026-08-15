@@ -23,7 +23,8 @@ variable "tenants" {
   description = <<-EOT
     Every tenant of this environment, on every cloud, keyed by a unique id.
     The target cloud is a per-tenant parameter, so one apply onboards tenants
-    across azure, aws, gcp and oci; the tenant syntax is identical everywhere.
+    across azure, aws, gcp, oci and nutanix — the private cloud — and the
+    tenant syntax is identical everywhere.
 
     Map keys must be unique, so onboarding the same tenant name on more than
     one cloud means giving each entry its own key plus an explicit "name":
@@ -49,7 +50,23 @@ variable "tenants" {
   default = {}
 
   validation {
-    condition     = alltrue([for t in var.tenants : contains(["azure", "aws", "gcp", "oci"], t.cloud)])
-    error_message = "Every tenant's cloud must be one of: azure, aws, gcp, oci."
+    condition     = alltrue([for t in var.tenants : contains(["azure", "aws", "gcp", "oci", "nutanix"], t.cloud)])
+    error_message = "Every tenant's cloud must be one of: azure, aws, gcp, oci, nutanix."
   }
+}
+
+variable "nkp_management_token" {
+  description = <<-EOT
+    Bearer token of a ServiceAccount on the NKP management cluster, used to
+    read the private cloud's workload-cluster kubeconfig (the Cluster API
+    Secret NKP keeps for it). Required only when this environment has nutanix
+    tenants; supply it through the environment (TF_VAR_nkp_management_token),
+    never in a tfvars file.
+
+    The other four clouds need no equivalent because their cluster tokens come
+    from cloud IAM — which is exactly what a private cloud does not have.
+  EOT
+  type        = string
+  sensitive   = true
+  default     = ""
 }

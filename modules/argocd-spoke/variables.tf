@@ -1,10 +1,10 @@
 variable "cloud" {
-  description = "Which cloud this spoke lives on: aws, gcp or oci. Azure is the hub and needs no registration — Argo CD reaches its own cluster as https://kubernetes.default.svc."
+  description = "Which cloud this spoke lives on: aws, gcp, oci or nutanix (the private cloud). Azure is the hub and needs no registration — Argo CD reaches its own cluster as https://kubernetes.default.svc."
   type        = string
 
   validation {
-    condition     = contains(["aws", "gcp", "oci"], var.cloud)
-    error_message = "cloud must be one of: aws, gcp, oci (azure is the hub)."
+    condition     = contains(["aws", "gcp", "oci", "nutanix"], var.cloud)
+    error_message = "cloud must be one of: aws, gcp, oci, nutanix (azure is the hub)."
   }
 }
 

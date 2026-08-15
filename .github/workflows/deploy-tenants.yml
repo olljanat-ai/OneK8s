@@ -36,4 +36,8 @@ jobs:
       cloud: all
       environment: ${{ inputs.environment || 'prototype' }}
       gh_environment: tenants-${{ inputs.environment || 'prototype' }}
+      # One run spans every cloud, so as soon as the private one has tenants
+      # (spokes, for gitops) the run has to happen on a runner that can reach
+      # it as well as the internet: set ONEK8S_RUNNER to a self-hosted label.
+      runner: ${{ vars.ONEK8S_RUNNER || 'ubuntu-latest' }}
     secrets: inherit

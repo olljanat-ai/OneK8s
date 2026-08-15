@@ -4,9 +4,15 @@
 
 - Terraform >= 1.9 (CI pins 1.15.x)
 - Cloud CLIs for local work: `az`, `aws`, `gcloud`
-  (+ `gke-gcloud-auth-plugin`), `oci`
+  (+ `gke-gcloud-auth-plugin`), `oci`. The private cloud needs no CLI: NKP and
+  Vault are both HTTP APIs the providers talk to directly (`nkp` and `vault`
+  are useful to have anyway).
 - Permissions to create clusters, identities and IAM/role assignments in the
   target subscription/account/project
+- For the private cloud (`foundations/nutanix`): an **NKP management cluster**
+  with a workload cluster, and a **HashiCorp Vault 1.21+** both the runner and
+  that cluster can reach. See [nutanix.md](nutanix.md) — that foundation
+  attaches to a cluster NKP created rather than creating one.
 
 ## 1. Bootstrap state storage (once, out of band)
 
@@ -53,6 +59,12 @@ secrets:
   **home region**, which the stacks address through a separate `oci.home`
   provider alias. No Customer Secret Key is needed: OCI state lives in the
   Azure state home like everything else.
+- **Nutanix (private cloud)**: two credentials, and neither is a cloud's. A
+  **ServiceAccount token on the NKP management cluster** that may read the
+  workload cluster's namespace (it is how the stacks get the cluster's
+  kubeconfig), and a **Vault token** that may create mounts, policies and auth
+  roles. Nothing about Prism Central is configured here — NKP holds those
+  credentials itself.
 
 Then set repository **secrets** (Settings → Secrets and variables →
 Actions → Secrets):
@@ -63,6 +75,8 @@ Actions → Secrets):
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | aws-actions/configure-aws-credentials |
 | `GCP_CREDENTIALS_JSON` | google-github-actions/auth (service account key JSON) |
 | `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY` | oci provider + OCI CLI (API signing key, PEM contents) |
+| `VAULT_TOKEN` | the vault provider, on the private cloud's foundation and on any run with nutanix tenants |
+| `NKP_MANAGEMENT_TOKEN` | passed as `TF_VAR_nkp_management_token`; reads the private cloud's workload-cluster kubeconfig |
 
 And repository **variables**:
 
@@ -71,11 +85,14 @@ And repository **variables**:
 | `AWS_REGION` | aws-actions/configure-aws-credentials |
 | `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_REGION` | oci provider + OCI CLI |
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
+| `NUTANIX_RUNNER` | runner label for the private cloud's foundation job — nothing in it is reachable from a hosted runner. Defaults to `ubuntu-latest` |
+| `ONEK8S_RUNNER` | runner label for the all-clouds jobs (tenants, gitops, PR plans, certificate distribution) once the private cloud is in play. Defaults to `ubuntu-latest` |
 | `LETSENCRYPT_EMAIL` | Renew Certificate (ACME registration + expiry notices) |
 | `DNS_ZONE_NAME`, `DNS_ZONE_RESOURCE_GROUP` | Renew Certificate (both optional — see below) |
 
 Create GitHub **environments** for the foundations — `azure-prototype`,
-`azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
+`azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod`,
+`nutanix-prototype` … `nutanix-prod` — plus one per
 environment for each of the two all-clouds jobs: `tenants-prototype` …
 `tenants-prod` and `gitops-prototype` … `gitops-prod`. Attach protection
 rules (required reviewers for `*-prod` at minimum). The deploy workflows bind
@@ -93,11 +110,27 @@ terraform apply -var-file=envs/prototype.tfvars
 Or via Actions: **Deploy Foundations** → cloud `aws`, environment
 `prototype`.
 
+The private cloud is the one that differs, and only in what it needs around
+it. Its two credentials come from the environment, and the run has to happen
+somewhere that can reach an internal network:
+
+```bash
+cd foundations/nutanix
+export TF_VAR_nkp_management_token=...   # a ServiceAccount token on the NKP mgmt cluster
+export VAULT_TOKEN=...
+terraform init -backend-config=backend/prototype.hcl
+terraform apply -var-file=envs/prototype.tfvars
+```
+
+It attaches to a cluster NKP already manages rather than creating one — see
+[nutanix.md](nutanix.md), which also covers the opt-in path where Terraform
+applies NKP-generated Cluster API manifests.
+
 ### Ingress
 
 Every foundation installs **Traefik** as the cluster's ingress controller
 (`enable_ingress`, on by default), with the platform wildcard as its default
-certificate. Publishing an application is therefore the same on all four
+certificate. Publishing an application is therefore the same on all five
 clouds — an `Ingress` with a host and a backend, no `ingressClassName` and no
 `tls:` section:
 
@@ -125,7 +158,8 @@ Two things have to be true around it:
 
 1. **The certificate exists.** `platform-wildcard-onek8s-lol` must be in the
    environment's Key Vault (run **Renew Certificate** once), and — for EKS,
-   GKE and OKE — have been copied out with the workflow's `distribute` mode.
+   GKE, OKE and NKP — have been copied out with the workflow's `distribute`
+   mode.
    Until then the `ExternalSecret` stays unresolved and Traefik serves its own
    self-signed certificate; nothing fails. On a brand-new environment the
    order is: apply the foundation, run the renewal (it reads the vault out of
@@ -148,7 +182,7 @@ Hostnames are one label deep — `*.onek8s.lol` covers
 
 Each cluster publishes Traefik's own dashboard and API on
 `https://<cloud>-traefik.onek8s.lol/` — `azure-traefik`, `aws-traefik`,
-`gcp-traefik`, `oci-traefik` — with the UI at `/dashboard/` (the bare host
+`gcp-traefik`, `oci-traefik`, `nutanix-traefik` — with the UI at `/dashboard/` (the bare host
 redirects there) and the API at `/api`. It rides the same load balancer and
 the same wildcard certificate as everything else, so it needs the same kind
 of manual A record.
@@ -268,6 +302,10 @@ tenants = {
     cloud = "gcp"
     name  = "team-gamma"
   }
+  nutanix-team-gamma = {
+    cloud = "nutanix"                                      # the private cloud
+    name  = "team-gamma"
+  }
 }
 ```
 
@@ -289,6 +327,11 @@ lives in the Azure Storage state home (use `az login` or ARM_* env vars).
 Clouds with no tenants are skipped entirely: their foundation state is never
 read and their providers stay inert.
 
+With `nutanix` tenants in the list, the run additionally needs `VAULT_TOKEN`
+and `TF_VAR_nkp_management_token`, and has to happen somewhere that can reach
+the private network — which is why the workflow runs on `ONEK8S_RUNNER` once
+that is the case.
+
 Each cloud's foundation must already be deployed for this environment. The
 stack reads `foundations/<cloud>/<environment>.tfstate` from the `state_home`
 container; if a foundation was never applied there, the run stops with
@@ -301,15 +344,16 @@ Or via Actions: **Deploy Tenants** → environment `prototype`.
 
 Argo CD runs only on the AKS cluster (step 3). The `gitops/` stack registers
 the other clouds' clusters with it as spokes, so one Argo CD delivers to all
-four. Like the tenants stack it is one stack and one state file per
+five. Like the tenants stack it is one stack and one state file per
 environment, with the cloud as a key of `var.spokes`:
 
 ```hcl
 # gitops/envs/prototype.tfvars
 spokes = {
-  aws = {}   # unrestricted; or { namespaces = [...], cluster_resources = false }
-  gcp = {}
-  oci = {}
+  aws     = {}  # unrestricted; or { namespaces = [...], cluster_resources = false }
+  gcp     = {}
+  oci     = {}
+  nutanix = {}  # the private cloud registers like any other spoke
 }
 ```
 
@@ -332,7 +376,10 @@ access entry mapping to a cluster admin, `roles/container.admin` on GCP,
 `manage cluster-family` on OCI. Everything Argo CD does afterwards uses the
 `argocd-manager` token instead, never those credentials. The OCI spoke also
 needs the `oci` CLI on `PATH`, the way the tenants stack does: it is what
-mints the cluster token.
+mints the cluster token. The private cloud needs neither a CLI nor a
+cluster-admin grant of its own — the kubeconfig NKP publishes for the cluster
+already is one, which is why `TF_VAR_nkp_management_token` is all this stack
+takes for it.
 
 Each spoke gets an `argocd-manager` ServiceAccount and a ClusterRole on its
 own cluster, and the hub gets a labelled `cluster` Secret carrying that
@@ -398,19 +445,24 @@ oci vault secret create-base64 \
   --compartment-id "$COMPARTMENT_OCID" --vault-id "$VAULT_OCID" \
   --key-id "$VAULT_KEY_OCID" --secret-name team-gamma-db-password \
   --secret-content-content "$(printf 'hunter2' | base64)"
+
+# Nutanix naming contract: <mount>/<tenant>-<name>. A KV v2 secret is a map,
+# so the field is named too — and named again by the ExternalSecret's
+# remoteRef.property.
+vault kv put onek8s-prototype/team-gamma-db-password password=hunter2
 ```
 
 In the tenant namespace (see `docs/architecture.md` for the full example),
 an `ExternalSecret` referencing `secretStoreRef: {kind: SecretStore, name:
 tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
-prefix fails at the cloud IAM layer.
+prefix fails at the cloud IAM layer — or, on the private cloud, at Vault.
 
-The `hello` application is the working version of exactly that, on all four
+The `hello` application is the working version of exactly that, on all five
 clouds at once — its secret is `test` under the `team-alpha` prefix, and it is
 the one tenant secret nobody has to write: the **Renew Certificate** workflow
 generates it in Key Vault and distributes it with the wildcard (section 7).
-[hello-app.md](hello-app.md) has the four commands to seed it by hand instead
+[hello-app.md](hello-app.md) has the commands to seed it by hand instead
 (note the AWS one: the secret must be encrypted with the tenant CMK, or the
 tenant's scoped `kms:Decrypt` grant cannot read it back).
 
@@ -427,8 +479,9 @@ and the ACME account key lives beside it as the secret
 separate account and gets its own `platform-letsencrypt-staging-account-key`).
 
 Both names use the reserved `platform-` prefix. Tenant access to this vault is
-an ABAC condition on `<tenant>-`, so **do not name a tenant `platform`** — it
-would be granted read access to the certificate and the account key.
+an ABAC condition on `<tenant>-` — and a Vault policy on `<tenant>-*` on the
+private cloud — so **do not name a tenant `platform`**: it would be granted
+read access to the certificate and the account key.
 
 The workflow writes one object outside that prefix, on purpose: the tenant
 **test secret** `team-alpha-test`, which the hello application reads on every

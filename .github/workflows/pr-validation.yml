@@ -41,6 +41,7 @@ jobs:
           - foundations/aws
           - foundations/gcp
           - foundations/oci
+          - foundations/nutanix
           - tenants
           - gitops
     steps:
@@ -74,7 +75,7 @@ jobs:
       - name: Applications, as rendered on each cloud
         run: |
           helm lint apps/hello/chart --set ingress.host=azure-hello.onek8s.lol
-          for cloud in azure aws gcp oci; do
+          for cloud in azure aws gcp oci nutanix; do
             helm template "hello-$cloud" apps/hello/chart \
               --set cloud="$cloud" \
               --set ingress.host="$cloud-hello.onek8s.lol" > /dev/null
@@ -113,14 +114,20 @@ jobs:
   plan:
     name: plan ${{ matrix.stack }} (${{ matrix.cloud }})
     if: vars.ENABLE_CLOUD_PLANS == 'true'
-    runs-on: ubuntu-latest
+    # A plan has to reach everything it plans, and the private cloud reaches
+    # nobody from a hosted runner: with a nutanix foundation in the mix, set
+    # ONEK8S_RUNNER to a self-hosted runner inside it — which is also where the
+    # all-clouds tenants and gitops plans have to run, since they cover it too.
+    runs-on: ${{ vars.ONEK8S_RUNNER || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         # "cloud" only selects which credentials and CLIs the job sets up; the
         # backend/*.hcl + envs/*.tfvars stem is the environment name. The single
         # tenants stack covers every cloud in one plan, so it needs them all,
-        # and so does gitops — it talks to the hub and to every spoke.
+        # and so does gitops — it talks to the hub and to every spoke. The
+        # private cloud needs no CLI at all: its credentials are two
+        # environment variables and everything else is a Kubernetes API.
         include:
           - stack: foundations/azure
             cloud: azure
@@ -130,6 +137,8 @@ jobs:
             cloud: gcp
           - stack: foundations/oci
             cloud: oci
+          - stack: foundations/nutanix
+            cloud: nutanix
           - stack: tenants
             cloud: all
           - stack: gitops
@@ -154,6 +163,12 @@ jobs:
       OCI_CLI_REGION: ${{ vars.OCI_REGION }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      # The private cloud's two credentials: a Vault token (its address comes
+      # out of the foundation's own configuration/state) and the NKP
+      # management-cluster token the stacks read the workload cluster's
+      # kubeconfig with. Ignored on the other clouds.
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      TF_VAR_nkp_management_token: ${{ secrets.NKP_MANAGEMENT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 

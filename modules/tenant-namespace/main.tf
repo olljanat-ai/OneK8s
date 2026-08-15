@@ -55,6 +55,25 @@ module "gcp" {
   ingress_controller_namespace = var.ingress_controller_namespace
 }
 
+module "nutanix" {
+  source = "./nutanix"
+  count  = var.cloud == "nutanix" ? 1 : 0
+
+  tenant_name          = var.tenant_name
+  environment          = var.environment
+  vault_address        = var.foundation.vault_address
+  vault_namespace      = try(var.foundation.vault_namespace, "")
+  vault_ca_bundle      = try(var.foundation.vault_ca_bundle, "")
+  vault_mount_path     = var.foundation.vault_mount_path
+  vault_auth_path      = var.foundation.vault_auth_path
+  vault_audience       = try(var.foundation.vault_audience, "vault")
+  quota                = var.quota
+  namespace_labels     = var.namespace_labels
+  service_account_name = var.service_account_name
+
+  ingress_controller_namespace = var.ingress_controller_namespace
+}
+
 # OCI needs an explicit providers block: its IAM policies must be written
 # through the home-region provider alias, which is never inherited implicitly.
 module "oci" {

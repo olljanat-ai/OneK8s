@@ -1,6 +1,8 @@
 # Reusable plan+apply workflow used by deploy-foundations and deploy-tenants.
 # Authentication uses long-lived credentials stored as GitHub secrets
-# (Azure client secret, AWS access keys, GCP service account key).
+# (Azure client secret, AWS access keys, GCP service account key, an OCI
+# signing key, and — for the private cloud — a Vault token and an NKP
+# management-cluster ServiceAccount token).
 #
 # The job binds to the GitHub environment "<cloud>-<environment>"
 # (e.g. azure-prod), so approvals/wait timers are configured per cloud and
@@ -17,7 +19,7 @@ on:
         required: true
         type: string
       cloud:
-        description: "azure | aws | gcp | oci | all"
+        description: "azure | aws | gcp | oci | nutanix | all"
         required: true
         type: string
       environment:
@@ -31,6 +33,16 @@ on:
         required: false
         type: string
         default: ""
+      runner:
+        description: >-
+          Runner the job goes to. The private cloud is by definition not
+          reachable from GitHub's hosted runners — its NKP management cluster,
+          its workload cluster and its Vault all sit on an internal network —
+          so any run that touches nutanix has to go to a self-hosted runner
+          inside it. Everything else stays on ubuntu-latest.
+        required: false
+        type: string
+        default: "ubuntu-latest"
 
 permissions:
   contents: read
@@ -38,7 +50,7 @@ permissions:
 jobs:
   deploy:
     name: ${{ inputs.stack }} (${{ inputs.environment }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     environment: ${{ inputs.gh_environment || format('{0}-{1}', inputs.cloud, inputs.environment) }}
     concurrency:
       # One writer per stack+environment; never cancel a running apply.
@@ -65,6 +77,13 @@ jobs:
       OCI_CLI_REGION: ${{ vars.OCI_REGION }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      # The private cloud's two credentials. The vault provider reads
+      # VAULT_TOKEN straight from the environment (its address comes from the
+      # foundation's own configuration/state, not from here), and the NKP
+      # management-cluster token is what the stacks use to read the workload
+      # cluster's kubeconfig. Both are ignored on the other clouds.
+      VAULT_TOKEN: ${{ secrets.VAULT_TOKEN }}
+      TF_VAR_nkp_management_token: ${{ secrets.NKP_MANAGEMENT_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 

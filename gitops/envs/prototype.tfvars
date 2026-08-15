@@ -21,9 +21,10 @@ state_home = {
 # `namespaces = [...]` + `cluster_resources = false`, which binds the manager
 # ServiceAccount per namespace instead of cluster-wide.
 spokes = {
-  aws = {}
-  gcp = {}
-  oci = {}
+  aws     = {}
+  gcp     = {}
+  oci     = {}
+  nutanix = {}
 }
 
 # The root Application: the only Argo CD object Terraform creates. It points
@@ -39,7 +40,7 @@ platform_apps = {
   repo_url        = "https://github.com/olljanat-ai/OneK8s.git"
   target_revision = "main"
 
-  # Where the example application lands. team-alpha exists on all four clouds
+  # Where the example application lands. team-alpha exists on all five clouds
   # in this environment (tenants/envs/prototype.tfvars), and its namespaced
   # SecretStore is what the app reads its test secret through.
   tenant = "team-alpha"

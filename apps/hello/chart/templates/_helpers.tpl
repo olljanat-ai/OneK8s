@@ -56,6 +56,24 @@ SecretSyncedError.
 {{- end -}}
 
 {{/*
+The field to take out of that secret, or empty for "the whole value".
+
+The four public clouds store a secret as an opaque value, so there is nothing
+to select inside it. HashiCorp Vault's KV v2 has no such thing: every secret is
+a map of fields, and asking for one without naming a field returns the whole
+map as JSON. So on the private cloud the remote reference carries a property,
+and the field it names is the same "test" the generated Kubernetes Secret uses
+as its key — which keeps the value the page shows identical on all five.
+*/}}
+{{- define "hello.remoteProperty" -}}
+{{- if .Values.secret.remoteProperty -}}
+{{- .Values.secret.remoteProperty -}}
+{{- else if eq .Values.cloud "nutanix" -}}
+{{- .Values.secret.name -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Key inside the generated Kubernetes Secret, which is also the file name the app
 reads under /etc/onek8s/secret.
 */}}

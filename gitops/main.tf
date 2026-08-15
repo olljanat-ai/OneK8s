@@ -1,7 +1,7 @@
 locals {
   # The hub is fixed: Argo CD runs on the AKS cluster foundations/azure builds,
   # so "azure" is never a spoke. These are the clouds that can be one.
-  spoke_clouds = ["aws", "gcp", "oci"]
+  spoke_clouds = ["aws", "gcp", "oci", "nutanix"]
 
   # var.spokes is keyed by cloud, and it is regrouped here for the same reason
   # the tenants stack groups its tenants: a module's providers are static, so
@@ -125,6 +125,32 @@ module "spoke_gcp" {
   cloud       = "gcp"
   environment = var.environment
   foundation  = local.foundation.gcp
+  hub         = local.hub
+
+  name              = each.value.name
+  namespaces        = each.value.namespaces
+  cluster_resources = each.value.cluster_resources
+  project           = each.value.project
+  labels            = each.value.labels
+}
+
+# The private cloud. Registration is the same three objects as everywhere else
+# — a ServiceAccount, a ClusterRole and the hub's cluster Secret — because a
+# spoke is registered with plain Kubernetes RBAC on every cloud. What differs
+# is only how this stack reaches the cluster in the first place: NKP, not a
+# cloud IAM service, is what hands out its credential (see providers.tf).
+module "spoke_nutanix" {
+  source   = "../modules/argocd-spoke"
+  for_each = local.spokes_by_cloud.nutanix
+
+  providers = {
+    kubernetes     = kubernetes.nutanix
+    kubernetes.hub = kubernetes.azure
+  }
+
+  cloud       = "nutanix"
+  environment = var.environment
+  foundation  = local.foundation.nutanix
   hub         = local.hub
 
   name              = each.value.name
