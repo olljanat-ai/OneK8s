@@ -1,4 +1,18 @@
 {{- if .Values.apps.hello.enabled }}
+{{- $secret := .Values.apps.hello.secret }}
+{{- /*
+The tenant's test secret, spelled the way each backend spells it. This is the
+only string on the platform that is not the same word on all four clouds, and
+resolving it here is deliberate: Key Vault, Secret Manager and OCI Vault names
+are flat because each environment has its own vault, project and compartment,
+while Secrets Manager is account-wide, so the tenant's IAM role there is
+restricted to "<environment>/<tenant>/*" (modules/tenant-namespace/aws/main.tf).
+
+The application's chart is handed the finished key and never learns which
+cloud it landed on — a developer's chart has no business branching on that.
+*/}}
+{{- $flatKey := printf "%s-%s" .Values.tenant $secret.name }}
+{{- $pathKey := printf "%s/%s/%s" .Values.environment .Values.tenant $secret.name }}
 # "Deploy the hello app to every cloud", as one object.
 #
 # Two generators, unioned, because the hub is not shaped like a spoke: the
@@ -71,6 +85,12 @@ spec:
             # One label deep, which is all the *.onek8s.lol wildcard covers.
             - name: ingress.host
               value: '{{`{{ .values.cloud }}`}}-{{ .Values.apps.hello.hostPrefix }}.{{ .Values.domain }}'
+            - name: secret.name
+              value: {{ $secret.name | quote }}
+            # Resolved per cluster, from the two spellings computed above: a
+            # path on Secrets Manager, a flat name everywhere else.
+            - name: secret.remoteKey
+              value: '{{`{{ if eq .values.cloud "aws" }}`}}{{ $pathKey }}{{`{{ else }}`}}{{ $flatKey }}{{`{{ end }}`}}'
             - name: welcomeMessage
               value: 'Welcome to OneK8s on {{`{{ .values.cloud }}`}} ({{ .Values.environment }})!'
       destination:

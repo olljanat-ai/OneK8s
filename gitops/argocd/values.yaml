@@ -36,6 +36,15 @@ apps:
     path: apps/hello/chart
     # Host label: "<cloud>-hello.<domain>".
     hostPrefix: hello
+    # The tenant secret the application displays. Its name is the tenant's, not
+    # a cloud's; the ApplicationSet turns it into the key each cloud's backend
+    # actually uses ("<tenant>-<name>", or "<environment>/<tenant>/<name>" on
+    # AWS Secrets Manager) and passes that to the chart ready-made.
+    #
+    # It must match TEST_SECRET in .github/workflows/renew-certificate.yml,
+    # which is what writes the value into all four backends.
+    secret:
+      name: test
     # The hub (AKS) is not a spoke and has no labelled cluster Secret, so an
     # ApplicationSet cluster generator cannot select it. It is added as one
     # static list element instead; "in-cluster" is the name Argo CD gives the

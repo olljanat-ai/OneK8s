@@ -1,6 +1,5 @@
-{{- if .Values.ingress.enabled }}
 {{- if not .Values.ingress.host }}
-{{- fail "ingress.host is required when ingress.enabled is true (the ApplicationSet sets it to \"<cloud>-hello.onek8s.lol\")" }}
+{{- fail "ingress.host is required (the ApplicationSet sets it to \"<cloud>-hello.onek8s.lol\")" }}
 {{- end }}
 # The platform's tenant-facing contract in full: a host, a backend, and nothing
 # else. No TLS block and no certificate — Traefik's default TLSStore serves the
@@ -12,7 +11,7 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "hello.fullname" . }}
+  name: {{ include "hello.name" . }}
   labels:
     {{- include "hello.labels" . | nindent 4 }}
 spec:
@@ -27,7 +26,6 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "hello.fullname" . }}
+                name: {{ include "hello.name" . }}
                 port:
                   number: {{ .Values.service.port }}
-{{- end }}

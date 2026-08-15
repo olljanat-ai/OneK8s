@@ -1,18 +1,20 @@
 {{/*
-Release-scoped names. The release name is "hello-<cloud>" when Argo CD applies
-this chart, so the objects are already distinct per cluster; the truncation is
-the usual guard against a long release name overrunning a DNS label.
+Names. There is exactly one release of this chart per cluster, in the tenant's
+namespace, so the objects are simply named after the chart; the truncation is
+the usual guard against a name overrunning a DNS label. The release name
+("hello-<cloud>" when Argo CD applies it) is what tells two clusters' objects
+apart in Argo CD, not the object names.
 */}}
 {{- define "hello.name" -}}
-{{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
-{{- end -}}
-
-{{- define "hello.fullname" -}}
-{{- if .Values.fullnameOverride -}}
-{{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
-{{- else -}}
 {{- .Chart.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{/*
+The Kubernetes Secret External Secrets writes and the Deployment mounts. Named
+here rather than in two templates, because those two have to agree.
+*/}}
+{{- define "hello.secretName" -}}
+{{- printf "%s-secret" (include "hello.name" .) -}}
 {{- end -}}
 
 {{- define "hello.labels" -}}
@@ -29,40 +31,4 @@ onek8s.io/tenant: {{ .Values.tenant | quote }}
 {{- define "hello.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "hello.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
-{{- end -}}
-
-{{/*
-The key the ExternalSecret asks the backend for.
-
-Every cloud's tenant identity is restricted to a name prefix, and the prefix is
-not spelled the same everywhere: Key Vault, Secret Manager and OCI Vault use
-"<tenant>-", while Secrets Manager names are paths and the IAM policy grants
-"<environment>/<tenant>/*". That difference is the only thing in this chart
-that is not cloud-agnostic, and it is contained here rather than pushed out
-into four sets of values.
-
-Asking for anything outside the prefix is not a mistake this chart can make
-quietly: the cloud IAM plane refuses the read and the ExternalSecret goes
-SecretSyncedError.
-*/}}
-{{- define "hello.remoteKey" -}}
-{{- if .Values.secret.remoteKey -}}
-{{- .Values.secret.remoteKey -}}
-{{- else if eq .Values.cloud "aws" -}}
-{{- printf "%s/%s/%s" .Values.environment .Values.tenant .Values.secret.name -}}
-{{- else -}}
-{{- printf "%s-%s" .Values.tenant .Values.secret.name -}}
-{{- end -}}
-{{- end -}}
-
-{{/*
-Key inside the generated Kubernetes Secret, which is also the file name the app
-reads under /etc/onek8s/secret.
-*/}}
-{{- define "hello.secretKey" -}}
-{{- .Values.secret.name -}}
-{{- end -}}
-
-{{- define "hello.secretName" -}}
-{{- printf "%s-secret" (include "hello.fullname" .) -}}
 {{- end -}}

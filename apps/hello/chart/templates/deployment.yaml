@@ -1,7 +1,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "hello.fullname" . }}
+  name: {{ include "hello.name" . }}
   labels:
     {{- include "hello.labels" . | nindent 4 }}
 spec:
@@ -22,7 +22,23 @@ spec:
       # token to steal out of it.
       automountServiceAccountToken: false
       securityContext:
+        # Non-root twice over, on purpose. runAsNonRoot is the check — the
+        # kubelet refuses to start the pod if the image resolves to UID 0 —
+        # and runAsUser/runAsGroup are the statement: this is who it runs as,
+        # readable here rather than only discoverable by inspecting the image.
+        #
+        # 1654 is "app" in the .NET chiseled base image (APP_UID, and its
+        # /etc/passwd entry "app:x:1654:1654"), which is what the Dockerfile's
+        # USER selects. The two have to agree; if the base image ever moves,
+        # runAsNonRoot fails the pod closed rather than quietly running as
+        # somebody else.
         runAsNonRoot: true
+        runAsUser: 1654
+        runAsGroup: 1654
+        # No fsGroup: nothing here needs group ownership fixed up. The secret
+        # volume is read-only and world-readable, /tmp is an emptyDir the
+        # kubelet creates world-writable, and fsGroup would only add a
+        # recursive chown at every mount.
         seccompProfile:
           type: RuntimeDefault
       containers:
@@ -46,14 +62,12 @@ spec:
               value: {{ .Values.environment | quote }}
             - name: TEST_SECRET_NAME
               value: {{ .Values.secret.name | quote }}
-            {{- if .Values.secret.enabled }}
             # A path, not the value: the volume below is refreshed in place by
             # the kubelet, so a secret that syncs (or rotates) after the pod
             # started is picked up without a restart. An env var taken from
             # secretKeyRef would be frozen at exec time.
             - name: TEST_SECRET_FILE
-              value: /etc/onek8s/secret/{{ include "hello.secretKey" . }}
-            {{- end }}
+              value: /etc/onek8s/secret/{{ .Values.secret.name }}
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -67,11 +81,9 @@ spec:
             # wants somewhere to put its diagnostics socket.
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.secret.enabled }}
             - name: test-secret
               mountPath: /etc/onek8s/secret
               readOnly: true
-            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -87,7 +99,6 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
-        {{- if .Values.secret.enabled }}
         - name: test-secret
           secret:
             secretName: {{ include "hello.secretName" . }}
@@ -96,7 +107,6 @@ spec:
             # has not been created in this cloud's backend yet. Without it the
             # pod would sit in ContainerCreating with nothing to show for it.
             optional: true
-        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

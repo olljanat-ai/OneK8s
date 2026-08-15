@@ -13,9 +13,11 @@ wildcard:
 | `gcp` | GKE — spoke | https://gcp-hello.onek8s.lol |
 | `oci` | OKE — spoke | https://oci-hello.onek8s.lol |
 
-Nothing about it is cloud-specific except one string: the name of the secret it
-asks for, because Secrets Manager names are paths where Key Vault, Secret
-Manager and OCI Vault names are flat.
+Nothing in the application or its chart is cloud-specific. Exactly one string
+differs between the four — the key the secret is stored under, because Secrets
+Manager names are paths where Key Vault, Secret Manager and OCI Vault names are
+flat — and that string is resolved by the ApplicationSet and passed in, so the
+chart itself contains no `if aws` of any kind.
 
 ```
                     ┌── this repository ──────────────────────────────┐
@@ -88,7 +90,11 @@ EKS, GKE and OKE endpoints are whatever those services handed out, and Argo CD
 already knows them from the cluster Secret.
 
 Per-cluster values reach the chart as Helm parameters — `cloud`, `environment`,
-`tenant`, `ingress.host` (`<cloud>-hello.onek8s.lol`) and the welcome message.
+`tenant`, `ingress.host` (`<cloud>-hello.onek8s.lol`), `secret.name`,
+`secret.remoteKey` and the welcome message. Two of them are required and the
+chart fails to render without them: `ingress.host`, because an application
+nobody can open proves nothing, and `secret.remoteKey`, because guessing a key
+would mean guessing the cloud.
 
 ### The AppProject
 
@@ -135,8 +141,23 @@ slice of the shared backend, enforced in the cloud IAM plane
 Asking for another tenant's secret is not a mistake this chart can make
 quietly: the read is refused and the ExternalSecret goes `SecretSyncedError`.
 
-The prefix is spelled differently on AWS, which is the whole of the chart's
-cloud-specific surface (`hello.remoteKey` in `_helpers.tpl`):
+The prefix is spelled differently on AWS — and that difference is **not in the
+chart**. `apps/hello/chart` branches on nothing: it takes `secret.remoteKey` as
+a plain required value and asks the backend for exactly that. The ApplicationSet
+resolves it per cluster
+(`gitops/argocd/templates/applicationset-hello.yaml`), which is the right place
+for it, because which cloud a cluster is happens to be the platform's business
+and never the application's:
+
+```yaml
+- name: secret.remoteKey
+  value: '{{ if eq .values.cloud "aws" }}prototype/team-alpha/test{{ else }}team-alpha-test{{ end }}'
+```
+
+The chart is handed the finished key and never learns which cloud it landed on
+— `cloud` reaches it only as a string to print on the page and stamp on a
+label. That is the property this application exists to demonstrate, so it is
+worth keeping literally true.
 
 | Cloud | Backend | Remote key | Enforced by |
 |---|---|---|---|
@@ -240,6 +261,21 @@ The image is a two-stage build: the .NET 10 SDK compiles, and a **chiseled**
 ASP.NET runtime serves — Ubuntu with no shell, no package manager and a
 non-root default user. The pod adds the rest: read-only root filesystem, all
 capabilities dropped, no ServiceAccount token mounted.
+
+Nothing in it runs as root, and that is stated in three places rather than
+inherited from one:
+
+| Where | What it says |
+|---|---|
+| the base image | `User: "1654"` — its own default, before anything of ours |
+| `Dockerfile` | `USER $APP_UID`, which resolves to the same 1654 |
+| the pod's `securityContext` | `runAsUser: 1654`, `runAsGroup: 1654`, `runAsNonRoot: true` |
+
+The last one is both a statement and a check: `runAsNonRoot` makes the kubelet
+refuse to start the pod at all if the image ever resolves to UID 0, so a base
+image that changed underneath us fails the deploy instead of quietly handing
+the process root. There is no `fsGroup` — the secret volume is read-only and
+world-readable and `/tmp` is an emptyDir, so there is nothing to chown.
 
 ## Operating it
 

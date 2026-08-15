@@ -30,6 +30,19 @@ and says "not available" rather than hanging in `ContainerCreating` when the
 secret does not exist yet. `TEST_SECRET` is honoured as a fallback for running
 it outside Kubernetes.
 
+The chart is cloud-agnostic in the literal sense: it contains no conditional on
+`cloud`, which reaches it only as a string to print and to label objects with.
+It renders a Deployment, a Service, an Ingress and an ExternalSecret — all four,
+always — and requires two values it refuses to guess:
+
+| Value | Why it is required |
+|---|---|
+| `ingress.host` | an application nobody can open proves nothing |
+| `secret.remoteKey` | the key differs per backend, and guessing it means guessing the cloud |
+
+Whoever deploys knows both. The "hello" ApplicationSet in `gitops/argocd/` sets
+them per cluster.
+
 `GET /healthz` is the liveness and readiness probe.
 
 `GET /favicon.svg` is the page's icon: the Kubernetes heptagon with a "1" cut
