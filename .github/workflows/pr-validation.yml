@@ -66,10 +66,17 @@ jobs:
       - uses: actions/checkout@v4
       - uses: azure/setup-helm@v4
 
+      # Rendered twice, because the second render produces objects the first
+      # one does not: without a database in the foundation's outputs the
+      # db-hello ApplicationSet is deliberately absent, so only the SQL run
+      # exercises that template.
       - name: Argo CD configuration
         run: |
           helm lint gitops/argocd
           helm template platform-gitops gitops/argocd > /dev/null
+          helm template platform-gitops gitops/argocd \
+            --set sql.server=sql-onek8s-prototype-ab12.database.windows.net \
+            --set sql.database=appdb > /dev/null
 
       - name: Applications, as rendered on each cloud
         run: |
@@ -79,6 +86,19 @@ jobs:
               --set cloud="$cloud" \
               --set ingress.host="$cloud-hello.onek8s.lol" > /dev/null
           done
+
+      # db-hello is Azure-only, so there is one render rather than four — and
+      # both halves of sql are required, which is what these --set values are
+      # standing in for.
+      - name: The Azure SQL application
+        run: |
+          db_hello=(
+            --set ingress.host=azure-db-hello.onek8s.lol
+            --set sql.server=sql-onek8s-prototype-ab12.database.windows.net
+            --set sql.database=appdb
+          )
+          helm lint apps/db-hello/chart "${db_hello[@]}"
+          helm template db-hello-azure apps/db-hello/chart "${db_hello[@]}" > /dev/null
 
   tflint:
     name: tflint

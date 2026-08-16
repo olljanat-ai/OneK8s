@@ -1,0 +1,258 @@
+name: Bootstrap SQL
+
+# Gives a tenant's managed identity a user in the Azure SQL database, and
+# creates the table the db-hello application reads and writes:
+#
+#   Entra ID (tenant UAMI)  ──▶  dbo.<tenant user>  ──▶  db_datareader
+#                                                        db_datawriter
+#
+# This is the one part of the database that Terraform cannot own. Creating a
+# database user is T-SQL — a data-plane act, over TDS, against the database
+# itself — and there is no ARM resource for it on any provider. So it lives
+# where the platform's other data-plane seeding lives: a workflow, exactly like
+# the tenant test secret the Renew Certificate workflow writes into every
+# cloud's vault. foundations/azure builds the server and an empty database and
+# stops there (foundations/azure/sql.tf).
+#
+# It is safe to re-run: every step is guarded, so a second run over an
+# already-bootstrapped database changes nothing and still prints what it found.
+#
+# What it needs to work:
+#
+#   * the Azure foundation deployed with enable_sql = true, so there is a
+#     server, a database, and an Entra administrator,
+#   * the tenants stack applied, so the tenant has a managed identity,
+#   * the deploying service principal to BE that Entra administrator, which is
+#     what sql_admin_object_id defaults to.
+#
+# No Microsoft Graph permission is required anywhere, deliberately. The user is
+# created `WITH SID = ..., TYPE = E` — the identity's client ID as binary —
+# rather than `FROM EXTERNAL PROVIDER`, which would make the SQL server look
+# the name up in the directory and therefore need Directory Readers (or the
+# equivalent Graph application permissions) on the server's own identity. The
+# platform holds no directory permissions, and this keeps it that way.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment whose Azure foundation and tenants to bootstrap"
+        required: true
+        default: "prototype"
+        type: choice
+        options: [prototype, dev, staging, prod]
+      tenant:
+        description: "Tenant whose identity gets a database user; must match platform_apps.tenant in gitops/envs/<env>.tfvars"
+        required: false
+        default: "team-alpha"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    name: ${{ inputs.tenant }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    # Same GitHub environment as the Azure foundation deploys, so the
+    # credentials of the Entra administrator are configured in one place.
+    environment: azure-${{ inputs.environment }}
+    concurrency:
+      # One run at a time per database: two concurrent runs would race over
+      # the same firewall rule and remove each other's.
+      group: bootstrap-sql-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_ENV: ${{ inputs.environment }}
+      TENANT: ${{ inputs.tenant }}
+      # Reads both stacks' state out of the Azure Storage state home, and
+      # authenticates the az CLI. This principal is the server's Entra
+      # administrator (foundations/azure/sql.tf), which is what lets it create
+      # a user for somebody else's identity.
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      # Firewall rule opened for this run and removed again at the end. The
+      # server carries no standing exception for CI.
+      FIREWALL_RULE: bootstrap-sql-${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required configuration
+        run: |
+          missing=""
+          [ -n "$ARM_CLIENT_ID" ] || missing="$missing AZURE_CLIENT_ID"
+          [ -n "$ARM_TENANT_ID" ] || missing="$missing AZURE_TENANT_ID"
+          [ -n "$ARM_SUBSCRIPTION_ID" ] || missing="$missing AZURE_SUBSCRIPTION_ID"
+          [ -n "$ARM_CLIENT_SECRET" ] || missing="$missing AZURE_CLIENT_SECRET"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository variables/secrets:$missing" >&2
+            echo "See docs/getting-started.md, 'Configure GitHub credentials'." >&2
+            exit 1
+          fi
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.15.8"
+
+      # The database is addressed by convention, not by configuration:
+      # whichever server this environment's Azure foundation built is the one
+      # the applications connect to, so it is the one to bootstrap.
+      - name: Resolve the database from the foundation state
+        id: db
+        working-directory: foundations/azure
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="backend/${TF_ENV}.hcl"
+          server="$(terraform output -raw sql_server_fqdn 2>/dev/null || true)"
+          database="$(terraform output -raw sql_database_name 2>/dev/null || true)"
+          group="$(terraform output -raw resource_group_name)"
+          if [ -z "$server" ] || [ "$server" = "null" ] || [ -z "$database" ]; then
+            echo "::error::foundations/azure has no SQL server for ${TF_ENV}. Deploy it with enable_sql = true." >&2
+            exit 1
+          fi
+          {
+            echo "server=$server"
+            echo "database=$database"
+            echo "name=${server%%.*}"
+            echo "group=$group"
+          } >> "$GITHUB_OUTPUT"
+          echo "Database: $database on $server"
+
+      # The identity is read from the tenants stack rather than guessed from
+      # the naming convention: whatever that stack says is the tenant's
+      # identity is the one whose token the pod will present.
+      - name: Resolve the tenant identity from the tenants state
+        id: identity
+        working-directory: tenants
+        run: |
+          set -euo pipefail
+          terraform init -input=false -backend-config="backend/${TF_ENV}.hcl"
+          # The tenants output is keyed by the tfvars key ("azure-team-alpha"),
+          # which is arbitrary, so the tenant is matched on what it actually
+          # is: an azure tenant whose namespace has this name.
+          client_id="$(terraform output -json tenants \
+            | jq -r --arg t "$TENANT" '[.[] | select(.cloud == "azure" and .namespace == $t)][0].identity // empty')"
+          if [ -z "$client_id" ]; then
+            echo "::error::No azure tenant named ${TENANT} in the ${TF_ENV} tenants state. Add it to tenants/envs/${TF_ENV}.tfvars and apply." >&2
+            exit 1
+          fi
+          echo "client_id=$client_id" >> "$GITHUB_OUTPUT"
+          echo "Tenant identity: $client_id"
+
+      - name: Log in to Azure
+        run: |
+          set -euo pipefail
+          az login --service-principal \
+            --username "$ARM_CLIENT_ID" \
+            --password "$ARM_CLIENT_SECRET" \
+            --tenant "$ARM_TENANT_ID" \
+            --output none
+          az account set --subscription "$ARM_SUBSCRIPTION_ID"
+
+      # The database user is named after the managed identity, which is what
+      # `CREATE USER ... FROM EXTERNAL PROVIDER` would have called it — so the
+      # page's "Database user" line names something recognisable in the portal.
+      # The lookup is an ARM one; the directory is never read.
+      - name: Resolve the identity's name
+        id: uami
+        env:
+          CLIENT_ID: ${{ steps.identity.outputs.client_id }}
+          GROUP: ${{ steps.db.outputs.group }}
+        run: |
+          set -euo pipefail
+          name="$(az identity list --resource-group "$GROUP" \
+            --query "[?clientId=='$CLIENT_ID'].name | [0]" -o tsv)"
+          if [ -z "$name" ]; then
+            echo "::error::No managed identity with client ID $CLIENT_ID in $GROUP." >&2
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "Database user to create: $name"
+
+      # The cluster reaches the server over the AKS subnet's service endpoint;
+      # a GitHub runner is not on that subnet, so it opens a rule for its own
+      # address and the "Close" step below removes it whatever happens.
+      - name: Open the firewall for this runner
+        env:
+          SERVER: ${{ steps.db.outputs.name }}
+          GROUP: ${{ steps.db.outputs.group }}
+        run: |
+          set -euo pipefail
+          ip="$(curl -fsS https://api.ipify.org)"
+          [ -n "$ip" ] || { echo "::error::Could not determine the runner's public address." >&2; exit 1; }
+          az sql server firewall-rule create \
+            --resource-group "$GROUP" --server "$SERVER" \
+            --name "$FIREWALL_RULE" --start-ip-address "$ip" --end-ip-address "$ip" \
+            --output none
+          echo "Opened $FIREWALL_RULE for $ip"
+
+      # msodbcsql18 + pyodbc rather than sqlcmd: the go sqlcmd, which is the
+      # only variant that speaks service-principal authentication, is not in
+      # the Microsoft apt feed for the runner's Ubuntu release. pyodbc takes
+      # the access token directly (SQL_COPT_SS_ACCESS_TOKEN, 1256), which is
+      # the same mechanism the application uses and one fewer credential shape
+      # to pass around.
+      - name: Install the SQL client
+        run: |
+          set -euo pipefail
+          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
+          curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" \
+            | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
+          sudo apt-get update -qq
+          sudo ACCEPT_EULA=Y apt-get install -y -qq msodbcsql18
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet --disable-pip-version-check pyodbc
+
+      - name: Create the database user and the schema
+        env:
+          SQL_SERVER: ${{ steps.db.outputs.server }}
+          SQL_DATABASE: ${{ steps.db.outputs.database }}
+          DB_USER: ${{ steps.uami.outputs.name }}
+          CLIENT_ID: ${{ steps.identity.outputs.client_id }}
+        run: |
+          set -euo pipefail
+          # The same audience the application asks for, from the CLI session
+          # of the server's Entra administrator.
+          SQL_ACCESS_TOKEN="$(az account get-access-token \
+            --resource https://database.windows.net/ --query accessToken -o tsv)" \
+            .venv/bin/python .github/scripts/bootstrap_sql.py | tee /tmp/bootstrap.out
+
+      - name: Close the firewall
+        if: always()
+        env:
+          SERVER: ${{ steps.db.outputs.name }}
+          GROUP: ${{ steps.db.outputs.group }}
+        run: |
+          set -euo pipefail
+          if [ -n "${SERVER:-}" ]; then
+            az sql server firewall-rule delete \
+              --resource-group "$GROUP" --server "$SERVER" \
+              --name "$FIREWALL_RULE" --output none 2>/dev/null || true
+            echo "Removed $FIREWALL_RULE"
+          fi
+
+      - name: Summary
+        if: always()
+        env:
+          SQL_SERVER: ${{ steps.db.outputs.server }}
+          SQL_DATABASE: ${{ steps.db.outputs.database }}
+          DB_USER: ${{ steps.uami.outputs.name }}
+        run: |
+          {
+            echo "### Bootstrap SQL — ${TENANT} (${TF_ENV})"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Server | \`${SQL_SERVER:-unresolved}\` |"
+            echo "| Database | \`${SQL_DATABASE:-unresolved}\` |"
+            echo "| Database user | \`${DB_USER:-unresolved}\` |"
+            echo
+            if [ -f /tmp/bootstrap.out ]; then
+              echo '```'
+              cat /tmp/bootstrap.out
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

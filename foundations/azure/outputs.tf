@@ -36,6 +36,30 @@ output "key_vault_uri" {
   value       = azurerm_key_vault.this.vault_uri
 }
 
+# --- Azure SQL ----------------------------------------------------------------
+# All null when enable_sql is false, which is how the gitops stack decides
+# whether to deploy the db-hello application at all: no database, no
+# application, and nothing to keep in sync between the two.
+output "sql_server_name" {
+  description = "Name of the Entra-only SQL logical server (null when SQL is disabled)."
+  value       = one(azurerm_mssql_server.this[*].name)
+}
+
+output "sql_server_fqdn" {
+  description = "Host the applications connect to, e.g. sql-onek8s-prototype-ab12.database.windows.net (null when SQL is disabled)."
+  value       = local.sql_server_fqdn
+}
+
+output "sql_database_name" {
+  description = "Database on that server (null when SQL is disabled). It holds no user for any tenant until the Bootstrap SQL workflow creates one."
+  value       = local.sql_enabled ? var.sql_database_name : null
+}
+
+output "sql_admin_object_id" {
+  description = "Entra principal that administers the SQL server — the only identity that can create database users for tenants (null when SQL is disabled)."
+  value       = local.sql_enabled ? local.sql_admin_object_id : null
+}
+
 output "argocd_url" {
   description = "Public URL of the Argo CD UI (null when the extension is disabled)."
   value       = var.enable_argocd ? local.argocd_url : null

@@ -94,6 +94,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
+| Application database | **Azure SQL** on the free offer, Entra-only auth (`sql.tf`) | — | — | — |
 
 ## Ingress
 
@@ -478,6 +479,24 @@ spec:
   source per backend type, count-gated on `var.cloud`.
 - Azure Managed Namespaces are a preview API surface, addressed via `azapi`
   by design (`managed_namespace_api_version` variable).
+- The Azure SQL database is the platform's one **cloud-specific** capability:
+  there is no equivalent on the other three foundations, and the application
+  that uses it (`apps/db-hello`) is deployed to the hub only. Passwordless
+  database access is what forces that — the token comes from Entra ID and the
+  server validates it, so an EKS or GKE workload could only reach it by
+  federating a second identity into Entra, which buys a demo nothing the
+  platform needs. The database is also created with `azapi` rather than
+  azurerm, because the free offer's two properties (`useFreeLimit`,
+  `freeLimitExhaustionBehavior`) are not in the pinned provider version.
+- Granting a tenant access to that database is **not** in Terraform. A
+  contained database user is `CREATE USER`, T-SQL executed inside the
+  database, and no provider expresses it without opening a database
+  connection at plan time; so it is the **Bootstrap SQL** workflow, the same
+  place and the same reasoning as the tenant test secret. The cost is that
+  deploying the foundation is not sufficient to make the page work — somebody
+  runs the workflow once per tenant, and until they do the application says
+  which step is missing rather than failing obscurely
+  ([db-hello-app.md](db-hello-app.md)).
 - Distributing the wildcard certificate copies a private key out of Key Vault
   into three more backends, so it exists in four places and a rotation is only
   complete once every copy is refreshed — nothing reconciles them, and a

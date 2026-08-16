@@ -1,0 +1,240 @@
+# The db-hello application, and the database under it
+
+The platform's second workload, and the one that carries **no credential at
+all**. `hello` proves that External Secrets handed a pod a value out of the
+cloud's secret backend; `db-hello` removes the value: it reads and writes an
+**Azure SQL Database** as the tenant's own managed identity, with a token it
+mints per request from the ServiceAccount token Kubernetes projects into the
+pod.
+
+| Cloud | Cluster | URL |
+|---|---|---|
+| `azure` | AKS — the Argo CD hub | https://azure-db-hello.onek8s.lol |
+
+One cloud, and that is the point of it. Every other piece of the platform is
+written so the cloud is a parameter; this one is the honest exception — its
+database is an Azure resource and its identity is an Entra one, so the
+application says `azure` instead of pretending. What did *not* change is
+everything around it: the same ingress, the same wildcard certificate, the same
+tenant namespace, the same ServiceAccount, the same Argo CD.
+
+> The host follows `platform_apps.domain` in `gitops/envs/<env>.tfvars`, which
+> is `onek8s.lol` — the domain the platform's wildcard certificate and DNS zone
+> are for. Publishing under a different domain (`onek8s.io`, say) means a
+> wildcard and a zone for that domain first; changing `domain` alone would
+> leave the host without a certificate.
+
+```
+   pod  (ServiceAccount: workload, label azure.workload.identity/use)
+    │
+    │  projected token, audience api://AzureADTokenExchange
+    ▼
+   Entra ID  ── federated credential on the tenant's user-assigned identity:
+    │            system:serviceaccount:team-alpha:workload
+    │  access token for https://database.windows.net/
+    ▼
+   Azure SQL ── database user for that identity: db_datareader + db_datawriter
+```
+
+Nowhere in that chain is there a password, a connection string in a `Secret`,
+or a value to rotate. The chart passes the application two strings — a host
+name and a database name — and neither of them authorizes anybody.
+
+## Who owns what
+
+Three owners, and the split is not arbitrary: each thing lives in the only
+place that *can* own it.
+
+| Piece | Owner | Why not somewhere else |
+|---|---|---|
+| Logical server, database, network rules | `foundations/azure/sql.tf` | ARM resources, and the cluster's own VNet is here |
+| The tenant's **database user** and the table | **Bootstrap SQL** workflow | T-SQL over TDS — there is no ARM resource for a database user, on any provider |
+| The Application, its host and its image | `gitops/argocd/` | a commit, like every other workload |
+
+The middle row is the interesting one. A contained database user is created by
+`CREATE USER`, executed *inside* the database — Terraform cannot express it
+without a third-party provider that would need network access to the database
+at plan time. So it goes where this platform already puts data-plane seeding:
+a workflow, exactly like the tenant test secret that the Renew Certificate
+workflow writes into all four clouds' vaults.
+
+## The free offer
+
+`foundations/azure/sql.tf` creates the database with **azapi**, not azurerm:
+the free offer is two ARM properties (`useFreeLimit`,
+`freeLimitExhaustionBehavior`) that the pinned azurerm provider does not carry,
+and azapi is already in this stack for the AKS managed namespace.
+
+| Setting | Value | What it buys |
+|---|---|---|
+| `useFreeLimit` | `true` | 100,000 vCore seconds + 32 GB a month, free, for the life of the subscription |
+| `freeLimitExhaustionBehavior` | `AutoPause` | when the month's allowance runs out the database sleeps instead of billing |
+| sku | `GP_S_Gen5`, 2 vCores | serverless General Purpose — the only tier the offer exists on (4 vCores max) |
+| `autoPauseDelay` | 60 minutes | an idle lab database stops spending the allowance by itself |
+| `maxSizeBytes` | 32 GB | the free ceiling |
+
+Up to **10** free databases per subscription, and the first one fixes the
+region for the rest of them. `BillOverUsage` is the other exhaustion behaviour
+and it does what it says; `AutoPause` is the default here because an
+unattended lab should never be able to produce a bill.
+
+Auto-pause is visible from the browser, and deliberately not hidden: the first
+request after an idle hour waits for the database to wake, so the application
+retries three times and then renders **“resuming”** rather than an error. The
+`/healthz` probe never touches the database, so a sleeping database cannot
+restart the pod or take it out of the Service.
+
+## No password exists to leak
+
+The logical server is created in **Microsoft Entra-only** authentication mode
+(`azuread_authentication_only = true`). With that set, the provider refuses an
+`administrator_login`/`administrator_login_password` pair — there is no SQL
+login on this server at all, so there is nothing to store, rotate or forget.
+
+The server's Entra administrator defaults to **the identity running the
+deploy**, which is what makes the bootstrap workflow (the same service
+principal) able to create a user for somebody else's identity. Point
+`sql_admin_object_id` at a break-glass Entra group instead if you would rather
+CI were not it; nothing in this stack writes to the directory either way, the
+same rule the Argo CD SSO app registration follows.
+
+## How the cluster reaches it
+
+```
+AKS subnet (snet-aks)  ──Microsoft.Sql service endpoint──▶  Azure SQL
+        allowed by name in a virtual network rule, not by IP address
+```
+
+The subnet carries the `Microsoft.Sql` service endpoint and is allowed on the
+server as a VNet rule. Pods on Azure CNI overlay SNAT to their node's address,
+which is in that subnet, so nothing depends on the pod CIDR and no node address
+is written down anywhere.
+
+There are **no firewall rules by default**, so the public endpoint answers
+nobody else. `sql_firewall_rules` adds standing exceptions (an office range, a
+jump host); the bootstrap workflow needs none, because it opens a rule for its
+own runner address and removes it again in the same run, whatever happens.
+
+## The bootstrap workflow
+
+```bash
+gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
+```
+
+It resolves everything from state rather than taking it as configuration — the
+server and database from `foundations/azure`, the tenant's identity from the
+`tenants` stack — then creates the user, grants the two roles and creates
+`dbo.visits`. Every step is guarded, so running it again is a no-op that still
+prints what it found. Run it once per tenant per environment, and again after a
+foundation rebuild (the server name carries a random suffix, so a rebuilt
+foundation is a new, empty database).
+
+```sql
+-- .github/scripts/bootstrap_sql.py, in essence
+CREATE USER [id-tenant-team-alpha-prototype] WITH SID = 0x…, TYPE = E;
+ALTER ROLE db_datareader ADD MEMBER [id-tenant-team-alpha-prototype];
+ALTER ROLE db_datawriter ADD MEMBER [id-tenant-team-alpha-prototype];
+```
+
+`WITH SID`, **not** `FROM EXTERNAL PROVIDER`, and that choice is the reason the
+platform still holds no directory permissions. `FROM EXTERNAL PROVIDER` makes
+the SQL server look the principal up in Microsoft Entra ID, which requires the
+*server's own identity* to hold Directory Readers (or `User.Read.All` +
+`GroupMember.Read.All` + `Application.Read.All` on Graph). Supplying the SID
+directly skips the lookup entirely: a managed identity's SID is its client ID
+in binary, which is exactly what `CAST(… AS uniqueidentifier)` produces.
+
+The two roles are the whole of the application's authorization. It may read and
+write rows; it may not create a table, grant anything, or reach another
+database. That is why the schema is created by this workflow and not by the
+application on first run.
+
+## What the page shows
+
+```
+Cloud              azure
+Environment        prototype
+Namespace          team-alpha
+Pod                db-hello-7d4f9c8b6d-x2k9p
+
+Azure SQL, without a password
+Server             sql-onek8s-prototype-ab12.database.windows.net
+Database           appdb
+Workload identity  8f3c…-…-…   (AZURE_CLIENT_ID, injected by the webhook)
+Signed in as       id-tenant-team-alpha-prototype
+Database user      id-tenant-team-alpha-prototype
+Database roles     db_datareader, db_datawriter
+
+Last 10 page views, read back out of the database
+```
+
+`Signed in as` is the interesting line: it is `SUSER_SNAME()`, the database's
+own answer to “who is this connection?”, and it names the tenant's managed
+identity. Every page view inserts a row and reads the last ten back, so the
+table is both the demonstration and the only state the application has.
+
+Three states are ordinary rather than broken, and each names its own fix:
+
+| Page says | Fix |
+|---|---|
+| `resuming` | nothing — the free-tier database is waking up |
+| `no database user` | run **Bootstrap SQL** for this tenant |
+| `no schema` | same workflow; it creates `dbo.visits` |
+| `no token` | the pod is missing the workload-identity label or the ServiceAccount annotation — check the tenants stack applied |
+
+## Operating it
+
+```bash
+# The Application, on the hub
+kubectl -n argocd get applicationset db-hello
+kubectl -n argocd get application db-hello-azure
+
+# The pod, and whether the webhook mutated it
+kubectl -n team-alpha get pods -l app.kubernetes.io/name=db-hello
+kubectl -n team-alpha get pod -l app.kubernetes.io/name=db-hello \
+  -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="AZURE_CLIENT_ID")].value}{"\n"}'
+
+# The database, from the foundation's state
+cd foundations/azure
+terraform output -raw sql_server_fqdn
+terraform output -raw sql_database_name
+
+# Is it awake, and is it actually on the free offer? (a paused database
+# reports status "Paused", and wakes on the next page view)
+az sql db show \
+  --resource-group "$(terraform output -raw resource_group_name)" \
+  --server "$(terraform output -raw sql_server_name)" \
+  --name "$(terraform output -raw sql_database_name)" \
+  --query "{status:status, sku:currentServiceObjectiveName, freeLimit:useFreeLimit}" -o table
+```
+
+DNS is out of band here as everywhere else: create an A record for
+`azure-db-hello.onek8s.lol` pointing at the AKS cluster's Traefik Service. TLS
+needs nothing — the Ingress carries no certificate and Traefik's default
+TLSStore serves the platform wildcard.
+
+## Known gaps
+
+- **The database is reached over its public endpoint.** A VNet rule means only
+  the AKS subnet may use it, which is a real boundary and not a cosmetic one,
+  but a **private endpoint** is the stronger answer. It needs private DNS the
+  platform does not run yet, and it would put the database out of reach of the
+  bootstrap workflow — which would then have to run somewhere inside the VNet.
+- **One database, shared by tenants.** The free offer allows ten, but this is
+  one database with one table; a second tenant would get its own user in the
+  *same* database and could read the first one's rows. Isolation here is the
+  Entra identity and the roles, not the schema. Per-tenant databases, or
+  row-level security keyed on `DATABASE_PRINCIPAL_ID()`, is the next step and
+  is deliberately not taken in a lab that has one application.
+- **The bootstrap is a separate act.** Deploying the foundation does not make
+  the page work; somebody has to run the workflow once per tenant. That is the
+  price of not giving Terraform a database connection, and it is visible rather
+  than silent — the page says which step is missing.
+- **The image tag is `latest`**, exactly as for `hello`: the build workflow
+  pushes an immutable `sha-<short>` alongside it, but nothing writes that tag
+  back into `values.yaml`. Pin `image.tag` for a reproducible deploy.
+- **`AutoPause` costs the first visitor a wait.** Roughly a minute, once an
+  hour of idleness. `sql_auto_pause_delay_in_minutes = -1` turns it off and
+  spends the free allowance continuously instead — 100,000 vCore seconds is
+  about 13 days of a single always-on 0.5-vCore database, so an environment
+  that never pauses will run out before the month does.

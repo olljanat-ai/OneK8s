@@ -387,6 +387,31 @@ Terraform:
 `platform_apps = { enabled = false }` registers spokes without deploying
 anything. Full walkthrough: [hello-app.md](hello-app.md).
 
+### The Azure SQL example
+
+The same run also deploys **db-hello** to the hub — and only to the hub —
+whenever the Azure foundation was applied with `enable_sql = true`. It reads
+and writes the free-offer Azure SQL database as the tenant's managed identity,
+so it carries no secret at all. Its coordinates are not configured anywhere:
+the gitops stack takes `sql_server_fqdn` and `sql_database_name` out of the
+foundation's outputs and passes them down, so a rebuilt foundation reaches the
+application on the next apply.
+
+One step is needed before the page works, and it is not Terraform — the
+tenant's identity has no user in the database until somebody creates one:
+
+```bash
+gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
+```
+
+That creates the database user, grants it `db_datareader` + `db_datawriter`,
+and creates the table the app writes to. It is safe to re-run, and it must be
+re-run after a foundation rebuild (the server name carries a random suffix, so
+a new foundation is a new, empty database). Until then the page says *"no
+database user"* rather than failing. Plus the usual two: the image public on
+GHCR, and an A record for `azure-db-hello.onek8s.lol`. Details, the free
+offer's limits and the known gaps: [db-hello-app.md](db-hello-app.md).
+
 ## 6. Give the tenant a secret and consume it
 
 ```bash
