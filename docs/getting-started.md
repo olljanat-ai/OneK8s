@@ -404,10 +404,12 @@ tenant's identity has no user in the database until somebody creates one:
 gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
 ```
 
-That creates the database user, grants it `db_datareader` + `db_datawriter`,
-and creates the table the app writes to. It is safe to re-run, and it must be
-re-run after a foundation rebuild (the server name carries a random suffix, so
-a new foundation is a new, empty database). Until then the page says *"no
+That applies the application's EF Core migrations — the schema is code-first,
+so the model in `apps/db-hello/src/Data` is where the table is defined — and
+creates the database user with `db_datareader` + `db_datawriter`. It is safe to
+re-run, it is how a later schema change is deployed, and it must be re-run
+after a foundation rebuild (the server name carries a random suffix, so a new
+foundation is a new, empty database). Until then the page says *"no
 database user"* rather than failing. Plus the usual two: the image public on
 GHCR, and an A record for `azure-db-hello.onek8s.lol`. Details, the free
 offer's limits and the known gaps: [db-hello-app.md](db-hello-app.md).

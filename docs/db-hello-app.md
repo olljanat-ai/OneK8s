@@ -48,15 +48,53 @@ place that *can* own it.
 | Piece | Owner | Why not somewhere else |
 |---|---|---|
 | Logical server, database, network rules | `foundations/azure/sql.tf` | ARM resources, and the cluster's own VNet is here |
-| The tenant's **database user** and the table | **Bootstrap SQL** workflow | T-SQL over TDS — there is no ARM resource for a database user, on any provider |
+| The **tables** | the EF Core model in `apps/db-hello/src/Data` | code-first: the schema is a consequence of the model, versioned with the code that uses it |
+| Applying the migrations, and the tenant's **database user** | **Bootstrap SQL** workflow | data-plane acts over TDS — neither a table nor a database user has an ARM representation, on any provider |
 | The Application, its host and its image | `gitops/argocd/` | a commit, like every other workload |
 
-The middle row is the interesting one. A contained database user is created by
-`CREATE USER`, executed *inside* the database — Terraform cannot express it
-without a third-party provider that would need network access to the database
-at plan time. So it goes where this platform already puts data-plane seeding:
-a workflow, exactly like the tenant test secret that the Renew Certificate
-workflow writes into all four clouds' vaults.
+The two middle rows are the interesting ones. There is no `CREATE TABLE`
+anywhere in this repository: `Visit.cs` is the table, `dotnet ef migrations
+add` turns a change to it into a migration, and the workflow applies that
+migration with `dotnet ef database update`. A contained database user is the
+other half — `CREATE USER`, executed *inside* the database, which Terraform
+cannot express without a third-party provider that would need a database
+connection at plan time. Both go where this platform already puts data-plane
+work: a workflow, exactly like the tenant test secret that the Renew
+Certificate workflow writes into all four clouds' vaults.
+
+## Code-first, and why the application never migrates
+
+```
+apps/db-hello/src/
+├── Data/Visit.cs             the table
+├── Data/VisitsContext.cs     the model, and how to connect
+├── Data/EntraTokenInterceptor.cs   where the password would have been
+├── Data/VisitsContextFactory.cs    how `dotnet ef` builds a context
+└── Migrations/               generated, committed, applied by the workflow
+```
+
+The application holds `db_datareader` and `db_datawriter` and nothing else, so
+it *could not* change the schema even if it tried — which is why migrations are
+applied by the workflow, as the deploy identity, and never on pod start-up. A
+`Migrate()` call at boot would mean handing the pod DDL rights permanently to
+save one manual step, and permanent DDL rights are exactly what a compromised
+workload would want.
+
+```bash
+# after changing the model
+cd apps/db-hello/src
+dotnet ef migrations add AddSomething   # generates, you review, you commit
+```
+
+PR validation runs `dotnet ef migrations has-pending-model-changes`, which
+contacts no database and fails the build when the model and the migrations have
+drifted apart — so "changed the model, forgot the migration" is caught at
+review time rather than as a deployment that quietly does nothing.
+
+The one query written in SQL is the one with no model behind it: `SUSER_SNAME()`
+and the role membership, which are the *server's* view of the connection. It
+maps to a keyless type (`DatabaseIdentity`) that owns no table and produces no
+migration.
 
 ## The free offer
 
@@ -79,8 +117,10 @@ and it does what it says; `AutoPause` is the default here because an
 unattended lab should never be able to produce a bill.
 
 Auto-pause is visible from the browser, and deliberately not hidden: the first
-request after an idle hour waits for the database to wake, so the application
-retries three times and then renders **“resuming”** rather than an error. The
+request after an idle hour waits for the database to wake. EF Core's own
+retrying execution strategy (`EnableRetryOnFailure`) covers that — 40613 is on
+its list of Azure SQL transient errors — and if the wake takes longer than the
+retries allow, the page says **“resuming”** rather than showing an error. The
 `/healthz` probe never touches the database, so a sleeping database cannot
 restart the pod or take it out of the Service.
 
@@ -123,11 +163,24 @@ gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
 
 It resolves everything from state rather than taking it as configuration — the
 server and database from `foundations/azure`, the tenant's identity from the
-`tenants` stack — then creates the user, grants the two roles and creates
-`dbo.visits`. Every step is guarded, so running it again is a no-op that still
-prints what it found. Run it once per tenant per environment, and again after a
-foundation rebuild (the server name carries a random suffix, so a rebuilt
-foundation is a new, empty database).
+`tenants` stack — then does the two things an empty database needs:
+
+```
+dotnet ef database update          the schema, from the committed migrations
+CREATE USER … / ALTER ROLE …       the access, for this tenant's identity
+```
+
+Every step is guarded, so running it again is a no-op that still prints what it
+found — and that is also how a *later* schema change reaches the database: add
+a migration, merge it, re-run the workflow. Run it once per tenant per
+environment, and again after a foundation rebuild (the server name carries a
+random suffix, so a rebuilt foundation is a new, empty database).
+
+The migration step authenticates exactly as the pod does. `dotnet ef` builds
+the context through the same `VisitsContext.Configure`, so the same interceptor
+puts an Entra token on the connection — from the deploy service principal in
+CI, from a federated ServiceAccount token in the pod. One code path, two
+credentials, and no connection string with a password in either.
 
 ```sql
 -- .github/scripts/bootstrap_sql.py, in essence
@@ -146,8 +199,8 @@ in binary, which is exactly what `CAST(… AS uniqueidentifier)` produces.
 
 The two roles are the whole of the application's authorization. It may read and
 write rows; it may not create a table, grant anything, or reach another
-database. That is why the schema is created by this workflow and not by the
-application on first run.
+database. That is why the migrations are applied by this workflow and not by
+the application on first run.
 
 ## What the page shows
 
@@ -165,7 +218,7 @@ Signed in as       id-tenant-team-alpha-prototype
 Database user      id-tenant-team-alpha-prototype
 Database roles     db_datareader, db_datawriter
 
-Last 10 page views, read back out of the database
+Last 10 page views, read back through Entity Framework
 ```
 
 `Signed in as` is the interesting line: it is `SUSER_SNAME()`, the database's
@@ -179,7 +232,7 @@ Three states are ordinary rather than broken, and each names its own fix:
 |---|---|
 | `resuming` | nothing — the free-tier database is waking up |
 | `no database user` | run **Bootstrap SQL** for this tenant |
-| `no schema` | same workflow; it creates `dbo.visits` |
+| `no schema` | same workflow; it applies the migration that creates `visits` |
 | `no token` | the pod is missing the workload-identity label or the ServiceAccount annotation — check the tenants stack applied |
 
 ## Operating it

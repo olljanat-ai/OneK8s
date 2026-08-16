@@ -1,18 +1,27 @@
 name: Bootstrap SQL
 
-# Gives a tenant's managed identity a user in the Azure SQL database, and
-# creates the table the db-hello application reads and writes:
+# Makes an empty database usable by a tenant, in two acts:
 #
-#   Entra ID (tenant UAMI)  ──▶  dbo.<tenant user>  ──▶  db_datareader
-#                                                        db_datawriter
+#   1. the schema, applied from apps/db-hello's EF Core migrations
+#      (`dotnet ef database update`) — code-first, so the model in
+#      apps/db-hello/src/Data is the only description of the tables anywhere,
+#   2. the access, granted in T-SQL: a contained user for the tenant's managed
+#      identity, with db_datareader and db_datawriter.
 #
-# This is the one part of the database that Terraform cannot own. Creating a
-# database user is T-SQL — a data-plane act, over TDS, against the database
-# itself — and there is no ARM resource for it on any provider. So it lives
-# where the platform's other data-plane seeding lives: a workflow, exactly like
-# the tenant test secret the Renew Certificate workflow writes into every
-# cloud's vault. foundations/azure builds the server and an empty database and
-# stops there (foundations/azure/sql.tf).
+#   Entra ID (tenant UAMI)  ──▶  <tenant user>  ──▶  db_datareader
+#                                                    db_datawriter
+#
+# Neither act can be Terraform. Both are data-plane, over TDS, against the
+# database itself, and there is no ARM resource for a table or a database user
+# on any provider. So they live where the platform's other data-plane seeding
+# lives: a workflow, exactly like the tenant test secret the Renew Certificate
+# workflow writes into every cloud's vault. foundations/azure builds the server
+# and an empty database and stops there (foundations/azure/sql.tf).
+#
+# The application never migrates itself. It runs with db_datareader and
+# db_datawriter and could not change the schema if it tried, which is the
+# property worth keeping — so migrations are applied here, by the deploy
+# identity, and not on pod start-up.
 #
 # It is safe to re-run: every step is guarded, so a second run over an
 # already-bootstrapped database changes nothing and still prints what it found.
@@ -76,6 +85,8 @@ jobs:
       # Firewall rule opened for this run and removed again at the end. The
       # server carries no standing exception for CI.
       FIREWALL_RULE: bootstrap-sql-${{ github.run_id }}
+      # Must match the EF Core packages in apps/db-hello/src/DbHello.csproj.
+      EF_VERSION: "10.0.11"
     steps:
       - uses: actions/checkout@v4
 
@@ -206,7 +217,38 @@ jobs:
           python3 -m venv .venv
           .venv/bin/pip install --quiet --disable-pip-version-check pyodbc
 
-      - name: Create the database user and the schema
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # The schema, from the model. `database update` compares the migrations
+      # in apps/db-hello/src/Migrations with the __EFMigrationsHistory table
+      # and applies what is missing, so this is both the first deployment and
+      # every later schema change — and a re-run with nothing to apply is a
+      # no-op.
+      #
+      # It authenticates exactly as the application does: the design-time
+      # factory goes through VisitsContext.Configure, whose interceptor puts an
+      # Entra token on the connection. Here the token comes from the AZURE_*
+      # variables below (the deploy service principal, and the server's Entra
+      # administrator); in the pod it comes from a federated ServiceAccount
+      # token. One code path, two credentials.
+      - name: Apply the EF Core migrations
+        env:
+          SQL_SERVER: ${{ steps.db.outputs.server }}
+          SQL_DATABASE: ${{ steps.db.outputs.database }}
+          # DefaultAzureCredential reads these; ARM_* is Terraform's spelling
+          # of the same service principal.
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          dotnet tool install dotnet-ef --version "$EF_VERSION" --tool-path .ef-tools
+          ./.ef-tools/dotnet-ef database update \
+            --project apps/db-hello/src --no-color | tee /tmp/migrations.out
+
+      - name: Create the database user
         env:
           SQL_SERVER: ${{ steps.db.outputs.server }}
           SQL_DATABASE: ${{ steps.db.outputs.database }}
@@ -250,9 +292,11 @@ jobs:
             echo "| Database | \`${SQL_DATABASE:-unresolved}\` |"
             echo "| Database user | \`${DB_USER:-unresolved}\` |"
             echo
-            if [ -f /tmp/bootstrap.out ]; then
-              echo '```'
-              cat /tmp/bootstrap.out
-              echo '```'
-            fi
+            for out in /tmp/migrations.out /tmp/bootstrap.out; do
+              if [ -f "$out" ]; then
+                echo '```'
+                cat "$out"
+                echo '```'
+              fi
+            done
           } >> "$GITHUB_STEP_SUMMARY"

@@ -1,19 +1,31 @@
 # db-hello
 
 A minimal .NET 10 web application that reads and writes an **Azure SQL
-Database** as the tenant's own managed identity. Its whole point is the
-credential that is not there: no connection string in a Secret, no password in
-the chart, nothing in the image.
+Database** as the tenant's own managed identity, through **Entity Framework
+Core** with a code-first schema. Its whole point is the credential that is not
+there: no connection string in a Secret, no password in the chart, nothing in
+the image.
 
 ```
 apps/db-hello/
-├── src/            # Program.cs + DbHello.csproj — one file, one page
+├── src/
+│   ├── Program.cs                       the page, and the queries as LINQ
+│   ├── Data/Visit.cs                    the entity — and therefore the table
+│   ├── Data/VisitsContext.cs            the model, and how to connect
+│   ├── Data/EntraTokenInterceptor.cs    where the password would have been
+│   ├── Data/VisitsContextFactory.cs     how `dotnet ef` builds a context
+│   └── Migrations/                      generated, committed, applied by CI
 ├── Dockerfile      # SDK build → chiseled ASP.NET runtime
 └── chart/          # what Argo CD renders on the hub
 ```
 
-Every page view is a row: the app inserts one into `dbo.visits`, then reads the
-last ten back and prints them, along with who the database thinks it is.
+The schema is code-first and the application never applies it: it runs with
+`db_datareader` + `db_datawriter`, so it could not create a table if it tried.
+`dotnet ef database update` runs in the **Bootstrap SQL** workflow instead,
+which is also how a later model change reaches the database.
+
+Every page view is a row: the app adds a `Visit`, saves it, then reads the last
+ten back with LINQ and prints them, along with who the database thinks it is.
 
 ```
 pod (SA: workload)
@@ -44,9 +56,9 @@ instead of failing:
 
 | What the page says | What it means |
 |---|---|
-| `resuming` | the free-tier database auto-paused; it is waking up (retried three times first) |
+| `resuming` | the free-tier database auto-paused; it is waking up (EF's retrying execution strategy tried first) |
 | `no database user` | the identity is fine, but nobody has run the **Bootstrap SQL** workflow for this tenant |
-| `no schema` | the user exists but `dbo.visits` does not — same workflow |
+| `no schema` | the user exists but the `visits` table does not — same workflow applies the migrations |
 
 `GET /healthz` is the liveness and readiness probe, and deliberately does
 **not** touch the database: an auto-paused database must not restart the pod.
@@ -60,8 +72,9 @@ in [docs/db-hello-app.md](../../docs/db-hello-app.md).
 
 ## Running it locally
 
-Anything `DefaultAzureCredential` accepts works, so an `az login` as a user
-with a database user of its own is enough:
+Anything `DefaultAzureCredential` accepts works — the interceptor uses it
+whenever there is no projected token — so an `az login` as a user with a
+database user of its own is enough:
 
 ```bash
 cd apps/db-hello/src
@@ -73,3 +86,10 @@ WELCOME_MESSAGE="Hello from my laptop" dotnet run
 Your own address needs a firewall rule on the server (`sql_firewall_rules` in
 the foundation, or `az sql server firewall-rule create`) — the cluster gets in
 through the AKS subnet's service endpoint, which a laptop is not on.
+
+Changing the model is two commands, and the second one needs no database:
+
+```bash
+dotnet ef migrations add AddSomething
+dotnet ef migrations has-pending-model-changes   # what PR validation runs
+```

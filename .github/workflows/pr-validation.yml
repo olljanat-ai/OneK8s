@@ -100,6 +100,31 @@ jobs:
           helm lint apps/db-hello/chart "${db_hello[@]}"
           helm template db-hello-azure apps/db-hello/chart "${db_hello[@]}" > /dev/null
 
+  # db-hello's schema is code-first: the EF Core model in apps/db-hello/src is
+  # the only description of the tables, and the Bootstrap SQL workflow applies
+  # the migrations generated from it. That only holds if the two agree, so a
+  # model change without `dotnet ef migrations add` fails here rather than in a
+  # deployment that quietly does nothing.
+  migrations:
+    name: ef migrations (db-hello)
+    runs-on: ubuntu-latest
+    env:
+      # Must match the EF Core packages in apps/db-hello/src/DbHello.csproj.
+      EF_VERSION: "10.0.11"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # No database is contacted: the check builds the model and compares it
+      # with the snapshot the migrations carry.
+      - name: The model and the migrations must agree
+        run: |
+          dotnet tool install dotnet-ef --version "$EF_VERSION" --tool-path .ef-tools
+          ./.ef-tools/dotnet-ef migrations has-pending-model-changes \
+            --project apps/db-hello/src --no-color
+
   tflint:
     name: tflint
     runs-on: ubuntu-latest

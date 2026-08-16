@@ -10,6 +10,11 @@ Terraform state and hands them over as environment variables:
     SQL_ACCESS_TOKEN   an Entra token for https://database.windows.net/,
                        belonging to the server's Entra administrator
 
+The *schema* is not here: it is code-first, defined by apps/db-hello's EF Core
+model, and applied by `dotnet ef database update` in the step before this one.
+This script deals only with the part EF has no opinion about — which Entra
+principal may open the database, and what it may do once inside.
+
 Everything here is guarded, so re-running it is a no-op that still reports what
 it found. It is the only place in the repository that speaks T-SQL, and it
 exists because creating a database user has no ARM representation: it is a
@@ -36,20 +41,6 @@ SQL_COPT_SS_ACCESS_TOKEN = 1256
 # database answers while it wakes up from auto-pause, which on the free offer
 # is the normal state of a database nobody visited for an hour.
 TRANSIENT = {40613, 40197, 40501, 49918, 49919, 49920, 4060, 10928, 10929}
-
-# One page view's worth of schema. The application only ever inserts and reads
-# rows; it holds no DDL rights, so this table is created here or not at all.
-SCHEMA = """
-SET NOCOUNT ON;
-
-IF OBJECT_ID('dbo.visits', 'U') IS NULL
-    CREATE TABLE dbo.visits (
-        id         BIGINT        IDENTITY(1, 1) NOT NULL CONSTRAINT PK_visits PRIMARY KEY,
-        visited_at DATETIME2(0)  NOT NULL CONSTRAINT DF_visits_visited_at DEFAULT SYSUTCDATETIME(),
-        pod        NVARCHAR(128) NOT NULL,
-        cloud      NVARCHAR(32)  NOT NULL
-    );
-"""
 
 # The user, and the two roles that are the whole of its authorization: it may
 # read and write rows, and it may not change the schema, grant anything, or see
@@ -164,8 +155,6 @@ def main() -> None:
         print(f"connected to {current} on {server} as {admin}")
 
         cursor.execute(GRANT, user, client_id)
-        cursor.execute(SCHEMA)
-
         cursor.execute(VERIFY, user)
         row = cursor.fetchone()
 
@@ -177,8 +166,14 @@ def main() -> None:
         print(f"sid       {sid}   <- client ID {client_id}")
         print(f"roles     {roles}")
 
-        cursor.execute("SELECT COUNT(*) FROM dbo.visits;")
-        print(f"dbo.visits exists, {cursor.fetchone()[0]} row(s)")
+        # The tables the EF Core migrations applied in the step before this
+        # one, reported here so one run's output answers both halves of "is
+        # this database ready?".
+        cursor.execute(
+            "SELECT name FROM sys.tables WHERE name <> '__EFMigrationsHistory' ORDER BY name;"
+        )
+        tables = ", ".join(r[0] for r in cursor.fetchall()) or "(none — did the migrations run?)"
+        print(f"tables    {tables}")
 
 
 if __name__ == "__main__":

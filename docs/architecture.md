@@ -488,15 +488,18 @@ spec:
   platform needs. The database is also created with `azapi` rather than
   azurerm, because the free offer's two properties (`useFreeLimit`,
   `freeLimitExhaustionBehavior`) are not in the pinned provider version.
-- Granting a tenant access to that database is **not** in Terraform. A
-  contained database user is `CREATE USER`, T-SQL executed inside the
-  database, and no provider expresses it without opening a database
-  connection at plan time; so it is the **Bootstrap SQL** workflow, the same
-  place and the same reasoning as the tenant test secret. The cost is that
-  deploying the foundation is not sufficient to make the page work — somebody
-  runs the workflow once per tenant, and until they do the application says
-  which step is missing rather than failing obscurely
-  ([db-hello-app.md](db-hello-app.md)).
+- Neither the database's **schema** nor a tenant's **access** to it is in
+  Terraform. The schema is code-first — EF Core migrations generated from
+  `apps/db-hello`'s model — and a contained database user is `CREATE USER`,
+  T-SQL executed inside the database; no provider expresses either without
+  opening a database connection at plan time. Both are applied by the
+  **Bootstrap SQL** workflow, the same place and the same reasoning as the
+  tenant test secret. The application deliberately does not migrate itself:
+  it holds `db_datareader` and `db_datawriter`, so runtime DDL rights never
+  exist to be abused. The cost is that deploying the foundation is not
+  sufficient to make the page work — somebody runs the workflow once per
+  tenant, and until they do the application says which step is missing rather
+  than failing obscurely ([db-hello-app.md](db-hello-app.md)).
 - Distributing the wildcard certificate copies a private key out of Key Vault
   into three more backends, so it exists in four places and a rotation is only
   complete once every copy is refreshed — nothing reconciles them, and a

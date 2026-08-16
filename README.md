@@ -179,14 +179,19 @@ it carries no secret at all: it reads and writes an **Azure SQL Database** as
 the tenant's own managed identity, with a token minted from the ServiceAccount
 token Kubernetes projects into the pod. No connection string, no password,
 nothing to rotate — the chart passes it a host name and a database name, and
-neither authorizes anybody.
+neither authorizes anybody. Data access is **Entity Framework Core**,
+code-first: the model in `apps/db-hello/src/Data` is the only description of
+the schema anywhere, and the migrations generated from it are committed
+alongside the code.
 
 The database is the Azure foundation's, on the **free offer**: 100,000 vCore
 seconds and 32 GB a month, auto-pausing rather than billing when that runs out.
-The server is **Entra-only**, so it has no SQL login to leak. One thing about
-it cannot be Terraform — a contained database user is `CREATE USER`, T-SQL
-inside the database — so it is a workflow, like the tenant test secret:
-`gh workflow run bootstrap-sql.yml -f tenant=team-alpha`.
+The server is **Entra-only**, so it has no SQL login to leak. Two things about it cannot be Terraform — applying a migration and creating a
+contained database user both happen *inside* the database — so they are a
+workflow, like the tenant test secret:
+`gh workflow run bootstrap-sql.yml -f tenant=team-alpha`. The application never
+migrates itself: it holds `db_datareader` and `db_datawriter`, and could not
+change the schema if it tried.
 This is the platform's one deliberately Azure-only application, because its
 database is an Azure resource and its identity is an Entra one.
 [docs/db-hello-app.md](docs/db-hello-app.md).
@@ -212,10 +217,11 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   them; pull requests build without pushing. The only pipelines here that
   produce an artefact rather than applying Terraform — from there Argo CD takes
   over.
-- **Bootstrap SQL** — gives a tenant's managed identity a user in the Azure SQL
-  database (`db_datareader` + `db_datawriter`) and creates the table db-hello
-  reads. Manual, idempotent, and the one place in the repository that speaks
-  T-SQL: a database user has no ARM representation, so it cannot be Terraform.
+- **Bootstrap SQL** — applies db-hello's EF Core migrations (`dotnet ef
+  database update`) and gives the tenant's managed identity a user in the
+  database (`db_datareader` + `db_datawriter`). Manual, idempotent, and where a
+  later schema change is deployed from: neither a table nor a database user has
+  an ARM representation, so neither can be Terraform.
 - **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together
