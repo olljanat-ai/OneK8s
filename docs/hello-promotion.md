@@ -264,6 +264,68 @@ It is not the recommendation, for three reasons:
 Worth revisiting when progressive syncs go stable, and the two are not exclusive
 — the version file stays the source of truth either way.
 
+## Kargo, which is what the above is a hand-rolled version of
+
+[Kargo](https://kargo.io) is a promotion engine built on exactly this shape. A
+**Warehouse** subscribes to artifact sources (an image repository, a Git
+repository, an OCI chart) and emits **Freight** — one immutable set of versions.
+A **Stage** requests freight, runs a **promotion** (clone, edit YAML, commit,
+push, nudge Argo CD) and then a **verification** (an `AnalysisTemplate`). A
+stage that names an upstream stage as its freight source can only receive
+freight that was **verified** upstream. Which is the requirement, verbatim.
+
+| This proposal | Kargo |
+|---|---|
+| `versions/hello.yaml` | the `yaml-update` promotion step writes the same file |
+| `needs: azure` in the workflow | `sources: { stages: [azure] }` on the stage |
+| `smoke.sh` in a job | an `AnalysisTemplate` — the `web` provider, or a Job |
+| `workflow_dispatch` to roll back | re-promote an earlier Freight |
+| a required reviewer on the environment | `autoPromotionEnabled: false` on the stage |
+
+It is better than four chained jobs at nearly everything except starting. The
+promotion graph is declarative and in Git, the history of what was promoted
+where is a first-class object rather than a workflow log, rollback is
+re-promoting old freight instead of reconstructing an old commit, and the
+second application and the second axis (environments) are more stages rather
+than another workflow. One objection raised against `RollingSync` above does
+*not* apply here: a `web` analysis runs from the Kargo controller out to
+`https://<cloud>-hello.onek8s.lol`, so DNS, Traefik and the wildcard are still
+on the path being tested.
+
+What it costs on this platform, today:
+
+- **A second control plane on the hub**, self-managed. `docs/argocd.md` chose
+  the Azure-managed Argo CD extension specifically so that manifests, upgrades
+  and CVE patching are Azure's problem; Kargo is a Helm release with CRDs, a
+  controller, a webhook server and a UI, and all of that becomes ours — on the
+  cluster the same document already lists as a platform-wide dependency.
+- **A Git write credential inside the cluster.** Today delivery is strictly
+  pull: nothing on any cluster can write to this repository. Kargo promotes by
+  committing, so the hub gets a token that can push — and the hub already holds
+  a bearer token for every spoke. "Compromising the hub deploys anything
+  anywhere" becomes "…and rewrites the repository that says what anything is."
+  That trade is much easier to accept once the thing it can write is a delivery
+  repository holding no Terraform and no code — see
+  [repository-split.md](repository-split.md), which is the same decision from
+  the other end.
+- **One more young dependency** in the position that decides what reaches
+  production, on a platform whose delivery plane is already a preview
+  extension.
+
+**Recommendation: same state model, swap the driver when it earns its keep.**
+Both designs write one version per cloud into one file in Git and gate on a test
+against the public URL; the difference is whether a workflow or a controller
+does it. Start with the workflow — it is one file and no new runtime — and move
+to Kargo when a second application or the environment axis (prototype → dev →
+staging → prod) turns four chained jobs into a matrix nobody wants to read.
+Adopting it then costs the two workflow files and nothing else: the version
+file, `/version` and `smoke.sh` all survive the move, which is the point of
+keeping them separable.
+
+If Kargo is wanted *now* — a defensible choice, since promotion is precisely
+what it is for — do it together with the delivery-repository split, so its
+credential is scoped to a repository that holds only what runs where.
+
 ## The other alternative: the chart as an OCI artifact
 
 `helm package` + `helm push` to `ghcr.io/olljanat-ai/onek8s/charts/hello`, and
