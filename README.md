@@ -11,6 +11,7 @@ via External Secrets Operator and per-tenant workload identities.
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
 │   ├── azure/              #   AKS (Cilium, Workload Identity, Azure Policy, Argo CD) + Key Vault (RBAC/ABAC)
+│   │                       #   ...and Azure SQL on the free offer, Entra-only (sql.tf)
 │   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
@@ -33,7 +34,8 @@ via External Secrets Operator and per-tenant workload identities.
 │   ├── root-app.tf         #   the one Argo CD object Terraform owns
 │   └── argocd/             #   ...pointing at THIS: AppProject + ApplicationSets
 ├── apps/                   # Workloads Argo CD deploys, source and chart together
-│   └── hello/              #   .NET 10 example: a welcome message and a test secret
+│   ├── hello/              #   .NET 10 example: a welcome message and a test secret
+│   └── db-hello/           #   .NET 10 example: Azure SQL as the tenant's managed identity
 ├── .github/workflows/      # PR validation + deploy pipelines + image build
 └── docs/                   # architecture, getting started, ADRs
 ```
@@ -172,6 +174,29 @@ cloud's per-tenant prefix restriction is written against. Everything else,
 ingress and TLS included, is identical.
 [docs/hello-app.md](docs/hello-app.md).
 
+The second example is **db-hello**, on <https://azure-db-hello.onek8s.lol>, and
+it carries no secret at all: it reads and writes an **Azure SQL Database** as
+the tenant's own managed identity, with a token minted from the ServiceAccount
+token Kubernetes projects into the pod. No connection string, no password,
+nothing to rotate — the chart passes it a host name and a database name, and
+neither authorizes anybody. Data access is **Entity Framework Core**,
+code-first: the model in `apps/db-hello/src/Data` is the only description of
+the schema anywhere, and the migrations generated from it are committed
+alongside the code.
+
+The database is the Azure foundation's, on the **free offer**: 100,000 vCore
+seconds and 32 GB a month, auto-pausing rather than billing when that runs out.
+The server is **Entra-only**, so it has no SQL login to leak. Two things about it cannot be Terraform — applying a migration and creating a
+contained database user both happen *inside* the database — so both are one
+command in the application itself, run by a workflow like the tenant test
+command in the application itself, which **Deploy Tenants** runs for every
+Azure tenant it onboards — so there is nothing separate to remember. The pod
+runs that same image and cannot do either: it holds `db_datareader` and
+`db_datawriter`, so the database refuses it DDL.
+This is the platform's one deliberately Azure-only application, because its
+database is an Azure resource and its identity is an Entra one.
+[docs/db-hello-app.md](docs/db-hello-app.md).
+
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
 Design and trade-offs: [docs/architecture.md](docs/architecture.md).
@@ -188,10 +213,17 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   stored as GitHub secrets. Foundation jobs are gated by the GitHub
   environments `<cloud>-<env>`, the all-clouds tenants and gitops jobs by
   `tenants-<env>` and `gitops-<env>`.
-- **Build Hello App** — builds `apps/hello` and pushes the image to GHCR on
-  every merge that touches it; pull requests build without pushing. The only
-  pipeline here that produces an artefact rather than applying Terraform —
-  from there Argo CD takes over.
+- **Build Hello App** / **Build DB Hello App** — build `apps/hello` and
+  `apps/db-hello` and push their images to GHCR on every merge that touches
+  them; pull requests build without pushing. The only pipelines here that
+  produce an artefact rather than applying Terraform — from there Argo CD takes
+  over.
+  **Deploy Tenants** has a second job for the one thing a tenant gets that
+  cannot be a Terraform resource: it runs `db-hello bootstrap`, the
+  application's own migrate-and-grant command, as the SQL server's Entra
+  administrator, for every Azure tenant the apply just onboarded. Idempotent,
+  and where a later schema change is deployed from — neither a table nor a
+  database user has an ARM representation, so neither can be in the stack.
 - **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together

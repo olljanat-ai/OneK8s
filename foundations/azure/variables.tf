@@ -159,6 +159,96 @@ variable "argocd_extra_configuration" {
   default     = {}
 }
 
+variable "enable_sql" {
+  description = "Create an Entra-only Azure SQL logical server and one database on the free offer, for the db-hello example application. The tenant's database user is NOT created here — the tenants deploy grants it, see docs/db-hello-app.md."
+  type        = bool
+  default     = true
+}
+
+variable "sql_database_name" {
+  description = "Name of the database on the logical server. It is also the name the db-hello application connects to, passed down from this stack's outputs through the gitops stack."
+  type        = string
+  default     = "appdb"
+}
+
+variable "sql_admin_object_id" {
+  description = "Object ID of the Entra principal that administers the server — a user, a group, or a managed identity. Null means the identity running the deploy, which is what makes the tenants deploy (same service principal) able to create tenants' database users."
+  type        = string
+  default     = null
+}
+
+variable "sql_admin_login_username" {
+  description = "Login name recorded for the Entra administrator, normally that principal's display name. A label: authorization follows sql_admin_object_id, and this string is what the portal and sys.database_principals show."
+  type        = string
+  default     = "onek8s-deployer"
+}
+
+variable "sql_use_free_limit" {
+  description = "Put the database on the Azure SQL free offer: 100,000 vCore seconds and 32 GB of storage free per month. Up to 10 free databases per subscription, and the first one fixes the region for the rest."
+  type        = bool
+  default     = true
+}
+
+variable "sql_free_limit_exhaustion_behavior" {
+  description = "What happens when the month's free allowance runs out. AutoPause stops the database until the next month and never bills; BillOverUsage keeps it online and charges standard serverless rates."
+  type        = string
+  default     = "AutoPause"
+
+  validation {
+    condition     = contains(["AutoPause", "BillOverUsage"], var.sql_free_limit_exhaustion_behavior)
+    error_message = "sql_free_limit_exhaustion_behavior must be AutoPause or BillOverUsage."
+  }
+}
+
+variable "sql_sku" {
+  description = "Compute for the database, in ARM's own shape. The free offer exists only on serverless General Purpose (GP_S_Gen5) and allows at most 4 vCores."
+  type = object({
+    name     = optional(string, "GP_S_Gen5")
+    tier     = optional(string, "GeneralPurpose")
+    family   = optional(string, "Gen5")
+    capacity = optional(number, 2)
+  })
+  default = {}
+
+  validation {
+    condition     = !var.sql_use_free_limit || (var.sql_sku.name == "GP_S_Gen5" && var.sql_sku.capacity <= 4)
+    error_message = "The free offer requires serverless General Purpose (sql_sku.name = \"GP_S_Gen5\") with at most 4 vCores. Set sql_use_free_limit = false to leave it."
+  }
+}
+
+variable "sql_max_size_gb" {
+  description = "Maximum database size. 32 GB is the free offer's ceiling; more than that is billed even with sql_use_free_limit set."
+  type        = number
+  default     = 32
+}
+
+variable "sql_auto_pause_delay_in_minutes" {
+  description = "Idle minutes before a serverless database pauses (60 is the minimum; -1 disables it). Pausing is what keeps an idle lab database from spending the free allowance — the cost is a resume delay on the next request."
+  type        = number
+  default     = 60
+}
+
+variable "sql_min_capacity" {
+  description = "vCores the database keeps allocated while it is awake."
+  type        = number
+  default     = 0.5
+}
+
+variable "sql_collation" {
+  description = "Database collation."
+  type        = string
+  default     = "SQL_Latin1_General_CP1_CI_AS"
+}
+
+variable "sql_firewall_rules" {
+  description = "Standing firewall exceptions on the logical server, keyed by rule name, e.g. { office = { start_ip_address = \"203.0.113.0\", end_ip_address = \"203.0.113.255\" } }. The cluster does not need one — it reaches the server through the AKS subnet's service endpoint — and the tenants deploy opens and closes its own."
+  type = map(object({
+    start_ip_address = string
+    end_ip_address   = string
+  }))
+  default = {}
+}
+
 variable "enable_baseline_policy" {
   description = "Assign the AKS pod security baseline policy initiative to the resource group."
   type        = bool

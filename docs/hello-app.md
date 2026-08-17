@@ -13,6 +13,11 @@ wildcard:
 | `gcp` | GKE — spoke | https://gcp-hello.onek8s.lol |
 | `oci` | OKE — spoke | https://oci-hello.onek8s.lol |
 
+The platform's other example, [db-hello](db-hello-app.md), is the deliberate
+opposite: one cloud, a real Azure SQL database, and no secret at all. This one
+is about a value that reaches every cloud identically; that one is about not
+having a value in the first place.
+
 Nothing in the application or its chart is cloud-specific. Exactly one string
 differs between the four — the key the secret is stored under, because Secrets
 Manager names are paths where Key Vault, Secret Manager and OCI Vault names are

@@ -33,6 +33,20 @@ locals {
     && try(local.hub.argocd_url, null) != null
   )
 
+  # The Azure SQL database the db-hello application uses, if this environment's
+  # Azure foundation built one. Empty strings when it did not (enable_sql =
+  # false, or a foundation applied before SQL existed), which is what stops the
+  # db-hello ApplicationSet from rendering — the application follows the
+  # database rather than a switch of its own.
+  #
+  # Passing the coordinates down rather than committing them matters because
+  # the server name carries a random suffix: a rebuilt foundation reaches the
+  # application on the next gitops apply, with nothing to edit.
+  hub_sql = {
+    server   = try(local.hub.sql_server_fqdn, null) == null ? "" : local.hub.sql_server_fqdn
+    database = try(local.hub.sql_database_name, null) == null ? "" : local.hub.sql_database_name
+  }
+
   # Values handed to gitops/argocd/values.yaml. Keys must match it.
   platform_apps_values = {
     environment     = var.environment
@@ -41,6 +55,7 @@ locals {
     argocdNamespace = local.argocd_namespace
     domain          = var.platform_apps.domain
     tenant          = var.platform_apps.tenant
+    sql             = local.hub_sql
   }
 }
 

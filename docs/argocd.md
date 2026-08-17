@@ -365,14 +365,22 @@ root-app.tf ──▶ Application "platform-gitops"  (project: default)
                                                 ├── hello-aws    (spoke)
                                                 ├── hello-gcp    (spoke)
                                                 └── hello-oci    (spoke)
+                                              ApplicationSet db-hello
+                                                └── db-hello-azure  (hub only)
 ```
 
 `gitops/argocd/` is a Helm chart, and the root Application supplies its values
 from `var.environment` and `var.platform_apps` — the environment, the
-repository and revision to sync, the wildcard domain and the tenant namespace.
-That is what lets one copy of the directory serve every environment: the
-cluster generator's selector and the applications' hostnames follow the
+repository and revision to sync, the wildcard domain, the tenant namespace and
+the Azure SQL coordinates read out of the hub's foundation state. That is what
+lets one copy of the directory serve every environment: the cluster generator's
+selector, the applications' hostnames and the database they talk to follow the
 environment rather than being committed per environment.
+
+`db-hello` has one generator rather than two, because it is deployed to the hub
+and nowhere else, and it is not rendered at all in an environment whose Azure
+foundation was applied with `enable_sql = false` — the application follows the
+database instead of a switch of its own.
 
 Terraform owns nothing else in Argo CD. After the first apply, adding an
 application or changing one is a commit; `terraform apply` is only needed to
@@ -381,8 +389,9 @@ environment. `platform_apps = { enabled = false }` registers spokes without
 deploying anything, and the root Application is skipped automatically when the
 hub was applied with `enable_argocd = false`.
 
-The application deployed today is the `hello` example:
-[hello-app.md](hello-app.md).
+The applications deployed today are the `hello` example on every cloud
+([hello-app.md](hello-app.md)) and the Azure-only `db-hello`
+([db-hello-app.md](db-hello-app.md)).
 
 ### Operating it
 

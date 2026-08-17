@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The chiseled runtime image carries no ICU, so the app must run
+         invariant. Nothing here formats for a culture, and every string the
+         model maps is NVARCHAR, so no code page is needed either. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The chiseled runtime image starts the app as "dotnet db-hello.dll". -->
+    <AssemblyName>db-hello</AssemblyName>
+    <RootNamespace>OneK8s.DbHello</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Azure.Identity mints the Entra token from the projected ServiceAccount
+         token the workload identity webhook mounts; the interceptor in Data/
+         attaches it to the connection EF Core opens. Between them they are the
+         entire "no password" story. -->
+    <PackageReference Include="Azure.Identity" Version="1.21.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <!-- Design-time only: what `dotnet ef migrations add` and
+         `dotnet ef database update` need. PrivateAssets keeps it out of the
+         published image, which runs migrations never. -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

@@ -26,6 +26,18 @@ domain: onek8s.lol
 # SecretStore is what the applications read secrets through.
 tenant: team-alpha
 
+# The Azure SQL database the db-hello application uses, handed down from the
+# Azure foundation's outputs by gitops/root-app.tf. Neither value is a secret:
+# a host name and a database name authorize nobody, and the application
+# authenticates with the tenant's managed identity.
+#
+# Empty means this environment's foundation was applied with enable_sql =
+# false, and then the db-hello ApplicationSet is not rendered at all — no
+# database, no application, and nothing to keep in sync between the two.
+sql:
+  server: ""
+  database: ""
+
 project:
   name: onek8s-platform
 
@@ -51,5 +63,18 @@ apps:
     # cluster it runs on.
     hub:
       enabled: true
+      cloud: azure
+      cluster: in-cluster
+
+  # The Azure-only example: a database application authenticating with the
+  # tenant's managed identity. It is deployed to the hub and nowhere else, and
+  # only when "sql" above is filled in.
+  dbHello:
+    enabled: true
+    # Chart path inside this repository.
+    path: apps/db-hello/chart
+    # Host label: "azure-db-hello.<domain>".
+    hostPrefix: db-hello
+    hub:
       cloud: azure
       cluster: in-cluster

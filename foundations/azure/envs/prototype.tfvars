@@ -20,6 +20,18 @@ argocd_high_availability = false
 argocd_workload_identity_client_id = "eca6aad4-fd01-4c67-acb9-95b33d89c53b"
 argocd_sso_client_id               = "6598a87b-227b-4f20-9f3b-dbdd74604492"
 
+# Azure SQL on the free offer: 100,000 vCore seconds and 32 GB a month, with
+# the database auto-pausing rather than billing when that runs out. Entra-only
+# authentication, so the server has no SQL login at all — the db-hello
+# application connects as the tenant's managed identity, and the tenant's
+# database user is created by the Bootstrap SQL workflow (docs/db-hello-app.md).
+#
+# The Entra administrator is left at its default: the service principal that
+# deploys this stack, which is what lets that workflow create the user.
+enable_sql         = true
+sql_database_name  = "appdb"
+sql_use_free_limit = true
+
 # Entra group object ID -> Argo CD role. Anyone authenticated but unmapped
 # falls through to argocd_rbac_default_role (read-only).
 argocd_rbac_group_roles = {
