@@ -28,9 +28,9 @@ replicaCount: 1
 
 image:
   repository: ghcr.io/olljanat-ai/onek8s/hello
-  # "latest" is the moving tag the Build Hello App workflow pushes on every
-  # merge to main. Pin an immutable "sha-<short>" tag for a reproducible
-  # deploy — see docs/hello-app.md.
+  # The Build Hello App workflow replaces this with the immutable
+  # "sha-<short>" tag only after that image has been published. That release
+  # commit is the declarative change RollingSync promotes between clouds.
   tag: latest
   pullPolicy: Always
 

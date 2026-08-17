@@ -38,6 +38,36 @@ spec:
   goTemplate: true
   goTemplateOptions: ["missingkey=error"]
 
+  # Promote one immutable desired revision through the clouds in order. The
+  # ApplicationSet controller starts a later step only after every Application
+  # in the preceding step is Synced and Healthy. Hello's /readyz probe includes
+  # its cloud-backed secret, so "Healthy" is the platform smoke test rather
+  # than merely proof that the process started.
+  strategy:
+    type: RollingSync
+    rollingSync:
+      steps:
+        - matchExpressions:
+            - key: onek8s.io/cloud
+              operator: In
+              values: [azure]
+          maxUpdate: 1
+        - matchExpressions:
+            - key: onek8s.io/cloud
+              operator: In
+              values: [aws]
+          maxUpdate: 1
+        - matchExpressions:
+            - key: onek8s.io/cloud
+              operator: In
+              values: [gcp]
+          maxUpdate: 1
+        - matchExpressions:
+            - key: onek8s.io/cloud
+              operator: In
+              values: [oci]
+          maxUpdate: 1
+
   generators:
     {{- if .Values.apps.hello.hub.enabled }}
     # The hub itself (AKS), which Argo CD addresses as "in-cluster".

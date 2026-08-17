@@ -10,6 +10,14 @@ var app = builder.Build();
 
 app.MapGet("/healthz", () => Results.Text("ok"));
 
+// Promotion readiness is deliberately stricter than process health. Argo CD's
+// progressive sync must not move to the next cloud until this deployment can
+// read the cloud-backed secret and has received its cluster identity.
+app.MapGet("/readyz", () =>
+    ReadSecret() is not null && Value("CLOUD") is not null && Value("ENVIRONMENT") is not null
+        ? Results.Text("ok")
+        : Results.Text("not ready", statusCode: StatusCodes.Status503ServiceUnavailable));
+
 app.MapGet("/", () => Results.Content(Render(), "text/html; charset=utf-8"));
 
 // The page's only asset, and it is a string for the same reason the page is:

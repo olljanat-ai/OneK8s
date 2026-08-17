@@ -91,7 +91,10 @@ spec:
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /healthz
+              # Unlike liveness, promotion readiness proves that the app can
+              # read this cloud's external secret. An unhealthy Deployment
+              # keeps its Argo CD Application unhealthy and stops RollingSync.
+              path: /readyz
               port: http
             periodSeconds: 10
           resources:

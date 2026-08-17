@@ -89,6 +89,42 @@ Applications address their cluster by `destination.name`, not by server URL:
 EKS, GKE and OKE endpoints are whatever those services handed out, and Argo CD
 already knows them from the cluster Secret.
 
+## Promotion: Azure, then AWS, then GCP, then OCI
+
+The ApplicationSet uses Argo CD's `RollingSync` strategy, with one step for
+each `onek8s.io/cloud` label in the required order:
+
+```
+azure (AKS) ──Healthy──▶ aws (EKS) ──Healthy──▶ gcp (GKE) ──Healthy──▶ oci (OKE)
+```
+
+All four Applications still receive the same desired Git revision. The
+ApplicationSet controller updates only Azure first and waits for its
+Application to be both `Synced` and `Healthy`; only then does it start AWS,
+and so on. `maxUpdate: 1` makes the single-cluster intent explicit in every
+step. If a step fails or times out, later clouds remain on their previous
+revision. Fixing the problem (or reverting the desired revision) resumes the
+same ordered process; operators should not manually sync a later Application,
+because that bypasses the promotion gate.
+
+For hello, "Healthy" includes the actual platform smoke test. Liveness uses
+`GET /healthz`, while the Deployment readiness probe uses `GET /readyz`.
+Readiness succeeds only when the application has its `CLOUD` and `ENVIRONMENT`
+configuration and can read the test secret mounted by External Secrets. A
+broken image, rollout, SecretStore identity, backend permission, or missing
+secret therefore makes the Deployment—and consequently the Argo CD
+Application—unhealthy and stops promotion before the next provider.
+
+Promotion changes a declarative, immutable desired revision
+(`image.tag: sha-<short-sha>`), rather than merely overwriting the moving
+`latest` tag in GHCR. On a main-branch build, the workflow first publishes the
+immutable `sha-*` image and only after that succeeds commits the tag to the
+chart. That follow-up release commit is the change Argo CD rolls through the
+gates, avoiding both an untracked moving tag and a race in which Kubernetes
+tries to pull an image that has not finished publishing. The workflow's bot
+commit uses `[skip ci]`, and pushes made with `GITHUB_TOKEN` do not recursively
+start another build.
+
 Per-cluster values reach the chart as Helm parameters — `cloud`, `environment`,
 `tenant`, `ingress.host` (`<cloud>-hello.onek8s.lol`), `secret.name`,
 `secret.remoteKey` and the welcome message. Two of them are required and the

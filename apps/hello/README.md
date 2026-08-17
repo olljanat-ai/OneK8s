@@ -43,7 +43,10 @@ always — and requires two values it refuses to guess:
 Whoever deploys knows both. The "hello" ApplicationSet in `gitops/argocd/` sets
 them per cluster.
 
-`GET /healthz` is the liveness and readiness probe.
+`GET /healthz` proves the process is alive. `GET /readyz` returns success only
+after the cloud-backed test secret is readable and the cloud/environment
+identity is configured; Kubernetes readiness and cross-cloud promotion use
+this stricter check.
 
 `GET /favicon.svg` is the page's icon: the Kubernetes heptagon with a "1" cut
 out of it, held as a string in `Program.cs` rather than a file, because the app
