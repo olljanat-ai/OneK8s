@@ -19,6 +19,15 @@ resource "helm_release" "cilium" {
     endpointRoutes = {
       enabled = true
     }
+    operator = {
+      replicas = 1
+    }
+    envoy = {
+      enabled = false
+    }
+    hubble = {
+      enabled = false
+    }
   })]
 
   depends_on = [aws_eks_node_group.default]
