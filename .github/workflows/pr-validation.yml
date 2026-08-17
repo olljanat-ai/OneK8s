@@ -78,13 +78,25 @@ jobs:
             --set sql.server=sql-onek8s-prototype-ab12.database.windows.net \
             --set sql.database=appdb > /dev/null
 
+      # secret.remoteKey is required and has no default — the chart refuses to
+      # guess a key from the cloud — so the renders have to stand in for what
+      # the ApplicationSet resolves per cluster: a path on Secrets Manager,
+      # a flat name everywhere else. Both spellings get exercised below.
       - name: Applications, as rendered on each cloud
         run: |
-          helm lint apps/hello/chart --set ingress.host=azure-hello.onek8s.lol
+          helm lint apps/hello/chart \
+            --set ingress.host=azure-hello.onek8s.lol \
+            --set secret.remoteKey=team-alpha-test
           for cloud in azure aws gcp oci; do
+            if [ "$cloud" = aws ]; then
+              remote_key=prototype/team-alpha/test
+            else
+              remote_key=team-alpha-test
+            fi
             helm template "hello-$cloud" apps/hello/chart \
               --set cloud="$cloud" \
-              --set ingress.host="$cloud-hello.onek8s.lol" > /dev/null
+              --set ingress.host="$cloud-hello.onek8s.lol" \
+              --set secret.remoteKey="$remote_key" > /dev/null
           done
 
       # db-hello is Azure-only, so there is one render rather than four — and
@@ -122,6 +134,10 @@ jobs:
       - name: The model and the migrations must agree
         run: |
           dotnet tool install dotnet-ef --version "$EF_VERSION" --tool-path .ef-tools
+          # dotnet-ef builds the project to read the model, and does not
+          # restore first: without this the build stops at NETSDK1004 (no
+          # project.assets.json) and the check never runs.
+          dotnet restore apps/db-hello/src
           ./.ef-tools/dotnet-ef migrations has-pending-model-changes \
             --project apps/db-hello/src --no-color
 
