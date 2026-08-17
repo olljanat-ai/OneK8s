@@ -312,6 +312,9 @@ default TLSStore serves the `*.onek8s.lol` wildcard.
   newest build, but Argo CD sees no diff when the image changes and will not
   restart anything by itself. Pin `image.tag` to a `sha-` tag for a
   reproducible deploy, or add an image updater.
+  [hello-promotion.md](hello-promotion.md) proposes closing this as one half of
+  a promotion story: a version pinned per cloud, so a release reaches azure,
+  aws, gcp and oci in that order and only after it passed on the one before.
 - **The test secret follows the certificate's schedule, not its own.** The
   Renew Certificate workflow generates it, so it rotates when the wildcard is
   renewed (roughly quarterly) and reaches the other three clouds only on a
