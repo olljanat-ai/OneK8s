@@ -264,6 +264,64 @@ It is not the recommendation, for three reasons:
 Worth revisiting when progressive syncs go stable, and the two are not exclusive
 — the version file stays the source of truth either way.
 
+## The other alternative: the chart as an OCI artifact
+
+`helm package` + `helm push` to `ghcr.io/olljanat-ai/onek8s/charts/hello`, and
+the Applications source a chart *version* instead of a repository path:
+
+```yaml
+      source:
+        repoURL: ghcr.io/olljanat-ai/onek8s/charts     # oci://, on a new enough Argo CD
+        chart: hello
+        targetRevision: 0.4.0-sha.a1b2c3d              # what this cloud is promoted to
+```
+
+The genuine win is not "artifacts are nicer than Git". It is that **the version
+collapses from two fields to one**. In the Git model the promotion state has to
+carry a revision *and* an image tag, because the chart in Git says
+`image.tag: latest` and something has to override it — and the alternative, a
+bot committing the tag into `apps/hello/chart/values.yaml`, puts an automated
+commit into the path that triggers the image build. Packaging removes the
+question: CI sets `image.tag` in the chart it packages, so the released chart
+*contains* the image it was built with, no commit required. One immutable
+artifact, one line per cloud, and "what is `gcp` running" has exactly one
+answer.
+
+Against that, four costs, in the order they will actually be felt:
+
+- **The hub needs to know about the registry.** An OCI Helm repository is a
+  labelled Secret in the `argocd` namespace — so `gitops/` grows a
+  `kubernetes_secret` and Terraform owns one more thing about the delivery
+  plane, which is the boundary this repository has been careful about. No
+  credential is needed while the package is public, but the entry is.
+- **The chart and the object that deploys it stop travelling together.** Today
+  a change to `apps/hello/chart` and a change to the ApplicationSet that
+  configures it are one commit and one diff — a property `values.yaml` calls
+  out by name. With OCI they are a commit and a published artifact, and the
+  version in between is CI's.
+- **Versioning becomes a scheme rather than a fact.** A Git revision is
+  identity for free; a chart needs a SemVer that CI has to derive and never
+  reuse. Use the prerelease form (`0.4.0-sha.a1b2c3d`), not build metadata —
+  OCI tags cannot contain `+`, and Helm silently rewrites it to `_`.
+- **PR validation drifts a little.** `helm template apps/hello/chart` still
+  proves the chart in the PR renders; it no longer proves that *that* is what
+  deploys, because what deploys is whatever was packaged from it.
+
+**Recommendation: not yet, and it is cheap to change our minds.** The version
+file is the same file either way — `revision` + `image` becomes
+`chartVersion` — so the promotion order, the gate and the workflow are
+unaffected by the choice. Nothing here consumes the chart from outside this
+repository, nothing is air-gapped from GitHub, and the one problem OCI solves
+(the two-field version) has an adequate Git answer. Revisit when any of these
+becomes true, and prefer doing it *before* a second application exists, since
+migrating later means changing every Application's source at once:
+
+- a chart is consumed by something that does not sync this repository;
+- charts should be signed and attested next to the images they deploy, on the
+  same cosign road;
+- the repo-server should stop cloning a growing repository to render one
+  subdirectory, four revisions at a time.
+
 ## What this adds to the repository
 
 | Path | What |
@@ -277,6 +335,10 @@ Worth revisiting when progressive syncs go stable, and the two are not exclusive
 | `.github/workflows/promote-hello.yml` | the order |
 | `.github/workflows/_promote-cloud.yml` | one cloud: commit, wait, test |
 | `.github/workflows/pr-validation.yml` | render the ApplicationSet against the version file; shellcheck the test |
+
+Nothing in `gitops/` Terraform changes — which is the point of keeping the
+chart in Git rather than in a registry (see above): the promotion is entirely a
+commit.
 
 ## Known gaps in this proposal
 
