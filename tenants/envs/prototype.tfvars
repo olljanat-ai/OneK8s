@@ -53,6 +53,7 @@ tenants = {
     name  = "team-beta"
   }
 
+  /*
   gcp-team-alpha = {
     cloud = "gcp"
     name  = "team-alpha"
@@ -84,4 +85,5 @@ tenants = {
     cloud = "oci"
     name  = "team-beta"
   }
+  */
 }

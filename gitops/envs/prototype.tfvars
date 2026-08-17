@@ -22,8 +22,6 @@ state_home = {
 # ServiceAccount per namespace instead of cluster-wide.
 spokes = {
   aws = {}
-  gcp = {}
-  oci = {}
 }
 
 # The root Application: the only Argo CD object Terraform creates. It points
