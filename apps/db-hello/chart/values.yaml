@@ -20,7 +20,7 @@ environment: prototype
 # whole authentication story: annotated with the tenant's user-assigned managed
 # identity by modules/tenant-namespace/azure, federated to exactly this
 # namespace and this ServiceAccount, and given a user in the database by the
-# Bootstrap SQL workflow.
+# tenants stack's own deploy.
 tenant: team-alpha
 
 # ServiceAccount the pod runs as. This is NOT cosmetic here: it is the identity

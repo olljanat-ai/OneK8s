@@ -401,7 +401,7 @@ One step is needed before the page works, and it is not Terraform — the
 tenant's identity has no user in the database until somebody creates one:
 
 ```bash
-gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
+gh workflow run deploy-tenants.yml -f environment=prototype
 ```
 
 That runs the application's own `bootstrap` command as the SQL server's Entra

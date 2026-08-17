@@ -51,7 +51,7 @@ output "sql_server_fqdn" {
 }
 
 output "sql_database_name" {
-  description = "Database on that server (null when SQL is disabled). It holds no user for any tenant until the Bootstrap SQL workflow creates one."
+  description = "Database on that server (null when SQL is disabled). It holds no user for any tenant until the tenants deploy grants one."
   value       = local.sql_enabled ? var.sql_database_name : null
 }
 

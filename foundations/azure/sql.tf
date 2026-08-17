@@ -14,8 +14,9 @@
 #
 #   * It does not create the tenant's database user. That is a data-plane act
 #     (T-SQL), not an ARM one, so it lives where the platform's other
-#     data-plane seeding lives — a workflow (.github/workflows/bootstrap-sql.yml),
-#     the same place the tenant test secret is written. See docs/db-hello-app.md.
+#     data-plane seeding lives — the "sql" job of the tenants deploy, which
+#     runs the application's own bootstrap command once per Azure tenant.
+#     See docs/db-hello-app.md.
 #   * It writes nothing to the directory. The Entra administrator is a
 #     principal that already exists — by default the identity running the
 #     deploy — exactly as the Argo CD SSO app registration is.
@@ -64,7 +65,7 @@ resource "azurerm_mssql_server" "this" {
   # through the VNet rule below instead. A private endpoint would be the next
   # step up and is listed as a known gap in docs/db-hello-app.md — it needs
   # private DNS the platform does not run yet, and it would put the database
-  # out of reach of the bootstrap workflow.
+  # out of reach of the tenants deploy that bootstraps it.
   public_network_access_enabled = true
 
   # Entra-only. With this set, azurerm rejects an administrator_login /
@@ -146,10 +147,10 @@ resource "azurerm_mssql_virtual_network_rule" "aks" {
   subnet_id = azurerm_subnet.aks.id
 }
 
-# Deliberately empty by default. The bootstrap workflow opens a rule for its
-# own runner address and removes it again in the same run, so operating the
-# database needs no standing exception; these are for the ones you want to keep
-# (an office range, a jump host).
+# Deliberately empty by default. The tenants deploy opens a rule for its own
+# runner address and removes it again in the same run, so operating the database
+# needs no standing exception; these are for the ones you want to keep (an
+# office range, a jump host).
 resource "azurerm_mssql_firewall_rule" "allowed" {
   for_each = local.sql_enabled ? var.sql_firewall_rules : {}
 

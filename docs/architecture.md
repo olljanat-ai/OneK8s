@@ -493,8 +493,8 @@ spec:
   `apps/db-hello`'s model — and a contained database user is `CREATE USER`,
   T-SQL executed inside the database; no provider expresses either without
   opening a database connection at plan time. Both are applied by one command in the
-  application itself (`db-hello bootstrap`), which the **Bootstrap SQL**
-  workflow runs as the server's Entra administrator — the same place and the
+  application itself (`db-hello bootstrap`), which the tenants deploy runs as
+  the server's Entra administrator for every Azure tenant — the same place and the
   same reasoning as the tenant test secret. The pod runs that image too and
   cannot do either: it holds `db_datareader` and `db_datawriter`, so runtime
   DDL rights never exist to be abused. The cost is that deploying the foundation is not

@@ -164,11 +164,11 @@ namespace OneK8s.DbHello
         private static Result Explain(SqlException e) => e.Number switch
         {
             18456 => new Result(null, "no database user",
-                "This identity authenticated to Entra ID but has no user in the database. Run the Bootstrap SQL workflow for this tenant."),
+                "This identity authenticated to Entra ID but has no user in the database. Run Deploy Tenants for this environment."),
             229 or 230 => new Result(null, "not authorized",
-                "The database user exists but is missing db_datareader/db_datawriter. Re-run the Bootstrap SQL workflow."),
+                "The database user exists but is missing db_datareader/db_datawriter. Re-run Deploy Tenants."),
             208 => new Result(null, "no schema",
-                "The visits table does not exist yet — the Bootstrap SQL workflow applies the EF Core migrations that create it."),
+                "The visits table does not exist yet — Deploy Tenants applies the EF Core migrations that create it."),
             40613 => new Result(null, "resuming",
                 "The database is waking up from auto-pause; reload in a moment."),
             _ => new Result(null, "unavailable", $"{e.Message} (error {e.Number})"),

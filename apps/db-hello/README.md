@@ -29,8 +29,9 @@ db-hello bootstrap --user <identity> --client-id <guid>
 ```
 
 — which applies the migrations and creates the tenant's database user. The
-**Bootstrap SQL** workflow runs it as the server's Entra administrator, and
-re-running it is how a later model change reaches the database.
+**Deploy Tenants** workflow runs it as the server's Entra administrator for
+every Azure tenant it onboards, and re-running it is how a later model change
+reaches the database.
 
 Every page view is a row: the app adds a `Visit`, saves it, then reads the last
 ten back with LINQ and prints them, along with who the database thinks it is.
@@ -65,7 +66,7 @@ instead of failing:
 | What the page says | What it means |
 |---|---|
 | `resuming` | the free-tier database auto-paused; it is waking up (EF's retrying execution strategy tried first) |
-| `no database user` | the identity is fine, but nobody has run the **Bootstrap SQL** workflow for this tenant |
+| `no database user` | the identity is fine, but **Deploy Tenants** has not run since this tenant was added |
 | `no schema` | the user exists but the `visits` table does not — same workflow applies the migrations |
 
 `GET /healthz` is the liveness and readiness probe, and deliberately does
@@ -75,7 +76,7 @@ instead of failing:
 
 Argo CD, from `gitops/argocd/` — one Application, on the hub only, because the
 database is an Azure resource and the identity is an Entra one. The full story
-— the free offer, the bootstrap workflow, the DNS record, the known gaps — is
+— the free offer, where the bootstrap runs, the DNS record, the known gaps — is
 in [docs/db-hello-app.md](../../docs/db-hello-app.md).
 
 ## Running it locally

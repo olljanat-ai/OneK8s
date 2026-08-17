@@ -8,10 +8,10 @@ namespace OneK8s.DbHello.Data;
 ///
 /// Code-first: nobody writes CREATE TABLE anywhere in this repository. This
 /// class and <see cref="Visit"/> are the description of the database, EF Core
-/// migrations turn a change here into a migration, and the Bootstrap SQL
-/// workflow applies it. The application itself never migrates — at runtime it
-/// holds db_datareader and db_datawriter and nothing else, so it *could* not
-/// change the schema even if it tried, which is the property worth keeping.
+/// migrations turn a change here into a migration, and Deploy Tenants applies
+/// it. The pod never migrates — at runtime it holds db_datareader and
+/// db_datawriter and nothing else, so it *could* not change the schema even if
+/// it tried, which is the property worth keeping.
 /// </summary>
 public sealed class VisitsContext(DbContextOptions<VisitsContext> options) : DbContext(options)
 {
@@ -19,10 +19,10 @@ public sealed class VisitsContext(DbContextOptions<VisitsContext> options) : DbC
 
     /// <summary>
     /// How to reach the database — one definition, used three times: by the
-    /// running application, by `dotnet ef database update` in the bootstrap
-    /// workflow, and by `dotnet ef migrations add` on a laptop. The connection
-    /// string carries no credential; <see cref="EntraTokenInterceptor"/>
-    /// supplies the token when the connection opens.
+    /// running application, by `db-hello bootstrap` in the tenants deploy, and
+    /// by `dotnet ef migrations add` on a laptop. The connection string carries
+    /// no credential; <see cref="EntraTokenInterceptor"/> supplies the token
+    /// when the connection opens.
     /// </summary>
     public static void Configure(DbContextOptionsBuilder options)
     {

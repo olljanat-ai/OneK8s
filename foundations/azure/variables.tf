@@ -160,7 +160,7 @@ variable "argocd_extra_configuration" {
 }
 
 variable "enable_sql" {
-  description = "Create an Entra-only Azure SQL logical server and one database on the free offer, for the db-hello example application. The tenant's database user is NOT created here — see .github/workflows/bootstrap-sql.yml."
+  description = "Create an Entra-only Azure SQL logical server and one database on the free offer, for the db-hello example application. The tenant's database user is NOT created here — the tenants deploy grants it, see docs/db-hello-app.md."
   type        = bool
   default     = true
 }
@@ -172,7 +172,7 @@ variable "sql_database_name" {
 }
 
 variable "sql_admin_object_id" {
-  description = "Object ID of the Entra principal that administers the server — a user, a group, or a managed identity. Null means the identity running the deploy, which is what makes the bootstrap workflow (same service principal) able to create the tenant's database user."
+  description = "Object ID of the Entra principal that administers the server — a user, a group, or a managed identity. Null means the identity running the deploy, which is what makes the tenants deploy (same service principal) able to create tenants' database users."
   type        = string
   default     = null
 }
@@ -241,7 +241,7 @@ variable "sql_collation" {
 }
 
 variable "sql_firewall_rules" {
-  description = "Standing firewall exceptions on the logical server, keyed by rule name, e.g. { office = { start_ip_address = \"203.0.113.0\", end_ip_address = \"203.0.113.255\" } }. The cluster does not need one — it reaches the server through the AKS subnet's service endpoint — and the bootstrap workflow opens and closes its own."
+  description = "Standing firewall exceptions on the logical server, keyed by rule name, e.g. { office = { start_ip_address = \"203.0.113.0\", end_ip_address = \"203.0.113.255\" } }. The cluster does not need one — it reaches the server through the AKS subnet's service endpoint — and the tenants deploy opens and closes its own."
   type = map(object({
     start_ip_address = string
     end_ip_address   = string

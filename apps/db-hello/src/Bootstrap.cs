@@ -19,7 +19,8 @@ namespace OneK8s.DbHello;
 /// do it. Putting it next to the model at least means one language, one
 /// connection, and one place to read.
 ///
-/// Run by .github/workflows/bootstrap-sql.yml as the deploy service principal.
+/// Run by the "sql" job of .github/workflows/deploy-tenants.yml, as the deploy
+/// service principal, once per Azure tenant that stack onboards.
 /// The pod runs the same image and cannot do any of this: its identity holds
 /// db_datareader and db_datawriter, so the *database* refuses both steps. That
 /// is the boundary, not the absence of the code.

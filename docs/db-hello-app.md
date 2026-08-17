@@ -49,7 +49,7 @@ place that *can* own it.
 |---|---|---|
 | Logical server, database, network rules | `foundations/azure/sql.tf` | ARM resources, and the cluster's own VNet is here |
 | The **tables** | the EF Core model in `apps/db-hello/src/Data` | code-first: the schema is a consequence of the model, versioned with the code that uses it |
-| Applying the migrations, and the tenant's **database user** | `db-hello bootstrap`, run by the **Bootstrap SQL** workflow | data-plane acts over TDS — neither a table nor a database user has an ARM representation, on any provider |
+| Applying the migrations, and the tenant's **database user** | `db-hello bootstrap`, run by the tenants deploy | data-plane acts over TDS — neither a table nor a database user has an ARM representation, on any provider |
 | The Application, its host and its image | `gitops/argocd/` | a commit, like every other workload |
 
 The two middle rows are the interesting ones. There is no `CREATE TABLE`
@@ -138,8 +138,8 @@ The logical server is created in **Microsoft Entra-only** authentication mode
 login on this server at all, so there is nothing to store, rotate or forget.
 
 The server's Entra administrator defaults to **the identity running the
-deploy**, which is what makes the bootstrap workflow (the same service
-principal) able to create a user for somebody else's identity. Point
+deploy**, which is what makes the tenants deploy (the same service principal)
+able to create a user for somebody else's identity. Point
 `sql_admin_object_id` at a break-glass Entra group instead if you would rather
 CI were not it; nothing in this stack writes to the directory either way, the
 same rule the Argo CD SSO app registration follows.
@@ -158,18 +158,27 @@ is written down anywhere.
 
 There are **no firewall rules by default**, so the public endpoint answers
 nobody else. `sql_firewall_rules` adds standing exceptions (an office range, a
-jump host); the bootstrap workflow needs none, because it opens a rule for its
-own runner address and removes it again in the same run, whatever happens.
+jump host); the tenants deploy needs none, because it opens a rule for its own
+runner address and removes it again in the same run, whatever happens.
 
-## The bootstrap workflow
+## Where the bootstrap happens
+
+Nowhere of its own: it is the second job of the tenants deploy, so onboarding a
+tenant and giving it a database are one action.
 
 ```bash
-gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
+gh workflow run deploy-tenants.yml -f environment=prototype
 ```
 
-It resolves everything from state rather than taking it as configuration — the
-server and database from `foundations/azure`, the tenant's identity from the
-`tenants` stack — then does the two things an empty database needs:
+```
+tenants  namespace, quota, netpol, cloud identity, namespaced SecretStore
+sql      ↳ for every Azure tenant that stack onboarded
+```
+
+The `sql` job resolves everything from state rather than taking it as
+configuration — the server and database from `foundations/azure`, every Azure
+tenant's identity from the `tenants` stack — then, once per tenant, does the two
+things an empty database needs:
 
 ```
 db-hello bootstrap --user <identity> --client-id <guid>
@@ -177,11 +186,17 @@ db-hello bootstrap --user <identity> --client-id <guid>
    └── CREATE USER … / ALTER ROLE  the access, for this tenant's identity
 ```
 
-Every step is guarded, so running it again is a no-op that still prints what it
-found — and that is also how a *later* schema change reaches the database: add
-a migration, merge it, re-run the workflow. Run it once per tenant per
-environment, and again after a foundation rebuild (the server name carries a
-random suffix, so a rebuilt foundation is a new, empty database).
+Every step is guarded, so a deploy with nothing to do is a no-op that still
+prints what it found — which is what makes it safe to run on every tenants
+deploy, and is also how a *later* schema change reaches the database: add a
+migration, merge it, deploy tenants. A rebuilt foundation needs one too (the
+server name carries a random suffix, so a new foundation is a new, empty
+database).
+
+The job is separate from the apply rather than part of it, so a database that
+cannot be reached shows up as its own red mark and never touches a tenant
+onboarding that already succeeded. An environment whose Azure foundation has
+`enable_sql = false`, or which has no Azure tenants, skips it entirely.
 
 It authenticates exactly as the pod does: the same `VisitsContextFactory`, so
 the same interceptor puts an Entra token on the connection — from the deploy
@@ -240,7 +255,7 @@ Three states are ordinary rather than broken, and each names its own fix:
 | Page says | Fix |
 |---|---|
 | `resuming` | nothing — the free-tier database is waking up |
-| `no database user` | run **Bootstrap SQL** for this tenant |
+| `no database user` | run **Deploy Tenants** — its `sql` job grants access |
 | `no schema` | same workflow; it applies the migration that creates `visits` |
 | `no token` | the pod is missing the workload-identity label or the ServiceAccount annotation — check the tenants stack applied |
 
@@ -281,7 +296,7 @@ TLSStore serves the platform wildcard.
   the AKS subnet may use it, which is a real boundary and not a cosmetic one,
   but a **private endpoint** is the stronger answer. It needs private DNS the
   platform does not run yet, and it would put the database out of reach of the
-  bootstrap workflow — which would then have to run somewhere inside the VNet.
+  tenants deploy — which would then have to run somewhere inside the VNet.
 - **One database, shared by tenants.** The free offer allows ten, but this is
   one database with one table; a second tenant would get its own user in the
   *same* database and could read the first one's rows. Isolation here is the
@@ -289,9 +304,10 @@ TLSStore serves the platform wildcard.
   row-level security keyed on `DATABASE_PRINCIPAL_ID()`, is the next step and
   is deliberately not taken in a lab that has one application.
 - **The bootstrap is a separate act.** Deploying the foundation does not make
-  the page work; somebody has to run the workflow once per tenant. That is the
-  price of not giving Terraform a database connection, and it is visible rather
-  than silent — the page says which step is missing.
+  the page work; the tenants stack has to be deployed *after* it, because the
+  grant lives in that deploy's second job. That is the price of not giving
+  Terraform a database connection, and it is visible rather than silent — the
+  page says which step is missing.
 - **The image tag is `latest`**, exactly as for `hello`: the build workflow
   pushes an immutable `sha-<short>` alongside it, but nothing writes that tag
   back into `values.yaml`. Pin `image.tag` for a reproducible deploy.

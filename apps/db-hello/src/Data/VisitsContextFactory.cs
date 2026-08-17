@@ -9,7 +9,7 @@ namespace OneK8s.DbHello.Data;
 /// `dotnet ef migrations add` needs a model and no database; `dotnet ef
 /// database update` needs both, and gets its credential the same way the
 /// running pod does — through the interceptor, from whatever Azure login the
-/// caller has (the deploy service principal, in the Bootstrap SQL workflow).
+/// caller has (the deploy service principal, in Deploy Tenants).
 /// Because it goes through <see cref="VisitsContext.Configure"/>, there is no
 /// second copy of the connection settings to drift.
 /// </summary>
