@@ -16,7 +16,7 @@ apps/db-hello/
 │   ├── Data/EntraTokenInterceptor.cs    where the password would have been
 │   ├── Data/VisitsContextFactory.cs     a context with no web app around it
 │   └── Migrations/                      generated, committed, applied by CI
-├── Dockerfile      # SDK build → chiseled ASP.NET runtime
+├── Dockerfile      # SDK build → chiseled-extra ASP.NET runtime (SqlClient needs ICU)
 └── chart/          # what Argo CD renders on the hub
 ```
 

@@ -1,8 +1,7 @@
 # Same two stages, same chiseled runtime and same non-root user as apps/hello:
 # the SDK compiles, and an Ubuntu image with no shell, no package manager and
 # no root user serves. This app reaches one more service than that one (Entra
-# ID and Azure SQL, both over TLS on 443/1433), and needs nothing extra in the
-# image to do it.
+# ID and Azure SQL, both over TLS on 443/1433).
 FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS build
 WORKDIR /src
 
@@ -14,7 +13,14 @@ RUN dotnet restore
 COPY src/ ./
 RUN dotnet publish -c Release --no-restore -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
+# "-extra" is the same chiseled image plus ICU and tzdata. apps/hello does
+# without both and runs invariant; this one cannot, because
+# Microsoft.Data.SqlClient refuses to open a connection in Globalization
+# Invariant Mode — every request 500s with `NotSupportedException` on the plain
+# `-chiseled` tag. The paired `<InvariantGlobalization>false` in
+# src/DbHello.csproj is the other half of this; change one and the other has to
+# follow.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra AS final
 WORKDIR /app
 COPY --from=build /app ./
 
