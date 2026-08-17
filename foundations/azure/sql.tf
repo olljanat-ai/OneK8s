@@ -38,6 +38,27 @@ locals {
   # Bytes, because ARM counts database size in bytes and nothing else here does.
   sql_max_size_bytes = var.sql_max_size_gb * 1024 * 1024 * 1024
 
+  # The free-offer properties, as a list of either one object or none.
+  #
+  # The obvious spelling — `var.sql_use_free_limit ? { … } : {}` inline in the
+  # body — is a conditional between two *different* object types, and Terraform
+  # resolves that by converting both sides to a map. A map has one element
+  # type, so the boolean and the string unify to string and `useFreeLimit`
+  # becomes `"true"`: ARM stores the boolean it was sent, the configuration
+  # holds a string, and every plan from then on reports
+  #
+  #   ~ useFreeLimit = true -> "true"
+  #
+  # for a database nobody has touched. A list of zero or one object has no such
+  # unification to do, so the attribute types survive and
+  # `merge(…, local.sql_free_limit_properties...)` folds it into the body.
+  sql_free_limit_properties = [
+    for _ in range(var.sql_use_free_limit ? 1 : 0) : {
+      useFreeLimit                = true
+      freeLimitExhaustionBehavior = var.sql_free_limit_exhaustion_behavior
+    }
+  ]
+
   sql_server_fqdn = one(azurerm_mssql_server.this[*].fully_qualified_domain_name)
 }
 
@@ -124,10 +145,7 @@ resource "azapi_resource" "sql_database" {
       # Local redundancy is not a choice on the free offer with AutoPause: geo
       # and zone redundant backups are not part of it.
       requestedBackupStorageRedundancy = "Local"
-      }, var.sql_use_free_limit ? {
-      useFreeLimit                = true
-      freeLimitExhaustionBehavior = var.sql_free_limit_exhaustion_behavior
-    } : {})
+    }, local.sql_free_limit_properties...)
   }
 }
 

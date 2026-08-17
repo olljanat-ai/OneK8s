@@ -62,10 +62,12 @@ connection at plan time.
 Both are one command, `db-hello bootstrap`, which is part of the application
 rather than a script in CI: the same image, the same context, the same
 interceptor, so there is one definition of how to reach this database and the
-SQL that grants access sits beside the model it grants access to. The workflow
-around it only resolves inputs from Terraform state and opens a firewall — the
-same shape as the tenant test secret the Renew Certificate workflow writes into
-all four clouds' vaults.
+SQL that grants access sits beside the model it grants access to. Around it,
+`apps/db-hello/bootstrap.sh` resolves the inputs from Terraform state and opens
+a firewall for as long as the run takes — the same shape as the tenant test
+secret the Renew Certificate workflow writes into all four clouds' vaults. The
+tenants deploy calls that script and so can an operator, because a stack
+applied from a laptop needs the grant just as much as one applied by CI.
 
 ## Code-first, and why the pod never migrates
 
@@ -175,10 +177,24 @@ tenants  namespace, quota, netpol, cloud identity, namespaced SecretStore
 sql      ↳ for every Azure tenant that stack onboarded
 ```
 
-The `sql` job resolves everything from state rather than taking it as
-configuration — the server and database from `foundations/azure`, every Azure
-tenant's identity from the `tenants` stack — then, once per tenant, does the two
-things an empty database needs:
+That job is a single call to **`apps/db-hello/bootstrap.sh`**, which is also the
+whole story for anyone applying the stacks by hand — the database user is a
+data-plane act with no Terraform resource behind it, so `terraform apply` alone
+leaves the page saying `no database user` however many times it is run:
+
+```bash
+# as the SQL server's Entra administrator, which by default is whoever
+# applied foundations/azure
+az login
+./apps/db-hello/bootstrap.sh prototype
+```
+
+One script, two callers, so a laptop and CI cannot drift apart. It resolves
+everything from state rather than taking it as configuration — the server and
+database from `foundations/azure`, every Azure tenant's identity from the
+`tenants` stack — opens a firewall rule for the address it is running from and
+removes it again whatever happens, then, once per tenant, does the two things an
+empty database needs:
 
 ```
 db-hello bootstrap --user <identity> --client-id <guid>
@@ -221,9 +237,23 @@ the SQL server look the principal up in Microsoft Entra ID, which requires the
 directly skips the lookup entirely: a managed identity's SID is its client ID
 in binary, which is exactly what `CAST(… AS uniqueidentifier)` produces.
 
+The SID is also what the bootstrap *checks*, not just what it writes. A
+database user is identified by its SID and only labelled by its name, so one
+carrying the right name and a stale SID — which is what a rebuilt tenants stack
+leaves behind, since the managed identity keeps its name and gets a new client
+ID — authenticates nobody:
+
+```
+Login failed for user '<token-identified principal>'.  (error 18456)
+```
+
+The grant drops and recreates a user whose SID is not this identity's, and
+reads the SID back afterwards to compare rather than to print, so a run that
+prints a user is a run whose token will be accepted.
+
 The two roles are the whole of the application's authorization. It may read and
 write rows; it may not create a table, grant anything, or reach another
-database. That is why the migrations are applied by this workflow and not by
+database. That is why the migrations are applied by the bootstrap and not by
 the application on first run.
 
 ## What the page shows
@@ -255,7 +285,7 @@ Three states are ordinary rather than broken, and each names its own fix:
 | Page says | Fix |
 |---|---|
 | `resuming` | nothing — the free-tier database is waking up |
-| `no database user` | run **Deploy Tenants** — its `sql` job grants access |
+| `no database user` | run **Deploy Tenants**, or `./apps/db-hello/bootstrap.sh <environment>` — either grants access |
 | `no schema` | same workflow; it applies the migration that creates `visits` |
 | `no token` | the pod is missing the workload-identity label or the ServiceAccount annotation — check the tenants stack applied |
 

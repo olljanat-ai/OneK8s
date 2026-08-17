@@ -47,9 +47,28 @@ internal static class Bootstrap
 
         DECLARE @name sysname = @userName;
         DECLARE @sid varbinary(16) = CAST(CAST(@clientId AS uniqueidentifier) AS varbinary(16));
+        DECLARE @existing varbinary(85) = (SELECT sid FROM sys.database_principals WHERE name = @name);
         DECLARE @sql nvarchar(max);
 
-        IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name = @name)
+        -- The name is only a label; the SID is the identity. A user carrying
+        -- this name but somebody else's SID authenticates nobody, and every
+        -- request from the pod then fails with "Login failed for user
+        -- '<token-identified principal>'" — while a bootstrap that only asked
+        -- whether the *name* existed would report success on every run.
+        --
+        -- That is not a corner case here: the tenant's managed identity is
+        -- recreated whenever the tenants stack is rebuilt, and it keeps its
+        -- name while its client ID changes. Repair the drift rather than skip
+        -- it. Dropping the user gives up nothing — it owns no object, and its
+        -- authorization is the two role memberships re-granted below.
+        IF @existing IS NOT NULL AND @existing <> @sid
+        BEGIN
+            SET @sql = N'DROP USER ' + QUOTENAME(@name) + N';';
+            EXEC sp_executesql @sql;
+            SET @existing = NULL;
+        END
+
+        IF @existing IS NULL
         BEGIN
             SET @sql = N'CREATE USER ' + QUOTENAME(@name)
                      + N' WITH SID = ' + CONVERT(nvarchar(100), @sid, 1)
@@ -109,31 +128,52 @@ internal static class Bootstrap
             [new SqlParameter("@userName", user), new SqlParameter("@clientId", clientId)],
             ct);
 
-        // Read back rather than assume: a user created against the wrong client
-        // ID authenticates as nobody and is otherwise invisible, so the SID is
-        // printed. Aliased "Value" because that is the column name SqlQuery
-        // expects for a scalar result.
-        var principal = await db.Database
+        // Read back rather than assume, and *compare* rather than print: a user
+        // whose SID is not this identity's is invisible in every other way, and
+        // the first thing to notice would be a pod being refused at login.
+        // Aliased "Value" because that is the column name SqlQuery expects for
+        // a scalar result.
+        var sid = await db.Database
             .SqlQuery<string>($"""
-                SELECT CONCAT(p.name, N'  ', p.type_desc,
-                              N'  sid ', CONVERT(nvarchar(100), p.sid, 1),
-                              N'  roles ', ISNULL((SELECT STRING_AGG(r.name, N', ')
-                                                   FROM sys.database_role_members AS m
-                                                        INNER JOIN sys.database_principals AS r
-                                                            ON r.principal_id = m.role_principal_id
-                                                   WHERE m.member_principal_id = p.principal_id), N'(none)')) AS Value
+                SELECT CONVERT(nvarchar(100), p.sid, 1) AS Value
                 FROM sys.database_principals AS p
                 WHERE p.name = {user}
                 """)
             .FirstOrDefaultAsync(ct);
 
-        if (principal is null)
+        if (sid is null)
         {
             Console.Error.WriteLine($"{user} was not created; nothing to hand the application");
             return 1;
         }
 
-        Console.WriteLine($"user       {principal}");
+        // Guid.ToByteArray() orders the first three fields exactly as SQL
+        // Server stores a uniqueidentifier, so this is the same 16 bytes the
+        // CREATE USER above asked for — and the ones a token from this identity
+        // will present.
+        var expected = "0x" + Convert.ToHexString(Guid.Parse(clientId).ToByteArray());
+
+        if (!string.Equals(sid, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine(
+                $"{user} exists with SID {sid}, but this identity's is {expected}. A token from it " +
+                "would be refused with \"Login failed for user '<token-identified principal>'\".");
+            return 1;
+        }
+
+        var roles = await db.Database
+            .SqlQuery<string>($"""
+                SELECT ISNULL(STRING_AGG(r.name, N', '), N'(none)') AS Value
+                FROM sys.database_principals AS p
+                     LEFT JOIN sys.database_role_members AS m
+                         ON m.member_principal_id = p.principal_id
+                     LEFT JOIN sys.database_principals AS r
+                         ON r.principal_id = m.role_principal_id
+                WHERE p.name = {user}
+                """)
+            .FirstOrDefaultAsync(ct);
+
+        Console.WriteLine($"user       {user}  sid {sid}  roles {roles}");
         Console.WriteLine($"migrations {string.Join(", ", await db.Database.GetAppliedMigrationsAsync(ct))}");
 
         return 0;
