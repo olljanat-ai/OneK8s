@@ -153,15 +153,19 @@ three backends, then read in-cluster by External Secrets over that cloud's own
 identity — so the token is in no state file, and a rotation reaches the
 collectors without an apply or a restart.
 
+The stack's endpoints are configuration of the platform rather than of a
+cloud, so they are the module's own defaults and no foundation repeats them; a
+cluster that has to write somewhere else overrides them per signal from its
+environment.
+
 ```hcl
-# foundations/<cloud>/envs/<env>.tfvars — the endpoints are the configuration
-enable_observability         = true
-grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
-grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
+# foundations/<cloud>/envs/<env>.tfvars — one switch per cluster
+enable_observability = true
 ```
 
-Off by default, per cloud and per environment. Setup, the feature set and the
-trade-offs: [docs/observability.md](docs/observability.md).
+**Azure** and **AWS** — the two clouds this lab runs — have it on, so the
+collectors come up with the foundation; GCP and OCI are off. Setup, the
+feature set and the trade-offs: [docs/observability.md](docs/observability.md).
 
 ## GitOps
 

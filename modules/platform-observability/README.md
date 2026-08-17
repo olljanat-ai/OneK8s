@@ -13,8 +13,11 @@ module "observability" {
   count  = var.enable_observability ? 1 : 0
 
   cluster_name = "onek8s-azure-prototype"
-  metrics_url  = var.grafana_cloud_metrics_url
-  logs_url     = var.grafana_cloud_logs_url
+
+  # Null — which is what a foundation passes when its tfvars set nothing —
+  # takes this module's own endpoints, so all four clusters land in one stack.
+  metrics_url = var.grafana_cloud_metrics_url
+  logs_url    = var.grafana_cloud_logs_url
 
   extra_objects = [/* ServiceAccount + SecretStore + ExternalSecret */]
 }
@@ -50,12 +53,20 @@ round trip through the OpenTelemetry data model.
 |---|---|---|---|
 | `grafana-cloud-metrics` | `prometheus` | `metrics_url` | metrics |
 | `grafana-cloud-logs` | `loki` | `logs_url` | logs and events |
-| `grafana-cloud-traces` | `otlp` | `traces_url` (optional) | traces only |
+| `grafana-cloud-traces` | `otlp` | `traces_url`, `enable_traces` | traces only |
 
-The traces destination is defined only when `traces_url` is set, and it is
-restricted to traces: metrics and logs already have a destination each, and an
-OTLP destination that accepted them would be chosen as a second home for the
-same data.
+**The endpoints live here**, as the defaults of those three inputs, rather than
+once per foundation. There is one stack behind all four clusters — the premise
+`cluster_name` exists for — so repeating its URLs in `foundations/*/variables.tf`
+made four copies of one platform-wide fact. A cluster that has to write
+somewhere else still overrides them from its own tfvars, per signal; every
+input is `nullable = false`, so a foundation variable left at `null` falls
+back to the default here instead of passing the `null` through.
+
+The traces destination is defined unless `enable_traces = false` — a stack
+without a Tempo instance, say — and it is restricted to traces: metrics and
+logs already have a destination each, and an OTLP destination that accepted
+them would be chosen as a second home for the same data.
 
 ## Credentials
 

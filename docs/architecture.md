@@ -269,11 +269,14 @@ and [db-hello-app.md](db-hello-app.md).
 ## Observability: one Grafana Cloud stack, four clusters
 
 Every foundation can install the **same collector** — Grafana Alloy, from
-`modules/platform-observability` (Grafana's k8s-monitoring chart), opt-in per
+`modules/platform-observability` (Grafana's k8s-monitoring chart), switched per
 environment with `enable_observability` — and ship metrics, logs and cluster
 events to one Grafana Cloud stack. The clusters are told apart there by a
 single derived label, `cluster = <prefix>-<cloud>-<environment>`, so "how many
-nodes does the platform have" is one query rather than four dashboards.
+nodes does the platform have" is one query rather than four dashboards. The
+stack's endpoints are defaulted in the module, not per foundation, for the same
+reason: one stack, four writers. Azure and AWS have the collectors on; GCP and
+OCI are off in this lab.
 
 Only the collectors the enabled features need are created: `alloy-metrics` (a
 clustered StatefulSet), `alloy-logs` (a DaemonSet, when pod or node logs are
