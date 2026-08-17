@@ -70,14 +70,9 @@ variable "ingress_certificate_name" {
 }
 
 variable "enable_observability" {
-  description = "Install the Grafana k8s-monitoring collectors and ship this cluster's metrics, logs and events to Grafana Cloud. Needs a Grafana Cloud stack's endpoints, and its credentials in the Key Vault as var.grafana_cloud_secret_name."
+  description = "Install the Grafana k8s-monitoring collectors and ship this cluster's metrics, logs and events to Grafana Cloud. Needs the credentials in the Key Vault as var.grafana_cloud_secret_name; the endpoints come from modules/platform-observability."
   type        = bool
   default     = true
-
-  validation {
-    condition     = !var.enable_observability || (var.grafana_cloud_metrics_url != null && var.grafana_cloud_logs_url != null)
-    error_message = "enable_observability needs grafana_cloud_metrics_url and grafana_cloud_logs_url: both are on the Grafana Cloud stack's Details page and neither can be derived from the stack name."
-  }
 }
 
 variable "k8s_observability_chart_version" {
@@ -92,25 +87,25 @@ variable "grafana_cloud_secret_name" {
   default     = "platform-grafana-cloud"
 }
 
-# The same three endpoints every other cloud points at: one Grafana Cloud
-# stack holds all four clusters, and they are told apart by their "cluster"
-# label, not by where they write.
+# Endpoint overrides for this cluster alone. Null — the default — takes the
+# platform's Grafana Cloud stack from modules/platform-observability, which is
+# where all four clusters write.
 variable "grafana_cloud_metrics_url" {
-  description = "Prometheus remote-write endpoint of the Grafana Cloud stack"
+  description = "Prometheus remote-write endpoint, when this cluster writes somewhere other than the platform's stack."
   type        = string
-  default     = "https://prometheus-prod-39-prod-eu-north-0.grafana.net/api/prom/push"
+  default     = null
 }
 
 variable "grafana_cloud_logs_url" {
-  description = "Loki push endpoint of the Grafana Cloud stack"
+  description = "Loki push endpoint, when this cluster writes somewhere other than the platform's stack."
   type        = string
-  default     = "https://logs-prod-025.grafana.net/loki/api/v1/push"
+  default     = null
 }
 
 variable "grafana_cloud_traces_url" {
-  description = "OTLP endpoint traces are sent to. Null configures no traces destination."
+  description = "OTLP endpoint traces are sent to, when this cluster writes somewhere other than the platform's stack."
   type        = string
-  default     = "https://tempo-prod-18-prod-eu-north-0.grafana.net/tempo"
+  default     = null
 }
 
 variable "observability_enable_pod_logs" {

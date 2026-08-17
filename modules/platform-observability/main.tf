@@ -70,7 +70,7 @@ locals {
         }
       }
     },
-    var.traces_url == null ? {} : {
+    var.enable_traces ? {
       grafana-cloud-traces = {
         type     = "otlp"
         url      = var.traces_url
@@ -87,7 +87,7 @@ locals {
           passwordFrom = local.token_ref
         }
       }
-    },
+    } : {},
   )
 
   # --- Collectors ------------------------------------------------------------

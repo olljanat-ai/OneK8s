@@ -19,20 +19,38 @@ variable "cluster_name" {
 # Not secrets, and not derivable from the stack name: every Grafana Cloud stack
 # is assigned its own cluster of hosted endpoints. They are on the stack's
 # "Details" page, next to the instance ID each one authenticates with.
+#
+# They are defaulted here rather than per foundation because there is one stack
+# behind all four clusters — the same reason var.cluster_name exists. A cluster
+# that has to write somewhere else overrides them from its foundation, and
+# because every one of these is nullable = false, a foundation whose own
+# variable is null falls back to the default below instead of passing the null
+# through.
 variable "metrics_url" {
-  description = "Prometheus remote-write endpoint of the Grafana Cloud stack, e.g. 'https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push'."
+  description = "Prometheus remote-write endpoint of the Grafana Cloud stack. Defaults to the platform's stack."
   type        = string
+  default     = "https://prometheus-prod-39-prod-eu-north-0.grafana.net/api/prom/push"
+  nullable    = false
 }
 
 variable "logs_url" {
-  description = "Loki push endpoint of the Grafana Cloud stack, e.g. 'https://logs-prod-012.grafana.net/loki/api/v1/push'."
+  description = "Loki push endpoint of the Grafana Cloud stack. Defaults to the platform's stack."
   type        = string
+  default     = "https://logs-prod-025.grafana.net/loki/api/v1/push"
+  nullable    = false
 }
 
 variable "traces_url" {
-  description = "OTLP endpoint traces are sent to, e.g. 'https://tempo-prod-01-prod-eu-west-0.grafana.net:443'. Null (the default) defines no traces destination at all, which is also what enable_application_observability needs."
+  description = "OTLP endpoint traces are sent to. Defaults to the platform's stack; it is var.enable_traces, not a null here, that removes the traces destination."
   type        = string
-  default     = null
+  default     = "https://tempo-prod-18-prod-eu-north-0.grafana.net/tempo"
+  nullable    = false
+}
+
+variable "enable_traces" {
+  description = "Define the traces destination at all. Off leaves metrics and logs untouched and is what a Grafana Cloud stack without a Tempo instance needs; enable_application_observability requires it."
+  type        = bool
+  default     = true
 }
 
 variable "traces_protocol" {
@@ -121,13 +139,13 @@ variable "enable_node_logs" {
 }
 
 variable "enable_application_observability" {
-  description = "Run an OTLP receiver (4317/4318) in the cluster for applications that emit their own traces, metrics and logs. Requires var.traces_url."
+  description = "Run an OTLP receiver (4317/4318) in the cluster for applications that emit their own traces, metrics and logs. Requires var.enable_traces."
   type        = bool
   default     = false
 
   validation {
-    condition     = !var.enable_application_observability || var.traces_url != null
-    error_message = "enable_application_observability needs traces_url: an OTLP receiver with nowhere to forward to drops everything it accepts."
+    condition     = !var.enable_application_observability || var.enable_traces
+    error_message = "enable_application_observability needs enable_traces: an OTLP receiver with nowhere to forward to drops everything it accepts."
   }
 }
 

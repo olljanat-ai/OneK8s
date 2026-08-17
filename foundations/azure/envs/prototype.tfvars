@@ -51,14 +51,15 @@ argocd_rbac_group_roles = {
   "4301eb89-fc3d-4836-95d1-41b497f102ad" = "role:readonly"
 }
 
-# Grafana Cloud. This environment ships to the one stack every cloud writes
-# to, so the endpoints and enable_observability = true are the defaults in
-# variables.tf; the credentials are not configuration and reach the cluster
-# from the Key Vault — run the Publish Grafana Cloud Credentials workflow once
-# before the first apply. See docs/observability.md.
+# Grafana Cloud. This environment ships to the one stack every cloud writes to,
+# whose endpoints are the defaults in modules/platform-observability, and
+# enable_observability defaults to true — so there is nothing to set here. The
+# credentials are not configuration and reach the cluster from the Key Vault:
+# run the Publish Grafana Cloud Credentials workflow once before the first
+# apply. See docs/observability.md.
 #
-# Override here to point this environment somewhere else, or to turn the
-# collectors off:
+# Uncomment to turn the collectors off, or to point this environment at a
+# different stack:
 #
 # enable_observability      = false
 # grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"

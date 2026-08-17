@@ -20,10 +20,9 @@ only in the value of their `cluster` label.
                     └───────────────┘ └───────────┘  └─────────────┘
 ```
 
-It needs two things this repository cannot invent: a Grafana Cloud stack's
-endpoints, and its credentials. Azure and AWS have this lab's endpoints as
-their defaults and run the collectors on every apply; GCP and OCI have none
-configured and stay off (`enable_observability = false`) until they do.
+The stack's endpoints are the module's defaults, so what a cluster still needs
+is its credentials. Azure and AWS run the collectors on every apply; GCP and
+OCI are off in this lab (`enable_observability = false`).
 
 ## What runs in the cluster
 
@@ -79,26 +78,34 @@ round trip through the OpenTelemetry data model:
 |---|---|---|
 | `grafana-cloud-metrics` | `prometheus` (remote write) | `grafana_cloud_metrics_url` |
 | `grafana-cloud-logs` | `loki` | `grafana_cloud_logs_url` |
-| `grafana-cloud-traces` | `otlp`, traces only | `grafana_cloud_traces_url` (optional) |
+| `grafana-cloud-traces` | `otlp`, traces only | `grafana_cloud_traces_url` |
 
 The URLs are on the stack's **Details** page in Grafana Cloud. They are not
 derivable from the stack's name — every stack is assigned its own cluster of
-hosted endpoints — so they are configuration. All four clouds write to the same
-stack, so Azure and AWS carry this lab's endpoints as defaults in
-`foundations/<cloud>/variables.tf`; another stack, or another environment on
-the same cloud, overrides them in `foundations/<cloud>/envs/<env>.tfvars`:
+hosted endpoints — so they are configuration. They are configuration of the
+*platform*, though, not of a cloud: one stack is behind all four clusters, the
+premise the `cluster` label exists for. So they are the defaults of
+`metrics_url`, `logs_url` and `traces_url` in
+`modules/platform-observability/variables.tf`, in one place, and no foundation
+repeats them.
+
+A cluster that has to write somewhere else overrides them from its own
+environment, per signal:
 
 ```hcl
-enable_observability      = true
+# foundations/<cloud>/envs/<env>.tfvars — an environment on its own stack
 grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
-grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional
+grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"
 ```
 
-Leaving `grafana_cloud_traces_url` null defines no traces destination at all.
-The traces destination is deliberately restricted to traces: metrics and logs
-already have a destination each, and an OTLP destination that accepted them
-would be chosen as a second home for the same data.
+Each of these defaults to `null`, which is *not* "no endpoint": the module's
+inputs are `nullable = false`, so a null falls back to the platform's stack.
+Leaving the traces line out sends traces to the platform's Tempo instance;
+`enable_traces = false` on the module is what defines no traces destination at
+all. The traces destination is deliberately restricted to traces: metrics and
+logs already have a destination each, and an OTLP destination that accepted
+them would be chosen as a second home for the same data.
 
 ## Credentials: the certificate's road, a different payload
 

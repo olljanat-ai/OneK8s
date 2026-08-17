@@ -722,17 +722,18 @@ and events to one Grafana Cloud stack, where all four clusters show up under
 guessed from this repository.
 
 1. **The endpoints**, which are per stack and on its Details page in Grafana
-   Cloud. Azure and AWS already carry this lab's stack as defaults in
-   `foundations/<cloud>/variables.tf` — a different stack, or one of the two
-   clouds that are still off, is configured in that cloud's tfvars, where a
+   Cloud. This platform has one stack, so they are the defaults of
+   `metrics_url`, `logs_url` and `traces_url` in
+   `modules/platform-observability/variables.tf` — change them there and every
+   cloud follows. Your own stack goes in that file; a single cluster that has
+   to write somewhere else overrides them in its tfvars instead, where a
    commented block is waiting:
 
    ```hcl
    # foundations/<cloud>/envs/prototype.tfvars
-   enable_observability      = true
    grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
    grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
-   grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional
+   grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"
    ```
 
 2. **The credentials**, which are not configuration and never reach Terraform.
