@@ -1,0 +1,48 @@
+name: Deploy Portainer
+
+# Onboards the other clouds' clusters into the Portainer Business Edition
+# server that foundations/azure runs on AKS: one Portainer environment per
+# cluster, and one Edge Agent installed on it. Like the tenants and gitops
+# stacks this is one stack, one state file per environment, every cloud in a
+# single run — the cloud is a key of var.agents in
+# portainer/envs/<environment>.tfvars.
+#
+# It reads foundation remote-state outputs only, so it deploys independently of
+# the foundations; it does need the hub's foundation (Azure, with
+# enable_portainer = true) and every onboarded cluster's foundation to have
+# been applied for this environment first. It also needs Portainer itself to be
+# reachable at the published host name — this is the stack whose DNS record has
+# to exist before it can run.
+on:
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "portainer/**"
+  #     - "modules/portainer-agent/**"
+  #     - ".github/workflows/deploy-portainer.yml"
+  #     - ".github/workflows/_terraform-deploy.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "prototype"
+        type: choice
+        options: [prototype, dev, staging, prod]
+
+permissions:
+  contents: read
+
+jobs:
+  portainer:
+    uses: ./.github/workflows/_terraform-deploy.yml
+    with:
+      stack: portainer
+      # All clouds at once: the run talks to the Portainer server and to every
+      # onboarded cluster, so it needs every cloud's credentials and CLIs, and
+      # binds to the "portainer-<environment>" GitHub environment rather than a
+      # per-cloud one.
+      cloud: all
+      environment: ${{ inputs.environment || 'prototype' }}
+      gh_environment: portainer-${{ inputs.environment || 'prototype' }}
+    secrets: inherit

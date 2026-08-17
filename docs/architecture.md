@@ -34,6 +34,7 @@ on the Azure cluster.
 | Foundations | `foundations/{azure,aws,gcp,oci}` | `foundations/<cloud>/<env>.tfstate` in the Azure Storage state home | independently |
 | Tenants | `tenants/` (one stack, all clouds; `cloud` is a per-tenant parameter) | `tenants/<env>.tfstate` in the Azure Storage state home | independently, **after** the foundations of the clouds its tenants use |
 | GitOps | `gitops/` (one stack, all clouds; `cloud` is a key of `var.spokes`) | `gitops/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (the hub) and the foundations of the clouds it registers |
+| Portainer | `portainer/` (one stack, all clouds; `cloud` is a key of `var.agents`) | `portainer/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (which runs the server) and the foundations of the clouds it onboards |
 
 **One state home.** Every stack — whichever cloud it provisions — keeps its
 state in the same Azure Storage account, distinguished only by blob key.
@@ -43,8 +44,8 @@ one data source per backend type, and state RBAC/versioning/retention is
 configured in one place. The price is that every deploy needs Azure
 credentials in addition to the target cloud's.
 
-Tenants and GitOps consume foundation outputs via `terraform_remote_state`
-only. Foundations never reference either of them, and never reference each
+Tenants, GitOps and Portainer consume foundation outputs via
+`terraform_remote_state` only. Foundations never reference either of them, and never reference each
 other — the dependency arrow points one way. That is the whole reason spoke
 registration is a layer of its own instead of something `foundations/aws`
 does to `foundations/azure`: a foundation that reads another foundation's
@@ -97,6 +98,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Ingress DNS | manual records | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
 | Application database | **Azure SQL** on the free offer, Entra-only auth (`sql.tf`) | — | — | — |
+| Fleet console | **Portainer BE** server (manages this cluster itself) | **Edge Agent** | **Edge Agent** | **Edge Agent** |
 
 ## Ingress
 
@@ -409,25 +411,59 @@ spec:
         key: team-alpha-db-password   # Azure/GCP; "dev/team-alpha/db-password" on AWS
 ```
 
+## Fleet console: one Portainer, agents on the rest
+
+The same AKS cluster carries the platform's **operator-facing** console:
+Portainer Business Edition, published on `portainer.onek8s.lol` through the
+same Traefik ingress and terminating TLS with the same wildcard. It is
+deliberately not a second delivery plane — Argo CD reconciles desired state,
+Portainer is how a human looks at what is running on any cloud without
+collecting four kubeconfigs.
+
+Portainer manages the hub itself: its chart binds a `cluster-admin`
+ServiceAccount on the cluster it runs on, so AKS appears in the UI with no
+agent involved. EKS, GKE and OKE are onboarded by the `portainer/` stack —
+one stack, all clouds, cloud as a key of `var.agents` — which creates a
+Portainer environment through the server's API and installs an **Edge Agent**
+on the matching cluster with the Edge key that creation generates.
+
+The direction of that connection is the point. An Edge Agent dials out (HTTPS
+polling, plus a reverse tunnel while an operator has the environment open), so
+no cluster except the hub has to be reachable, and the whole credential is one
+Edge key the server can revoke by deleting the environment. The standard agent
+would instead have the platform publishing a cluster-admin API on three
+clouds. The cost is one more public listener on the AKS ingress: Portainer
+derives the tunnel address from the host of its own URL, so port 8000 has to
+answer on the same load balancer as 443 — an extra Traefik entrypoint, with a
+TCP route rendered into the Portainer namespace so that Traefik does not need
+cross-namespace references enabled.
+
+The licence and the initial admin password come out of the environment's Key
+Vault (`portainer-license`, `portainer-admin-password`), so a rebuild comes up
+licensed and already has the account the `portainer/` stack authenticates as.
+The agents get `cluster-admin` on their clusters — wider than Argo CD's
+`argocd-manager`, and inherent to what an interactive console does.
+[portainer.md](portainer.md).
+
 ## CI/CD
 
 - `pr-validation.yml` — fmt, per-stack validate, Helm lint/render of the
   Argo CD configuration and of every application chart as it is rendered on
   each cloud, tflint, checkov, and (once `ENABLE_CLOUD_PLANS=true`)
-  credentialed prototype plans for all six stacks.
+  credentialed prototype plans for all seven stacks.
 - `build-hello.yml` — the one pipeline that produces an artefact rather than
   applying Terraform: it builds `apps/hello` and pushes the image to GHCR on
   merges that touch it, and builds without pushing on pull requests. Delivery
   is not its job — Argo CD picks the image up from the chart.
-- `deploy-foundations.yml` / `deploy-tenants.yml` / `deploy-gitops.yml` —
-  independent pipelines; merge to `main` auto-deploys the prototype
-  environment on path changes, other environments go through
-  `workflow_dispatch`. Deploy Foundations fans out per cloud; Deploy Tenants
-  and Deploy GitOps are single all-clouds jobs. All three delegate to the
-  reusable `_terraform-deploy.yml`, which binds each run to a GitHub
-  environment — `<cloud>-<env>` for foundations, `tenants-<env>` and
-  `gitops-<env>` for the two all-clouds stacks — so protection rules
-  (required reviewers, wait timers) gate production applies.
+- `deploy-foundations.yml` / `deploy-tenants.yml` / `deploy-gitops.yml` /
+  `deploy-portainer.yml` — independent pipelines; merge to `main` auto-deploys
+  the prototype environment on path changes, other environments go through
+  `workflow_dispatch`. Deploy Foundations fans out per cloud; Deploy Tenants,
+  Deploy GitOps and Deploy Portainer are single all-clouds jobs. All four
+  delegate to the reusable `_terraform-deploy.yml`, which binds each run to a
+  GitHub environment — `<cloud>-<env>` for foundations, `tenants-<env>`,
+  `gitops-<env>` and `portainer-<env>` for the all-clouds stacks — so
+  protection rules (required reviewers, wait timers) gate production applies.
 - `publish-grafana-credentials.yml` — on demand; builds the Grafana Cloud
   access-policy token and instance IDs into one JSON object, writes it to the
   environment's Key Vault and copies it to the AWS, GCP and OCI backends. It
@@ -499,6 +535,15 @@ spec:
   pins the `Preview` release train and, with no version pinned, takes Azure's
   auto-upgrades. `enable_argocd = false` opts an environment out of the whole
   thing.
+- Portainer's Edge tunnel is a **public listener**: port 8000 on the AKS
+  ingress load balancer, authenticated by each agent's Edge key and pinned to
+  the tunnel server's fingerprint, but with no IP allow-list in front of it.
+  Its agents also hold `cluster-admin` on the clusters they run on, which is
+  what an interactive console needs and wider than anything else the platform
+  grants across clusters. And unlike Argo CD, sign-in is Portainer's built-in
+  admin account rather than Entra ID — the licence key ends up in the AKS
+  foundation's state and in the server pod's `argv` as the price of a server
+  that boots licensed.
 - Argo CD's Entra ID sign-in depends on directory objects this stack does not
   manage: the app registration, the managed identity the components federate
   as, and the groups bound to Argo CD roles are created out of band and

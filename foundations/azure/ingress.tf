@@ -87,10 +87,14 @@ module "ingress" {
   # health probing of the Service's own ports is the default.
   service_annotations = {}
 
+  # Portainer's Edge tunnel, when it is enabled: an extra TCP entrypoint on
+  # this Service's load balancer (portainer.tf builds both halves).
+  extra_ports = local.portainer_ingress_ports
+
   # The certificate plumbing is applied with the release rather than as
   # kubernetes_manifest resources, which would need the External Secrets CRDs
   # to exist at *plan* time — before this stack has ever been applied.
-  extra_objects = [
+  extra_objects = concat([
     {
       apiVersion = "v1"
       kind       = "ServiceAccount"
@@ -171,12 +175,15 @@ module "ingress" {
         }]
       }
     },
-  ]
+  ], local.portainer_ingress_objects)
 
   # The External Secrets CRDs and webhook have to be up before the objects
-  # above are applied, and the role assignment before the first read.
+  # above are applied, and the role assignment before the first read. The
+  # Portainer namespace is in the list for the same reason: Helm applies the
+  # Edge route into it, so it has to exist first.
   depends_on = [
     helm_release.external_secrets,
     azurerm_role_assignment.ingress_certificate_user,
+    kubernetes_namespace_v1.portainer,
   ]
 }

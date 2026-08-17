@@ -21,8 +21,9 @@ into `state_home` in `tenants/envs/<env>.tfvars`. The keys are:
 | `foundations/<cloud>` | `foundations/<cloud>/<env>.tfstate` |
 | `tenants` (one per environment, all clouds) | `tenants/<env>.tfstate` |
 | `gitops` (one per environment, all clouds) | `gitops/<env>.tfstate` |
+| `portainer` (one per environment, all clouds) | `portainer/<env>.tfstate` |
 
-The tenants and gitops stacks do not take the foundation keys as
+The tenants, gitops and portainer stacks do not take the foundation keys as
 configuration: they derive `foundations/<cloud>/<env>.tfstate` from
 `state_home` and `environment`, so the only thing that has to match is the
 storage account and container.
@@ -64,6 +65,7 @@ Actions → Secrets):
 | `GCP_CREDENTIALS_JSON` | google-github-actions/auth (service account key JSON) |
 | `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY` | oci provider + OCI CLI (API signing key, PEM contents) |
 | `GRAFANA_CLOUD_TOKEN` | Publish Grafana Cloud Credentials (the access-policy token; only needed with observability enabled) |
+| `PORTAINER_API_KEY` *or* `PORTAINER_PASSWORD` | the portainer stack, to register environments with the Portainer server (an API token from its UI, or the password of the admin account the Azure foundation bootstraps from Key Vault) |
 
 And repository **variables**:
 
@@ -72,14 +74,16 @@ And repository **variables**:
 | `AWS_REGION` | aws-actions/configure-aws-credentials |
 | `OCI_TENANCY_OCID`, `OCI_USER_OCID`, `OCI_REGION` | oci provider + OCI CLI |
 | `ENABLE_CLOUD_PLANS` | set to `true` to enable PR plans |
+| `PORTAINER_USER` | the portainer stack, when authenticating with a username/password rather than an API key (`admin`) |
 | `LETSENCRYPT_EMAIL` | Renew Certificate (ACME registration + expiry notices) |
 | `DNS_ZONE_NAME`, `DNS_ZONE_RESOURCE_GROUP` | Renew Certificate (both optional — see below) |
 | `GRAFANA_CLOUD_METRICS_USERNAME`, `GRAFANA_CLOUD_LOGS_USERNAME`, `GRAFANA_CLOUD_TRACES_USERNAME` | Publish Grafana Cloud Credentials (the hosted services' instance IDs; all optional, they can be typed per run) |
 
 Create GitHub **environments** for the foundations — `azure-prototype`,
 `azure-staging`, `azure-prod`, `aws-prototype`, … `oci-prod` — plus one per
-environment for each of the two all-clouds jobs: `tenants-prototype` …
-`tenants-prod` and `gitops-prototype` … `gitops-prod`. Attach protection
+environment for each of the three all-clouds jobs: `tenants-prototype` …
+`tenants-prod`, `gitops-prototype` … `gitops-prod` and
+`portainer-prototype` … `portainer-prod`. Attach protection
 rules (required reviewers for `*-prod` at minimum). The deploy workflows bind
 to them automatically.
 
@@ -251,6 +255,46 @@ Set `enable_argocd = false` in an environment's tfvars to skip the extension
 That cluster is also the **hub** the other clouds are registered with in step
 5.
 
+### Portainer on the Azure foundation
+
+The same stack installs **Portainer Business Edition** — the platform's fleet
+console — and publishes it on `var.portainer_hostname` (default
+`portainer.onek8s.lol`) through the same Traefik ingress. It needs the same
+certificate and the same kind of DNS record as Argo CD, plus two secrets in
+the environment's **Key Vault**, put there out of band:
+
+| Secret | Required | What it is |
+|---|---|---|
+| `portainer-license` | yes | The Business Edition licence key. Passed to the server as `--license-key`, so a rebuilt cluster comes up licensed. |
+| `portainer-admin-password` | recommended | Password for the built-in `admin` account, created at first start. Without it the account is created in the browser instead — and the `portainer/` stack (step 6) authenticates as it. |
+
+```bash
+az keyvault secret set --vault-name <kv> --name portainer-license       --value '<licence key>'
+az keyvault secret set --vault-name <kv> --name portainer-admin-password --value '<password>'
+```
+
+Terraform reads them at apply time, so on a **brand-new** environment — where
+this same apply is what creates the vault — the order is: apply once with
+`enable_portainer = false`, add the secrets to the vault it created, then
+apply again with it on. (The wildcard certificate has the same shape of
+bootstrap, for the same reason.) An apply that cannot find the licence secret
+fails rather than installing an unlicensed server.
+
+```hcl
+enable_portainer                     = true
+portainer_hostname                   = "portainer.onek8s.lol"
+portainer_admin_password_secret_name = "portainer-admin-password"   # null = set it in the browser
+```
+
+The DNS record carries more than the UI: `portainer.onek8s.lol:8000` on the
+same load balancer is the Edge tunnel the agents on the other clouds connect
+back to (Portainer derives that address from the host of its own URL). The
+Azure foundation opens that port as an extra Traefik entrypoint, so one A
+record covers both.
+
+Set `enable_portainer = false` to skip the whole thing. Details and
+trade-offs: [portainer.md](portainer.md).
+
 ## 4. Onboard tenants
 
 There is one tenants stack and one state file per environment, covering every
@@ -383,7 +427,7 @@ Terraform:
 2. an A record per host — `azure-hello.onek8s.lol`, `aws-hello.onek8s.lol`,
    … — pointed at that cluster's Traefik Service, like every other host here,
 3. the test secret in each cloud's backend, which the **Renew Certificate**
-   workflow writes (section 7); until it exists the page renders "not
+   workflow writes (section 8); until it exists the page renders "not
    available" rather than failing.
 
 `platform_apps = { enabled = false }` registers spokes without deploying
@@ -423,7 +467,58 @@ database user"* rather than failing. Plus the usual two: the image public on
 GHCR, and an A record for `azure-db-hello.onek8s.lol`. Details, the free
 offer's limits and the known gaps: [db-hello-app.md](db-hello-app.md).
 
-## 6. Give the tenant a secret and consume it
+## 6. Onboard the clusters into Portainer
+
+Portainer runs only on the AKS cluster (step 3), where it manages that cluster
+itself. The `portainer/` stack onboards the other three: it registers one
+Portainer environment per cluster through the server's API and installs an
+**Edge Agent** on each with the Edge key that registration generates. One
+stack, one state file per environment, the cloud as a key of `var.agents`:
+
+```hcl
+# portainer/envs/prototype.tfvars
+agents = {
+  aws = {}   # or: { name = "eks-prototype", cluster_role = "view" }
+  gcp = {}
+  oci = {}
+}
+```
+
+```bash
+cd portainer
+terraform init -backend-config=backend/prototype.hcl
+PORTAINER_USER=admin PORTAINER_PASSWORD='<password>' \
+  terraform apply -var-file=envs/prototype.tfvars
+```
+
+Or via Actions: **Deploy Portainer** → environment `prototype`.
+
+Unlike the other stacks this one calls an API over the public host name, so
+its prerequisites include DNS:
+
+1. `foundations/azure` applied with `enable_portainer = true` and the
+   `portainer-license` secret in its Key Vault.
+2. An A record for `portainer.onek8s.lol` pointing at the AKS ingress load
+   balancer. It carries both the UI (:443) and the Edge tunnel (:8000).
+3. The foundations of every cloud listed in `var.agents`.
+4. `PORTAINER_API_KEY`, or `PORTAINER_USER` + `PORTAINER_PASSWORD` — the
+   provider reads them from the environment; the endpoint comes from the hub's
+   state.
+
+Then `terraform output environments` lists what was registered, and the
+agents show up in the UI within a check-in interval:
+
+```
+$ kubectl -n portainer logs deploy/portainer-agent    # on any spoke
+... [INFO] [edge] [message: Edge agent registered with the Portainer instance]
+```
+
+Each agent is granted `cluster-admin` on its own cluster — what Portainer
+assumes, and wider than Argo CD's spoke ServiceAccount. The reasoning, the
+`view` alternative and the operational commands are in
+[portainer.md](portainer.md).
+
+## 7. Give the tenant a secret and consume it
 
 ```bash
 # AWS naming contract: <env>/<tenant>/<name>
@@ -445,12 +540,12 @@ prefix fails at the cloud IAM layer.
 The `hello` application is the working version of exactly that, on all four
 clouds at once — its secret is `test` under the `team-alpha` prefix, and it is
 the one tenant secret nobody has to write: the **Renew Certificate** workflow
-generates it in Key Vault and distributes it with the wildcard (section 7).
+generates it in Key Vault and distributes it with the wildcard (section 8).
 [hello-app.md](hello-app.md) has the four commands to seed it by hand instead
 (note the AWS one: the secret must be encrypted with the tenant CMK, or the
 tenant's scoped `kms:Decrypt` grant cannot read it back).
 
-## 7. Wildcard certificate renewal
+## 8. Wildcard certificate renewal
 
 The **Renew Certificate** workflow keeps a Let's Encrypt wildcard for the
 Azure-hosted `onek8s.lol` zone in the AKS cluster's Key Vault. It runs monthly,
@@ -619,7 +714,7 @@ assigns), and write access to each target backend from the deploy identity of
 that cloud. A cloud that refuses the write fails the run but does not stop the
 other two — check the run summary, which lists every target and its result.
 
-## 8. Observability with Grafana Cloud (optional)
+## 9. Observability with Grafana Cloud (optional)
 
 Every foundation can run Grafana Alloy and ship that cluster's metrics, logs
 and events to one Grafana Cloud stack, where all four clusters show up under

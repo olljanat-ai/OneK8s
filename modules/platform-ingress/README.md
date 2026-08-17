@@ -24,6 +24,7 @@ module "ingress" {
 | TLS | `websecure` terminates TLS; the default `TLSStore` serves `platform-wildcard-tls` |
 | Address | `Service` type `LoadBalancer`, annotated per cloud; Traefik publishes it into every Ingress' status |
 | Dashboard + API | published on `var.dashboard_hostname` when one is given, **unauthenticated**; null keeps it off |
+| Extra entrypoints | `var.extra_ports`, merged into the chart's `ports` — see below |
 
 ## The dashboard and API
 
@@ -85,6 +86,29 @@ spec:
 The hostname must be **one label deep** under the certificate's domain:
 `*.onek8s.lol` covers `web-team-alpha.onek8s.lol` but not
 `web.team-alpha.onek8s.lol`.
+
+## Extra entrypoints
+
+`extra_ports` is merged into the chart's `ports` map, so a caller can open a
+port on the ingress load balancer for something that does not speak HTTP —
+the Azure foundation uses it for Portainer's Edge tunnel:
+
+```hcl
+extra_ports = {
+  portainer-edge = {
+    port        = 8100          # inside the pod: must not collide with web (8000),
+    exposedPort = 8000          # websecure (8443), traefik (8080) or metrics (9100)
+    expose      = { default = true }
+    protocol    = "TCP"
+  }
+}
+```
+
+Two entrypoints on one container port make Traefik refuse to start, which is
+why the internal and the exposed port are separate here. Everything listed
+becomes public on the load balancer, so nothing belongs here that is not meant
+to be. Routing the traffic on is the caller's job, usually an `IngressRouteTCP`
+passed through `extra_objects`.
 
 ## Notes
 

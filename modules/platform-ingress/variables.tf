@@ -34,6 +34,12 @@ variable "service_annotations" {
   default     = {}
 }
 
+variable "extra_ports" {
+  description = "Extra Traefik entrypoints, merged into the chart's `ports` map (the web/websecure pair this module configures is kept). One entry per entrypoint, e.g. a plain TCP port fronting a platform service that does not speak HTTP; each one is opened on the ingress load balancer, so nothing belongs here that is not meant to be public."
+  type        = any
+  default     = {}
+}
+
 variable "extra_objects" {
   description = "Extra manifests rendered with the release, as a list of objects. This is where the certificate plumbing lives: the platform ServiceAccount, its ESO SecretStore and the ExternalSecret that fills the default certificate."
   type        = any

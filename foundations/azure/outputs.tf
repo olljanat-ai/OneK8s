@@ -70,6 +70,21 @@ output "argocd_namespace" {
   value       = local.argocd_namespace
 }
 
+output "portainer_url" {
+  description = "Public URL of the Portainer UI, and the address Edge Agents poll (null when Portainer is disabled). The portainer/ stack registers every spoke against it."
+  value       = local.portainer_enabled ? local.portainer_url : null
+}
+
+output "portainer_namespace" {
+  description = "Namespace the Portainer server runs in on this cluster."
+  value       = local.portainer_enabled ? local.portainer_namespace : null
+}
+
+output "portainer_edge_tunnel" {
+  description = "Address Edge Agents open their reverse tunnel to — the ingress load balancer on Portainer's tunnel port. Null when the tunnel is not published, in which case Edge environments can be registered but not browsed."
+  value       = local.portainer_edge_published ? "${var.portainer_hostname}:${local.portainer_edge_port}" : null
+}
+
 output "ingress_class_name" {
   description = "IngressClass of the Traefik ingress controller (the cluster default), null when ingress is disabled."
   value       = var.enable_ingress ? local.ingress_class_name : null

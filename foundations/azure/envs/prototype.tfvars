@@ -32,6 +32,17 @@ enable_sql         = true
 sql_database_name  = "appdb"
 sql_use_free_limit = true
 
+# Portainer Business Edition: the fleet console for all four clouds. The
+# licence is read from this environment's Key Vault, so nothing is typed into
+# the UI on a rebuild; the admin account is bootstrapped from Key Vault too,
+# which is what the portainer/ stack then authenticates as to register the
+# spokes. Both secrets are put in the vault out of band — see
+# docs/getting-started.md.
+enable_portainer                     = true
+portainer_hostname                   = "portainer.onek8s.lol"
+portainer_license_secret_name        = "portainer-license"
+portainer_admin_password_secret_name = "portainer-admin-password"
+
 # Entra group object ID -> Argo CD role. Anyone authenticated but unmapped
 # falls through to argocd_rbac_default_role (read-only).
 argocd_rbac_group_roles = {

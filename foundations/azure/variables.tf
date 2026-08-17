@@ -302,6 +302,68 @@ variable "sql_firewall_rules" {
   default = {}
 }
 
+variable "enable_portainer" {
+  description = "Install Portainer Business Edition on this cluster — the platform's fleet console for all four clouds — and publish it through the platform ingress."
+  type        = bool
+  default     = true
+}
+
+variable "portainer_hostname" {
+  description = "Public host name of the Portainer UI. Must be covered by var.ingress_certificate_name and have a DNS record pointing at the cluster's ingress load balancer. Edge Agents also reach the tunnel at this name on port 8000, because Portainer derives the tunnel address from the host of its own URL."
+  type        = string
+  default     = "portainer.onek8s.lol"
+}
+
+variable "portainer_chart_version" {
+  description = "Portainer Helm chart version. The chart pins the Business Edition image tag, so this is the one place the server version is set."
+  type        = string
+  default     = "239.6.0"
+}
+
+variable "portainer_license_secret_name" {
+  description = "Key Vault secret holding the Portainer Business Edition licence key. It is passed to the server as --license-key at boot, so a rebuilt cluster comes up licensed. Read at apply time: on a brand-new environment, whose vault this same apply creates, apply once with enable_portainer = false and add the secret first."
+  type        = string
+  default     = "portainer-license"
+}
+
+variable "portainer_admin_password_secret_name" {
+  description = "Key Vault secret holding the password of Portainer's initial 'admin' account, used once at first start. Null leaves the account to be created in the browser instead — but the portainer/ stack authenticates as that account, so an unattended install sets this."
+  type        = string
+  default     = null
+}
+
+variable "portainer_storage_size" {
+  description = "Size of the Portainer data volume. It holds the Portainer database: users, environments and their Edge keys."
+  type        = string
+  default     = "10Gi"
+}
+
+variable "portainer_storage_class" {
+  description = "StorageClass of the Portainer data volume (null = the cluster's default class)."
+  type        = string
+  default     = null
+}
+
+variable "portainer_resources" {
+  description = "Resource requests/limits of the Portainer container."
+  type        = any
+  default = {
+    requests = {
+      cpu    = "50m"
+      memory = "256Mi"
+    }
+    limits = {
+      memory = "1Gi"
+    }
+  }
+}
+
+variable "portainer_extra_flags" {
+  description = "Extra Portainer server command-line arguments, appended after --license-key (the chart renders them verbatim), e.g. [\"--log-level=DEBUG\"]."
+  type        = list(string)
+  default     = []
+}
+
 variable "enable_baseline_policy" {
   description = "Assign the AKS pod security baseline policy initiative to the resource group."
   type        = bool

@@ -43,6 +43,7 @@ jobs:
           - foundations/oci
           - tenants
           - gitops
+          - portainer
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -228,7 +229,8 @@ jobs:
         # "cloud" only selects which credentials and CLIs the job sets up; the
         # backend/*.hcl + envs/*.tfvars stem is the environment name. The single
         # tenants stack covers every cloud in one plan, so it needs them all,
-        # and so does gitops — it talks to the hub and to every spoke.
+        # and so do gitops and portainer — they talk to the hub and to every
+        # other cluster.
         include:
           - stack: foundations/azure
             cloud: azure
@@ -241,6 +243,8 @@ jobs:
           - stack: tenants
             cloud: all
           - stack: gitops
+            cloud: all
+          - stack: portainer
             cloud: all
     env:
       # azurerm/azapi providers (and the azurerm state backend) pick these up
@@ -262,6 +266,12 @@ jobs:
       OCI_CLI_REGION: ${{ vars.OCI_REGION }}
       OCI_CLI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
       OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_PRIVATE_KEY }}
+      # The portainer provider reads its credentials straight from the
+      # environment; the endpoint comes from the hub's state, not from here.
+      # Ignored by every other stack.
+      PORTAINER_API_KEY: ${{ secrets.PORTAINER_API_KEY }}
+      PORTAINER_USER: ${{ vars.PORTAINER_USER }}
+      PORTAINER_PASSWORD: ${{ secrets.PORTAINER_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
