@@ -93,6 +93,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Workload guardrail | Pod Security admission, `restricted` (labels on the ARM managed namespace) | Pod Security admission, `restricted` | same | same |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
+| Monitoring | **Grafana Alloy** + ESO (Key Vault) | **Grafana Alloy** + ESO (Secrets Manager) | **Grafana Alloy** + ESO (Secret Manager) | **Grafana Alloy** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
 | Application database | **Azure SQL** on the free offer, Entra-only auth (`sql.tf`) | — | — | — |
@@ -263,6 +264,51 @@ rather than a chiseled one (`Microsoft.Data.SqlClient` needs ICU), so there
 *is* a root user in that image to drop from. See [hello-app.md](hello-app.md)
 and [db-hello-app.md](db-hello-app.md).
 
+## Monitoring: one Grafana Cloud stack, four clusters
+
+Every foundation can install the **same collector** — Grafana Alloy, from
+`modules/platform-monitoring` (Grafana's k8s-monitoring chart), opt-in per
+environment with `enable_monitoring` — and ship metrics, logs and cluster
+events to one Grafana Cloud stack. The clusters are told apart there by a
+single derived label, `cluster = <prefix>-<cloud>-<environment>`, so "how many
+nodes does the platform have" is one query rather than four dashboards.
+
+Only the collectors the enabled features need are created: `alloy-metrics` (a
+clustered StatefulSet), `alloy-logs` (a DaemonSet, when pod or node logs are
+on), `alloy-singleton` (cluster events) and `alloy-receiver` (an OTLP endpoint,
+off by default). Nothing else is added — no in-cluster Prometheus, no Grafana,
+no storage. The cluster collects and forwards; Grafana Cloud keeps.
+
+The credentials follow the certificate's path exactly, because it is the path
+that already exists for "one secret, every cloud":
+
+```
+Publish Grafana Cloud Credentials --> Key Vault  platform-grafana-cloud
+                                        │
+                        ┌───────────────┼───────────────┐
+                        ▼               ▼               ▼
+                 Secrets Manager  Secret Manager    OCI Vault
+                        │               │               │
+                        └── ESO SecretStore + ExternalSecret, per cluster ──┐
+                                                                            ▼
+                                          Secret monitoring/grafana-cloud-credentials
+                                                    │
+                                                    ▼  Alloy remote.kubernetes.secret
+                                             the destinations' basic auth
+```
+
+Two properties are the reason for it. The token is in **no state file** —
+Terraform names the backend object and the Kubernetes Secret, and nothing else
+— and Alloy *polls* that Secret instead of reading it at startup, so a rotated
+token is picked up without an apply and without restarting a collector.
+
+The identity doing the reading is a second platform identity, beside the
+ingress' one and built from the same parts, but granted **one secret** rather
+than the `platform-` prefix: the monitoring identity cannot read the wildcard
+certificate's private key, and the ingress identity cannot read the Grafana
+Cloud token. Details, feature set and trade-offs:
+[monitoring.md](monitoring.md).
+
 ## GitOps: one hub, spokes on the other clouds
 
 The Azure foundation additionally carries the platform's delivery plane:
@@ -382,6 +428,14 @@ spec:
   environment — `<cloud>-<env>` for foundations, `tenants-<env>` and
   `gitops-<env>` for the two all-clouds stacks — so protection rules
   (required reviewers, wait timers) gate production applies.
+- `publish-grafana-credentials.yml` — on demand; builds the Grafana Cloud
+  access-policy token and instance IDs into one JSON object, writes it to the
+  environment's Key Vault and copies it to the AWS, GCP and OCI backends. It
+  resolves the vault and the three targets out of the foundation states the way
+  the certificate distribution does, so a cloud with no foundation in the
+  environment is skipped rather than failing the run, and the three pushes are
+  independent. This is the whole reason no cluster's monitoring credentials
+  come from a Terraform variable.
 - `renew-certificate.yml` — daily issuance/renewal of the `*.onek8s.lol`
   wildcard from Let's Encrypt, solved with DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imported into the environment's Key Vault. It binds
@@ -519,6 +573,25 @@ spec:
   CA) has to bring an `Ingress` with a `tls:` section and a secret it
   manages. That case is not wired up: nothing today issues per-tenant
   certificates.
+- The Grafana Cloud credentials are copied into four backends, so a rotation is
+  only complete once every copy is refreshed and nothing reconciles them —
+  exactly the wildcard certificate's trade, made for the same reason. Nothing
+  rotates the token on a schedule either, and nothing notices when it expires:
+  the first symptom is remote writes failing on four clusters at once.
+- Telemetry has no tenant boundary. Every namespace's pod logs and every
+  annotated Service's metrics go to one Grafana Cloud stack, where access is
+  granted in Grafana Cloud rather than here — so the hard, cloud-enforced
+  isolation the secret backends have has no counterpart in the observability
+  plane. A per-tenant stack (or at least a per-tenant policy) plus a collector
+  that knows which namespace belongs to whom is what it would take.
+- The monitoring collectors are a real workload on a one-node prototype: three
+  Alloy instances plus kube-state-metrics and Node Exporter request roughly a
+  third of a `Standard_B2s`/`t3.medium` between them at the `small` preset. Node
+  Exporter also wants host mounts, which the AKS pod security baseline
+  initiative flags — harmlessly while that initiative is in `audit` mode, which
+  is how `foundations/azure` assigns it, and as a blocked DaemonSet in an
+  environment that flips it to `deny` without an exemption for the `monitoring`
+  namespace.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
 - All state lives in the Azure Storage state home, so every deploy — AWS,
   GCP and OCI foundations included — needs Azure credentials in addition to
