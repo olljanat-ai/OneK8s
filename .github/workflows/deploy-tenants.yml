@@ -54,10 +54,16 @@ jobs:
   # job, so an unreachable database shows up as its own red mark and never
   # touches the apply that already succeeded.
   #
-  # Every step is guarded: no SQL server in this environment's Azure foundation
-  # (enable_sql = false) or no Azure tenants, and the job does nothing. The
-  # bootstrap command is idempotent, so it runs on every deploy — which is also
-  # how a schema change reaches the database.
+  # The work itself is apps/db-hello/bootstrap.sh, not steps written out here,
+  # because an operator who applies the stacks from a laptop needs the same act
+  # and CI is not available to them. One script, two callers: this job runs it
+  # as the deploy service principal, and `./apps/db-hello/bootstrap.sh` run as
+  # the server's Entra administrator does exactly what this job does.
+  #
+  # It is guarded and idempotent: no SQL server in this environment's Azure
+  # foundation (enable_sql = false) or no Azure tenants, and it does nothing —
+  # so it runs on every deploy, which is also how a schema change reaches the
+  # database.
   sql:
     name: Azure SQL access (${{ inputs.environment || 'prototype' }})
     needs: tenants
@@ -84,10 +90,6 @@ jobs:
       AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      # Firewall rule opened for this run and removed again at the end: the
-      # server carries no standing exception for CI, and the cluster reaches it
-      # over the AKS subnet's service endpoint instead.
-      FIREWALL_RULE: tenants-sql-${{ github.run_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -95,51 +97,11 @@ jobs:
         with:
           terraform_version: "1.15.8"
 
-      # The database is addressed by convention, not by configuration:
-      # whichever server this environment's Azure foundation built is the one
-      # the applications connect to, so it is the one to bootstrap.
-      - name: Resolve the database from the foundation state
-        id: db
-        working-directory: foundations/azure
-        run: |
-          set -euo pipefail
-          terraform init -input=false -backend-config="backend/${TF_ENV}.hcl"
-          server="$(terraform output -raw sql_server_fqdn 2>/dev/null || true)"
-          database="$(terraform output -raw sql_database_name 2>/dev/null || true)"
-          if [ -z "$server" ] || [ "$server" = "null" ] || [ -z "$database" ]; then
-            echo "No SQL server in the ${TF_ENV} Azure foundation; nothing to do."
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          {
-            echo "found=true"
-            echo "server=$server"
-            echo "database=$database"
-            echo "name=${server%%.*}"
-            echo "group=$(terraform output -raw resource_group_name)"
-          } >> "$GITHUB_OUTPUT"
-          echo "Database: $database on $server"
-
-      # Identities are read from the tenants stack rather than guessed from the
-      # naming convention: whatever that stack says is a tenant's identity is
-      # the one whose token its pods will present.
-      - name: Resolve the Azure tenants from the tenants state
-        id: tenants
-        if: steps.db.outputs.found == 'true'
-        working-directory: tenants
-        run: |
-          set -euo pipefail
-          terraform init -input=false -backend-config="backend/${TF_ENV}.hcl"
-          terraform output -json tenants \
-            | jq -r '.[] | select(.cloud == "azure") | [.namespace, .identity] | @tsv' \
-            > /tmp/azure-tenants.tsv
-          count="$(wc -l < /tmp/azure-tenants.tsv)"
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          echo "Azure tenants: $count"
-          cut -f1 /tmp/azure-tenants.tsv
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
 
       - name: Log in to Azure
-        if: steps.tenants.outputs.count > 0
         run: |
           set -euo pipefail
           az login --service-principal \
@@ -149,95 +111,33 @@ jobs:
             --output none
           az account set --subscription "$ARM_SUBSCRIPTION_ID"
 
-      - uses: actions/setup-dotnet@v4
-        if: steps.tenants.outputs.count > 0
-        with:
-          dotnet-version: "10.0.x"
-
-      # Published once and invoked per tenant. This is the same code the pod
-      # runs; the only difference is whose token the interceptor puts on the
-      # connection — here the Entra administrator's, in the pod a federated
-      # ServiceAccount token.
+      # Published once and invoked per tenant by the script. This is the same
+      # code the pod runs; the only difference is whose token the interceptor
+      # puts on the connection — here the Entra administrator's, in the pod a
+      # federated ServiceAccount token.
       - name: Build the bootstrap command
-        if: steps.tenants.outputs.count > 0
         run: dotnet publish apps/db-hello/src -c Release -o /tmp/db-hello
 
-      - name: Open the firewall for this runner
-        if: steps.tenants.outputs.count > 0
-        env:
-          SERVER: ${{ steps.db.outputs.name }}
-          GROUP: ${{ steps.db.outputs.group }}
-        run: |
-          set -euo pipefail
-          ip="$(curl -fsS https://api.ipify.org)"
-          [ -n "$ip" ] || { echo "::error::Could not determine the runner's public address." >&2; exit 1; }
-          az sql server firewall-rule create \
-            --resource-group "$GROUP" --server "$SERVER" \
-            --name "$FIREWALL_RULE" --start-ip-address "$ip" --end-ip-address "$ip" \
-            --output none
-          echo "Opened $FIREWALL_RULE for $ip"
-
-      # One firewall rule, one publish, N tenants. The database user is named
-      # after the managed identity — which is what `CREATE USER ... FROM
-      # EXTERNAL PROVIDER` would have called it, so the application's page
-      # names something recognisable in the portal. The lookup is an ARM one;
-      # the directory is never read.
       - name: Apply the migrations and grant each tenant access
-        if: steps.tenants.outputs.count > 0
         env:
-          SQL_SERVER: ${{ steps.db.outputs.server }}
-          SQL_DATABASE: ${{ steps.db.outputs.database }}
-          GROUP: ${{ steps.db.outputs.group }}
+          DB_HELLO_DLL: /tmp/db-hello/db-hello.dll
         run: |
+          # pipefail, or `tee` would swallow a failed bootstrap and leave the
+          # job green with a database nobody can log in to.
           set -euo pipefail
-          identities="$(az identity list --resource-group "$GROUP" \
-            --query "[].{name:name,clientId:clientId}" -o json)"
-
-          while IFS=$'\t' read -r namespace client_id; do
-            user="$(jq -r --arg c "$client_id" \
-              '.[] | select(.clientId == $c) | .name' <<< "$identities")"
-            if [ -z "$user" ]; then
-              echo "::error::No managed identity with client ID $client_id in $GROUP (tenant $namespace)." >&2
-              exit 1
-            fi
-            echo "--- $namespace"
-            dotnet /tmp/db-hello/db-hello.dll bootstrap --user "$user" --client-id "$client_id"
-          done < /tmp/azure-tenants.tsv | tee /tmp/bootstrap.out
-
-      - name: Close the firewall
-        if: always() && steps.tenants.outputs.count > 0
-        env:
-          SERVER: ${{ steps.db.outputs.name }}
-          GROUP: ${{ steps.db.outputs.group }}
-        run: |
-          set -euo pipefail
-          az sql server firewall-rule delete \
-            --resource-group "$GROUP" --server "$SERVER" \
-            --name "$FIREWALL_RULE" --output none 2>/dev/null || true
-          echo "Removed $FIREWALL_RULE"
+          ./apps/db-hello/bootstrap.sh "$TF_ENV" | tee /tmp/bootstrap.out
 
       - name: Summary
         if: always()
-        env:
-          SQL_SERVER: ${{ steps.db.outputs.server }}
-          SQL_DATABASE: ${{ steps.db.outputs.database }}
         run: |
           {
             echo "### Azure SQL access (${TF_ENV})"
             echo
-            if [ "${{ steps.db.outputs.found }}" != "true" ]; then
-              echo "_No SQL server in this environment's Azure foundation — nothing to do._"
+            if [ -f /tmp/bootstrap.out ]; then
+              echo '```'
+              cat /tmp/bootstrap.out
+              echo '```'
             else
-              echo "| | |"
-              echo "|---|---|"
-              echo "| Server | \`${SQL_SERVER}\` |"
-              echo "| Database | \`${SQL_DATABASE}\` |"
-              echo "| Azure tenants | ${{ steps.tenants.outputs.count || 0 }} |"
-              echo
-              if [ -f /tmp/bootstrap.out ]; then
-                echo '```'
-                cat /tmp/bootstrap.out
-                echo '```'
-              fi
+              echo "_The bootstrap did not run; see the job log._"
             fi
           } >> "$GITHUB_STEP_SUMMARY"

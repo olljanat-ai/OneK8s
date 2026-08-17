@@ -164,7 +164,7 @@ namespace OneK8s.DbHello
         private static Result Explain(SqlException e) => e.Number switch
         {
             18456 => new Result(null, "no database user",
-                "This identity authenticated to Entra ID but has no user in the database. Run Deploy Tenants for this environment."),
+                "This identity authenticated to Entra ID but has no user in the database — or has one carrying somebody else's SID. Run Deploy Tenants for this environment, or apps/db-hello/bootstrap.sh as the server's Entra administrator."),
             229 or 230 => new Result(null, "not authorized",
                 "The database user exists but is missing db_datareader/db_datawriter. Re-run Deploy Tenants."),
             208 => new Result(null, "no schema",

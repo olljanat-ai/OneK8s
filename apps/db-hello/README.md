@@ -16,6 +16,7 @@ apps/db-hello/
 │   ├── Data/EntraTokenInterceptor.cs    where the password would have been
 │   ├── Data/VisitsContextFactory.cs     a context with no web app around it
 │   └── Migrations/                      generated, committed, applied by CI
+├── bootstrap.sh    # migrate + grant for every Azure tenant, from CI or by hand
 ├── Dockerfile      # SDK build → chiseled-extra ASP.NET runtime (SqlClient needs ICU)
 └── chart/          # what Argo CD renders on the hub
 ```
@@ -28,10 +29,21 @@ DDL to it. The same image carries a second entry point for that —
 db-hello bootstrap --user <identity> --client-id <guid>
 ```
 
-— which applies the migrations and creates the tenant's database user. The
-**Deploy Tenants** workflow runs it as the server's Entra administrator for
-every Azure tenant it onboards, and re-running it is how a later model change
-reaches the database.
+— which applies the migrations and creates the tenant's database user.
+`bootstrap.sh` is what invokes it: it resolves the database and every Azure
+tenant's identity from Terraform state, opens a firewall rule for the address
+it runs from and closes it again, and calls the command once per tenant.
+
+```bash
+az login                                # as the server's Entra administrator
+./apps/db-hello/bootstrap.sh prototype
+```
+
+The **Deploy Tenants** workflow runs that same script for every Azure tenant it
+onboards, and re-running either is how a later model change reaches the
+database. Nothing else creates the database user — `terraform apply` cannot,
+which is why a freshly applied foundation shows `no database user` until this
+has run.
 
 Every page view is a row: the app adds a `Visit`, saves it, then reads the last
 ten back with LINQ and prints them, along with who the database thinks it is.
@@ -66,7 +78,7 @@ instead of failing:
 | What the page says | What it means |
 |---|---|
 | `resuming` | the free-tier database auto-paused; it is waking up (EF's retrying execution strategy tried first) |
-| `no database user` | the identity is fine, but **Deploy Tenants** has not run since this tenant was added |
+| `no database user` | the identity is fine, but the bootstrap has not run since this tenant (or this database) was created — `./apps/db-hello/bootstrap.sh <environment>`, or **Deploy Tenants**, which runs the same script |
 | `no schema` | the user exists but the `visits` table does not — same workflow applies the migrations |
 
 `GET /healthz` is the liveness and readiness probe, and deliberately does

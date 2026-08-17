@@ -402,9 +402,15 @@ tenant's identity has no user in the database until somebody creates one:
 
 ```bash
 gh workflow run deploy-tenants.yml -f environment=prototype
+
+# or, if you applied the stacks yourself rather than through CI — as the SQL
+# server's Entra administrator, which by default is whoever applied
+# foundations/azure. Same script the workflow runs.
+az login
+./apps/db-hello/bootstrap.sh prototype
 ```
 
-That runs the application's own `bootstrap` command as the SQL server's Entra
+Either runs the application's own `bootstrap` command as the SQL server's Entra
 administrator: it applies the EF Core migrations — the schema is code-first, so
 the model in `apps/db-hello/src/Data` is where the table is defined — and
 creates the database user with `db_datareader` + `db_datawriter`. It is safe to

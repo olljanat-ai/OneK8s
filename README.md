@@ -219,11 +219,13 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   produce an artefact rather than applying Terraform — from there Argo CD takes
   over.
   **Deploy Tenants** has a second job for the one thing a tenant gets that
-  cannot be a Terraform resource: it runs `db-hello bootstrap`, the
-  application's own migrate-and-grant command, as the SQL server's Entra
-  administrator, for every Azure tenant the apply just onboarded. Idempotent,
-  and where a later schema change is deployed from — neither a table nor a
-  database user has an ARM representation, so neither can be in the stack.
+  cannot be a Terraform resource: it runs `apps/db-hello/bootstrap.sh`, which
+  invokes the application's own migrate-and-grant command as the SQL server's
+  Entra administrator for every Azure tenant the apply just onboarded.
+  Idempotent, and where a later schema change is deployed from — neither a
+  table nor a database user has an ARM representation, so neither can be in
+  the stack. Run the same script by hand after applying the stacks by hand;
+  `terraform apply` alone never creates the database user.
 - **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together
