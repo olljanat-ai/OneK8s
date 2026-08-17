@@ -155,13 +155,16 @@ collectors without an apply or a restart.
 
 ```hcl
 # foundations/<cloud>/envs/<env>.tfvars — the endpoints are the configuration
-enable_observability         = true
+enable_observability      = true
 grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
 ```
 
-Off by default, per cloud and per environment. Setup, the feature set and the
-trade-offs: [docs/observability.md](docs/observability.md).
+**Azure** and **AWS** — the two clouds this lab runs — carry this stack's
+endpoints as their defaults, so the collectors come up with the foundation;
+GCP and OCI stay off until their endpoints are set. On or off per cloud and
+per environment either way. Setup, the feature set and the trade-offs:
+[docs/observability.md](docs/observability.md).
 
 ## GitOps
 

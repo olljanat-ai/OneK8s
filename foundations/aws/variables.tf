@@ -82,7 +82,7 @@ variable "ingress_dashboard_hostname" {
 }
 
 variable "enable_observability" {
-  description = "Install the Grafana k8s-monitoring collectors and ship this cluster's metrics, logs and events to Grafana Cloud. Off by default: it needs a Grafana Cloud stack's endpoints, and its credentials in Secrets Manager under var.grafana_cloud_secret_name."
+  description = "Install the Grafana k8s-monitoring collectors and ship this cluster's metrics, logs and events to Grafana Cloud. Needs a Grafana Cloud stack's endpoints, and its credentials in Secrets Manager under var.grafana_cloud_secret_name."
   type        = bool
   default     = true
 

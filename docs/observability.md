@@ -20,9 +20,10 @@ only in the value of their `cluster` label.
                     └───────────────┘ └───────────┘  └─────────────┘
 ```
 
-It is off by default (`enable_observability = false`), because it needs two
-things this repository cannot invent: a Grafana Cloud stack's endpoints, and
-its credentials.
+It needs two things this repository cannot invent: a Grafana Cloud stack's
+endpoints, and its credentials. Azure and AWS have this lab's endpoints as
+their defaults and run the collectors on every apply; GCP and OCI have none
+configured and stay off (`enable_observability = false`) until they do.
 
 ## What runs in the cluster
 
@@ -51,7 +52,7 @@ What each foundation turns on by default:
 | Host metrics (Node Exporter) | on | — |
 | Annotation autodiscovery (`prometheus.io/scrape`) | on | — |
 | Cluster events → logs | on | — |
-| Pod logs | on | `observability_enable_pod_logs` |
+| Pod logs | off on Azure and AWS, on elsewhere | `observability_enable_pod_logs` |
 | Node (journald) logs | off | — |
 | Application observability (OTLP receiver) | off | — |
 
@@ -82,11 +83,13 @@ round trip through the OpenTelemetry data model:
 
 The URLs are on the stack's **Details** page in Grafana Cloud. They are not
 derivable from the stack's name — every stack is assigned its own cluster of
-hosted endpoints — so they are configuration, per environment, in
-`foundations/<cloud>/envs/<env>.tfvars`:
+hosted endpoints — so they are configuration. All four clouds write to the same
+stack, so Azure and AWS carry this lab's endpoints as defaults in
+`foundations/<cloud>/variables.tf`; another stack, or another environment on
+the same cloud, overrides them in `foundations/<cloud>/envs/<env>.tfvars`:
 
 ```hcl
-enable_observability         = true
+enable_observability      = true
 grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
 grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional

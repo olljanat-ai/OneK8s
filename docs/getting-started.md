@@ -714,19 +714,22 @@ assigns), and write access to each target backend from the deploy identity of
 that cloud. A cloud that refuses the write fails the run but does not stop the
 other two — check the run summary, which lists every target and its result.
 
-## 9. Observability with Grafana Cloud (optional)
+## 9. Observability with Grafana Cloud
 
 Every foundation can run Grafana Alloy and ship that cluster's metrics, logs
 and events to one Grafana Cloud stack, where all four clusters show up under
-`onek8s-<cloud>-<environment>`. It is off until two things exist, and neither
-of them can be guessed from this repository.
+`onek8s-<cloud>-<environment>`. It needs two things, and neither of them can be
+guessed from this repository.
 
 1. **The endpoints**, which are per stack and on its Details page in Grafana
-   Cloud. They go into each cloud's tfvars, where a commented block is waiting:
+   Cloud. Azure and AWS already carry this lab's stack as defaults in
+   `foundations/<cloud>/variables.tf` — a different stack, or one of the two
+   clouds that are still off, is configured in that cloud's tfvars, where a
+   commented block is waiting:
 
    ```hcl
    # foundations/<cloud>/envs/prototype.tfvars
-   enable_observability         = true
+   enable_observability      = true
    grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
    grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
    grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional
@@ -759,10 +762,11 @@ kubectl -n observability get externalsecret grafana-cloud   # SecretSynced
 kubectl -n observability get alloy                          # one per collector
 ```
 
-Pod logs are on by default and are the largest single contributor to the bill
-on a chatty cluster — `observability_enable_pod_logs = false` leaves metrics and
-cluster events untouched. Feature set, the cluster label, rotation and the
-trade-offs: [observability.md](observability.md).
+Pod logs are the largest single contributor to the bill on a chatty cluster, so
+Azure and AWS ship with `observability_enable_pod_logs = false`; metrics and
+cluster events are unaffected by that, and `= true` turns the log DaemonSet on.
+Feature set, the cluster label, rotation and the trade-offs:
+[observability.md](observability.md).
 
 ## Troubleshooting
 
