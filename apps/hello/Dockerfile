@@ -13,7 +13,8 @@ RUN dotnet restore
 COPY src/ ./
 RUN dotnet publish -c Release --no-restore -o /app
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
+# FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-amd64 AS final
 WORKDIR /app
 COPY --from=build /app ./
 
