@@ -20,7 +20,8 @@ RUN dotnet publish -c Release --no-restore -o /app
 # `-chiseled` tag. The paired `<InvariantGlobalization>false` in
 # src/DbHello.csproj is the other half of this; change one and the other has to
 # follow.
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra AS final
+# FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra AS final
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-amd64 AS final
 WORKDIR /app
 COPY --from=build /app ./
 
