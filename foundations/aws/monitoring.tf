@@ -1,5 +1,5 @@
-# Grafana Cloud monitoring, the same module every other cloud runs
-# (modules/platform-monitoring), plus the one thing that is AWS-shaped: reading
+# Grafana Cloud observability, the same module every other cloud runs
+# (modules/platform-observability), plus the one thing that is AWS-shaped: reading
 # the Grafana Cloud credentials out of Secrets Manager.
 #
 # The credentials arrive there the way the wildcard certificate does — written
@@ -12,30 +12,30 @@
 #       Secret grafana-cloud-credentials
 #         --(Alloy remote.kubernetes.secret)--> Grafana Cloud
 locals {
-  monitoring_namespace            = "monitoring"
-  monitoring_service_account_name = "platform-monitoring"
-  monitoring_secret_store_name    = "platform-store"
-  monitoring_credentials_secret   = "grafana-cloud-credentials"
+  observability_namespace            = "observability"
+  observability_service_account_name = "platform-observability"
+  observability_secret_store_name    = "platform-store"
+  observability_credentials_secret   = "grafana-cloud-credentials"
 
   # Secrets Manager names are hierarchical, so the flat Key Vault name becomes
   # a path under the reserved "platform" tenant — the same translation
   # ingress.tf does for the certificate.
-  monitoring_credentials_remote_key = "${var.environment}/platform/${trimprefix(var.grafana_cloud_secret_name, "platform-")}"
+  observability_credentials_remote_key = "${var.environment}/platform/${trimprefix(var.grafana_cloud_secret_name, "platform-")}"
 
   # One Grafana Cloud stack holds all four clusters, told apart only by this
   # label, so it carries both the cloud and the environment.
-  monitoring_cluster_name = "${var.name_prefix}-aws-${var.environment}"
+  observability_cluster_name = "${var.name_prefix}-aws-${var.environment}"
 
   # "https://oidc.eks.<region>.amazonaws.com/id/XXXX" -> the condition key
   # prefix used in the trust policy.
-  monitoring_oidc_issuer = replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")
+  observability_oidc_issuer = replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")
 }
 
 # --- Platform identity: IAM role trusted via IRSA ----------------------------
 # A second platform identity rather than a share of the ingress': the two
 # components are independently deployable, and each reads exactly one secret.
-data "aws_iam_policy_document" "monitoring_trust" {
-  count = var.enable_monitoring ? 1 : 0
+data "aws_iam_policy_document" "observability_trust" {
+  count = var.enable_observability ? 1 : 0
 
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -47,27 +47,27 @@ data "aws_iam_policy_document" "monitoring_trust" {
 
     condition {
       test     = "StringEquals"
-      variable = "${local.monitoring_oidc_issuer}:sub"
-      values   = ["system:serviceaccount:${local.monitoring_namespace}:${local.monitoring_service_account_name}"]
+      variable = "${local.observability_oidc_issuer}:sub"
+      values   = ["system:serviceaccount:${local.observability_namespace}:${local.observability_service_account_name}"]
     }
 
     condition {
       test     = "StringEquals"
-      variable = "${local.monitoring_oidc_issuer}:aud"
+      variable = "${local.observability_oidc_issuer}:aud"
       values   = ["sts.amazonaws.com"]
     }
   }
 }
 
-resource "aws_iam_role" "monitoring_secrets" {
-  count = var.enable_monitoring ? 1 : 0
+resource "aws_iam_role" "observability_secrets" {
+  count = var.enable_observability ? 1 : 0
 
-  name               = "platform-monitoring-${local.name}"
-  assume_role_policy = data.aws_iam_policy_document.monitoring_trust[0].json
+  name               = "platform-observability-${local.name}"
+  assume_role_policy = data.aws_iam_policy_document.observability_trust[0].json
 }
 
-data "aws_iam_policy_document" "monitoring_secrets" {
-  count = var.enable_monitoring ? 1 : 0
+data "aws_iam_policy_document" "observability_secrets" {
+  count = var.enable_observability ? 1 : 0
 
   statement {
     sid = "ReadGrafanaCloudCredentialsOnly"
@@ -78,7 +78,7 @@ data "aws_iam_policy_document" "monitoring_secrets" {
     # The trailing "*" is required even for an exact name: Secrets Manager
     # appends a random six-character suffix to every secret ARN.
     resources = [
-      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${local.monitoring_credentials_remote_key}-*",
+      "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:${local.observability_credentials_remote_key}-*",
     ]
   }
 
@@ -95,30 +95,30 @@ data "aws_iam_policy_document" "monitoring_secrets" {
   }
 }
 
-resource "aws_iam_role_policy" "monitoring_secrets" {
-  count = var.enable_monitoring ? 1 : 0
+resource "aws_iam_role_policy" "observability_secrets" {
+  count = var.enable_observability ? 1 : 0
 
   name   = "platform-grafana-cloud"
-  role   = aws_iam_role.monitoring_secrets[0].id
-  policy = data.aws_iam_policy_document.monitoring_secrets[0].json
+  role   = aws_iam_role.observability_secrets[0].id
+  policy = data.aws_iam_policy_document.observability_secrets[0].json
 }
 
 # --- The collectors ----------------------------------------------------------
-module "monitoring" {
-  source = "../../modules/platform-monitoring"
-  count  = var.enable_monitoring ? 1 : 0
+module "observability" {
+  source = "../../modules/platform-observability"
+  count  = var.enable_observability ? 1 : 0
 
-  chart_version           = var.k8s_monitoring_chart_version
-  namespace               = local.monitoring_namespace
-  cluster_name            = local.monitoring_cluster_name
-  credentials_secret_name = local.monitoring_credentials_secret
-  collector_preset        = var.monitoring_collector_preset
+  chart_version           = var.k8s_observability_chart_version
+  namespace               = local.observability_namespace
+  cluster_name            = local.observability_cluster_name
+  credentials_secret_name = local.observability_credentials_secret
+  collector_preset        = var.observability_collector_preset
 
   metrics_url = var.grafana_cloud_metrics_url
   logs_url    = var.grafana_cloud_logs_url
   traces_url  = var.grafana_cloud_traces_url
 
-  enable_pod_logs = var.monitoring_enable_pod_logs
+  enable_pod_logs = var.observability_enable_pod_logs
 
   # The credential plumbing is applied with the release rather than as
   # kubernetes_manifest resources, which would need the External Secrets CRDs
@@ -128,9 +128,9 @@ module "monitoring" {
       apiVersion = "v1"
       kind       = "ServiceAccount"
       metadata = {
-        name = local.monitoring_service_account_name
+        name = local.observability_service_account_name
         annotations = {
-          "eks.amazonaws.com/role-arn" = aws_iam_role.monitoring_secrets[0].arn
+          "eks.amazonaws.com/role-arn" = aws_iam_role.observability_secrets[0].arn
         }
       }
     },
@@ -138,7 +138,7 @@ module "monitoring" {
       apiVersion = "external-secrets.io/v1"
       kind       = "SecretStore"
       metadata = {
-        name = local.monitoring_secret_store_name
+        name = local.observability_secret_store_name
       }
       spec = {
         provider = {
@@ -148,7 +148,7 @@ module "monitoring" {
             auth = {
               jwt = {
                 serviceAccountRef = {
-                  name = local.monitoring_service_account_name
+                  name = local.observability_service_account_name
                 }
               }
             }
@@ -170,10 +170,10 @@ module "monitoring" {
         refreshInterval = "1h"
         secretStoreRef = {
           kind = "SecretStore"
-          name = local.monitoring_secret_store_name
+          name = local.observability_secret_store_name
         }
         target = {
-          name           = local.monitoring_credentials_secret
+          name           = local.observability_credentials_secret
           creationPolicy = "Owner"
         }
         # The stored value is one JSON object of instance IDs and the token,
@@ -181,7 +181,7 @@ module "monitoring" {
         # a signal is a new field in the backend, not a change here.
         dataFrom = [{
           extract = {
-            key = local.monitoring_credentials_remote_key
+            key = local.observability_credentials_remote_key
           }
         }]
       }

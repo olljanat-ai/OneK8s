@@ -58,12 +58,12 @@ output "environment" {
   value       = var.environment
 }
 
-output "monitoring_namespace" {
-  description = "Namespace the Grafana Alloy collectors run in, null when monitoring is disabled."
-  value       = var.enable_monitoring ? local.monitoring_namespace : null
+output "observability_namespace" {
+  description = "Namespace the Grafana Alloy collectors run in, null when observability is disabled."
+  value       = var.enable_observability ? local.observability_namespace : null
 }
 
-output "monitoring_cluster_name" {
-  description = "Value of the 'cluster' label this cluster's telemetry carries in Grafana Cloud, null when monitoring is disabled."
-  value       = var.enable_monitoring ? local.monitoring_cluster_name : null
+output "observability_cluster_name" {
+  description = "Value of the 'cluster' label this cluster's telemetry carries in Grafana Cloud, null when observability is disabled."
+  value       = var.enable_observability ? local.observability_cluster_name : null
 }

@@ -93,7 +93,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Workload guardrail | Pod Security admission, `restricted` (labels on the ARM managed namespace) | Pod Security admission, `restricted` | same | same |
 | Guardrails | Azure Policy add-on + baseline initiative | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) | (optional Kyverno/Gatekeeper) |
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
-| Monitoring | **Grafana Alloy** + ESO (Key Vault) | **Grafana Alloy** + ESO (Secrets Manager) | **Grafana Alloy** + ESO (Secret Manager) | **Grafana Alloy** + ESO (Vault) |
+| Observability | **Grafana Alloy** + ESO (Key Vault) | **Grafana Alloy** + ESO (Secrets Manager) | **Grafana Alloy** + ESO (Secret Manager) | **Grafana Alloy** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
 | GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
 | Application database | **Azure SQL** on the free offer, Entra-only auth (`sql.tf`) | — | — | — |
@@ -264,11 +264,11 @@ rather than a chiseled one (`Microsoft.Data.SqlClient` needs ICU), so there
 *is* a root user in that image to drop from. See [hello-app.md](hello-app.md)
 and [db-hello-app.md](db-hello-app.md).
 
-## Monitoring: one Grafana Cloud stack, four clusters
+## Observability: one Grafana Cloud stack, four clusters
 
 Every foundation can install the **same collector** — Grafana Alloy, from
-`modules/platform-monitoring` (Grafana's k8s-monitoring chart), opt-in per
-environment with `enable_monitoring` — and ship metrics, logs and cluster
+`modules/platform-observability` (Grafana's k8s-monitoring chart), opt-in per
+environment with `enable_observability` — and ship metrics, logs and cluster
 events to one Grafana Cloud stack. The clusters are told apart there by a
 single derived label, `cluster = <prefix>-<cloud>-<environment>`, so "how many
 nodes does the platform have" is one query rather than four dashboards.
@@ -291,7 +291,7 @@ Publish Grafana Cloud Credentials --> Key Vault  platform-grafana-cloud
                         │               │               │
                         └── ESO SecretStore + ExternalSecret, per cluster ──┐
                                                                             ▼
-                                          Secret monitoring/grafana-cloud-credentials
+                                          Secret observability/grafana-cloud-credentials
                                                     │
                                                     ▼  Alloy remote.kubernetes.secret
                                              the destinations' basic auth
@@ -304,10 +304,10 @@ token is picked up without an apply and without restarting a collector.
 
 The identity doing the reading is a second platform identity, beside the
 ingress' one and built from the same parts, but granted **one secret** rather
-than the `platform-` prefix: the monitoring identity cannot read the wildcard
+than the `platform-` prefix: the observability identity cannot read the wildcard
 certificate's private key, and the ingress identity cannot read the Grafana
 Cloud token. Details, feature set and trade-offs:
-[monitoring.md](monitoring.md).
+[observability.md](observability.md).
 
 ## GitOps: one hub, spokes on the other clouds
 
@@ -434,7 +434,7 @@ spec:
   resolves the vault and the three targets out of the foundation states the way
   the certificate distribution does, so a cloud with no foundation in the
   environment is skipped rather than failing the run, and the three pushes are
-  independent. This is the whole reason no cluster's monitoring credentials
+  independent. This is the whole reason no cluster's observability credentials
   come from a Terraform variable.
 - `renew-certificate.yml` — daily issuance/renewal of the `*.onek8s.lol`
   wildcard from Let's Encrypt, solved with DNS-01 against the Azure-hosted
@@ -584,13 +584,13 @@ spec:
   isolation the secret backends have has no counterpart in the observability
   plane. A per-tenant stack (or at least a per-tenant policy) plus a collector
   that knows which namespace belongs to whom is what it would take.
-- The monitoring collectors are a real workload on a one-node prototype: three
+- The observability collectors are a real workload on a one-node prototype: three
   Alloy instances plus kube-state-metrics and Node Exporter request roughly a
   third of a `Standard_B2s`/`t3.medium` between them at the `small` preset. Node
   Exporter also wants host mounts, which the AKS pod security baseline
   initiative flags — harmlessly while that initiative is in `audit` mode, which
   is how `foundations/azure` assigns it, and as a blocked DaemonSet in an
-  environment that flips it to `deny` without an exemption for the `monitoring`
+  environment that flips it to `deny` without an exemption for the `observability`
   namespace.
 - One NAT gateway per AWS VPC (cost-optimized); use one per AZ for prod HA.
 - All state lives in the Azure Storage state home, so every deploy — AWS,

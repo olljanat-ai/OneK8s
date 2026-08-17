@@ -149,18 +149,18 @@ variable "ingress_dashboard_hostname" {
   default     = "oci-traefik.onek8s.lol"
 }
 
-variable "enable_monitoring" {
+variable "enable_observability" {
   description = "Install the Grafana k8s-monitoring collectors and ship this cluster's metrics, logs and events to Grafana Cloud. Off by default: it needs a Grafana Cloud stack's endpoints, and its credentials in the OCI Vault under var.grafana_cloud_secret_name."
   type        = bool
   default     = false
 
   validation {
-    condition     = !var.enable_monitoring || (var.grafana_cloud_metrics_url != null && var.grafana_cloud_logs_url != null)
-    error_message = "enable_monitoring needs grafana_cloud_metrics_url and grafana_cloud_logs_url: both are on the Grafana Cloud stack's Details page and neither can be derived from the stack name."
+    condition     = !var.enable_observability || (var.grafana_cloud_metrics_url != null && var.grafana_cloud_logs_url != null)
+    error_message = "enable_observability needs grafana_cloud_metrics_url and grafana_cloud_logs_url: both are on the Grafana Cloud stack's Details page and neither can be derived from the stack name."
   }
 }
 
-variable "k8s_monitoring_chart_version" {
+variable "k8s_observability_chart_version" {
   description = "grafana/k8s-monitoring Helm chart version."
   type        = string
   default     = "4.4.0"
@@ -190,13 +190,13 @@ variable "grafana_cloud_traces_url" {
   default     = null
 }
 
-variable "monitoring_enable_pod_logs" {
+variable "observability_enable_pod_logs" {
   description = "Ship every pod's logs to Grafana Cloud. This is the largest single contributor to the bill on a chatty cluster; metrics and cluster events are unaffected by turning it off."
   type        = bool
   default     = true
 }
 
-variable "monitoring_collector_preset" {
+variable "observability_collector_preset" {
   description = "Sizing preset applied to every Alloy collector: small (up to ~50 nodes), medium, large or xlarge."
   type        = string
   default     = "small"

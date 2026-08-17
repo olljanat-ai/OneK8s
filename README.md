@@ -17,7 +17,7 @@ via External Secrets Operator and per-tenant workload identities.
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
 ├── modules/
 │   ├── platform-ingress/   # Traefik + the platform wildcard as its default certificate
-│   ├── platform-monitoring/# Grafana Alloy (k8s-monitoring) shipping to Grafana Cloud
+│   ├── platform-observability/# Grafana Alloy (k8s-monitoring) shipping to Grafana Cloud
 │   ├── tenant-namespace/   # Reusable tenant module — cloud is a variable
 │   │   ├── main.tf ...     #   dispatcher: cloud = azure|aws|gcp|oci, unified outputs
 │   │   ├── common/         #   namespace, quota, netpol, SA, namespaced SecretStore
@@ -125,10 +125,10 @@ Each cluster also publishes its Traefik dashboard and API on
 convenience, switched off per environment with
 `ingress_dashboard_hostname = null`.
 
-## Monitoring
+## Observability
 
 Every cluster can run **Grafana Alloy**, installed from one module
-(`modules/platform-monitoring`, Grafana's [k8s-monitoring][k8smon] chart), and
+(`modules/platform-observability`, Grafana's [k8s-monitoring][k8smon] chart), and
 ship its metrics, logs and events to **one Grafana Cloud stack**. Four
 clusters, one stack, told apart only by a `cluster` label carrying the cloud
 and the environment:
@@ -151,13 +151,13 @@ collectors without an apply or a restart.
 
 ```hcl
 # foundations/<cloud>/envs/<env>.tfvars — the endpoints are the configuration
-enable_monitoring         = true
+enable_observability         = true
 grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
 ```
 
 Off by default, per cloud and per environment. Setup, the feature set and the
-trade-offs: [docs/monitoring.md](docs/monitoring.md).
+trade-offs: [docs/observability.md](docs/observability.md).
 
 ## GitOps
 
@@ -270,7 +270,7 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   `terraform apply` alone never creates the database user.
 - **Publish Grafana Cloud Credentials** — on demand; writes the Grafana Cloud
   access-policy token and instance IDs into Key Vault as one JSON object and
-  copies it to the AWS, GCP and OCI backends, so no cluster's monitoring
+  copies it to the AWS, GCP and OCI backends, so no cluster's observability
   credentials come from Terraform.
 - **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted

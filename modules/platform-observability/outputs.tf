@@ -25,5 +25,5 @@ output "destination_names" {
 
 output "release_name" {
   description = "Name of the k8s-monitoring Helm release."
-  value       = helm_release.k8s_monitoring.name
+  value       = helm_release.k8s_observability.name
 }

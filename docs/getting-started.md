@@ -63,7 +63,7 @@ Actions → Secrets):
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | aws-actions/configure-aws-credentials |
 | `GCP_CREDENTIALS_JSON` | google-github-actions/auth (service account key JSON) |
 | `OCI_FINGERPRINT`, `OCI_PRIVATE_KEY` | oci provider + OCI CLI (API signing key, PEM contents) |
-| `GRAFANA_CLOUD_TOKEN` | Publish Grafana Cloud Credentials (the access-policy token; only needed with monitoring enabled) |
+| `GRAFANA_CLOUD_TOKEN` | Publish Grafana Cloud Credentials (the access-policy token; only needed with observability enabled) |
 
 And repository **variables**:
 
@@ -619,7 +619,7 @@ assigns), and write access to each target backend from the deploy identity of
 that cloud. A cloud that refuses the write fails the run but does not stop the
 other two — check the run summary, which lists every target and its result.
 
-## 8. Monitoring with Grafana Cloud (optional)
+## 8. Observability with Grafana Cloud (optional)
 
 Every foundation can run Grafana Alloy and ship that cluster's metrics, logs
 and events to one Grafana Cloud stack, where all four clusters show up under
@@ -631,7 +631,7 @@ of them can be guessed from this repository.
 
    ```hcl
    # foundations/<cloud>/envs/prototype.tfvars
-   enable_monitoring         = true
+   enable_observability         = true
    grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
    grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
    grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional
@@ -652,7 +652,7 @@ of them can be guessed from this repository.
    That writes one JSON object to the environment's Key Vault and copies it to
    the AWS, GCP and OCI backends — the same road the wildcard certificate
    takes, so each cluster reads it from the backend it already reads its tenant
-   secrets from, through a monitoring identity granted that one secret and
+   secrets from, through a observability identity granted that one secret and
    nothing else.
 
 Then apply the foundations. Order does not matter: a cluster applied before
@@ -660,14 +660,14 @@ the credentials exist leaves the `ExternalSecret` unresolved and starts
 reporting on its own within the hour of the publication.
 
 ```bash
-kubectl -n monitoring get externalsecret grafana-cloud   # SecretSynced
-kubectl -n monitoring get alloy                          # one per collector
+kubectl -n observability get externalsecret grafana-cloud   # SecretSynced
+kubectl -n observability get alloy                          # one per collector
 ```
 
 Pod logs are on by default and are the largest single contributor to the bill
-on a chatty cluster — `monitoring_enable_pod_logs = false` leaves metrics and
+on a chatty cluster — `observability_enable_pod_logs = false` leaves metrics and
 cluster events untouched. Feature set, the cluster label, rotation and the
-trade-offs: [monitoring.md](monitoring.md).
+trade-offs: [observability.md](observability.md).
 
 ## Troubleshooting
 

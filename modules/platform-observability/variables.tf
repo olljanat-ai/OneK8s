@@ -7,7 +7,7 @@ variable "chart_version" {
 variable "namespace" {
   description = "Namespace the collectors run in. It is also where the credentials Secret has to live, because an Alloy remote.kubernetes.secret reads it by name and namespace."
   type        = string
-  default     = "monitoring"
+  default     = "observability"
 }
 
 variable "cluster_name" {

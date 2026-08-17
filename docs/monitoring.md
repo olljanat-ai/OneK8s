@@ -1,8 +1,8 @@
-# Monitoring: one Grafana Cloud stack, four clusters
+# Observability: one Grafana Cloud stack, four clusters
 
 Every foundation can install Grafana's [**k8s-monitoring**][chart] chart and
 ship that cluster's telemetry to **Grafana Cloud**. It is one module
-(`modules/platform-monitoring`) on all four clouds, so AKS, EKS, GKE and OKE
+(`modules/platform-observability`) on all four clouds, so AKS, EKS, GKE and OKE
 arrive in the same stack, under the same metric and label names, and differ
 only in the value of their `cluster` label.
 
@@ -20,7 +20,7 @@ only in the value of their `cluster` label.
                     └───────────────┘ └───────────┘  └─────────────┘
 ```
 
-It is off by default (`enable_monitoring = false`), because it needs two
+It is off by default (`enable_observability = false`), because it needs two
 things this repository cannot invent: a Grafana Cloud stack's endpoints, and
 its credentials.
 
@@ -51,14 +51,14 @@ What each foundation turns on by default:
 | Host metrics (Node Exporter) | on | — |
 | Annotation autodiscovery (`prometheus.io/scrape`) | on | — |
 | Cluster events → logs | on | — |
-| Pod logs | on | `monitoring_enable_pod_logs` |
+| Pod logs | on | `observability_enable_pod_logs` |
 | Node (journald) logs | off | — |
 | Application observability (OTLP receiver) | off | — |
 
 Pod logs are the one worth a decision: on a chatty cluster they are the
 largest single line on the bill, and turning them off leaves metrics and
 events untouched. The rest are module-level inputs
-(`modules/platform-monitoring/variables.tf`) that the foundations do not
+(`modules/platform-observability/variables.tf`) that the foundations do not
 surface, on the grounds that a platform whose clusters report different things
 is worse than one that reports too much.
 
@@ -86,7 +86,7 @@ hosted endpoints — so they are configuration, per environment, in
 `foundations/<cloud>/envs/<env>.tfvars`:
 
 ```hcl
-enable_monitoring         = true
+enable_observability         = true
 grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
 grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"   # optional
@@ -115,7 +115,7 @@ Publish Grafana Cloud Credentials
         └──▶ OCI Vault        platform-grafana-cloud           (OCI)
                     │
                     ▼  ESO SecretStore + ExternalSecret, per cluster
-             Secret monitoring/grafana-cloud-credentials
+             Secret observability/grafana-cloud-credentials
                     │
                     ▼  Alloy remote.kubernetes.secret
              every destination's basic auth
@@ -144,8 +144,8 @@ authenticates every signal and only the instance ID differs between them:
 
 `platform-` is the platform's reserved prefix, which no tenant may claim. The
 identities that read this object are narrower than that prefix: each cluster
-gets a **monitoring** identity, separate from the ingress' one, pinned to the
-`monitoring` namespace's own ServiceAccount and granted this one secret:
+gets a **observability** identity, separate from the ingress' one, pinned to the
+`observability` namespace's own ServiceAccount and granted this one secret:
 
 | Cloud | Identity | Narrowed by |
 |---|---|---|
@@ -154,7 +154,7 @@ gets a **monitoring** identity, separate from the ingress' one, pinned to the
 | GCP | GSA + Workload Identity | an IAM condition on the secret's resource name |
 | OCI | OKE Workload Identity (no identity object) | a policy condition on `target.secret.name` |
 
-So the monitoring identity cannot read the wildcard certificate's private key,
+So the observability identity cannot read the wildcard certificate's private key,
 which shares the `platform-` prefix, and the ingress identity cannot read the
 Grafana Cloud token. Neither can read any tenant's secrets, and no tenant can
 read either of them.
@@ -219,9 +219,9 @@ within the hour of the publication.
 ### 4. Check it
 
 ```bash
-kubectl -n monitoring get externalsecret grafana-cloud
-kubectl -n monitoring get alloy                      # one per collector
-kubectl -n monitoring logs -l app.kubernetes.io/part-of=alloy --tail=50
+kubectl -n observability get externalsecret grafana-cloud
+kubectl -n observability get alloy                      # one per collector
+kubectl -n observability logs -l app.kubernetes.io/part-of=alloy --tail=50
 ```
 
 In Grafana Cloud, the clusters appear in the Kubernetes app as
@@ -264,13 +264,13 @@ environment already.
 - **The collectors are a real workload on a one-node prototype.** Three Alloy
   instances plus kube-state-metrics and Node Exporter request roughly a third
   of a `Standard_B2s` / `t3.medium` between them at the `small` preset. Raise
-  `monitoring_collector_preset` for real clusters, and consider
-  `monitoring_enable_pod_logs = false` on the small ones.
+  `observability_collector_preset` for real clusters, and consider
+  `observability_enable_pod_logs = false` on the small ones.
 - **Node Exporter wants host mounts**, which the AKS pod security baseline
   initiative flags. That initiative is assigned in *audit* mode
   (`foundations/azure/policy.tf`), so the DaemonSet runs and is recorded as
   non-compliant; an environment that flips the initiative to `deny` needs an
-  exemption for the `monitoring` namespace or has to do without host metrics.
+  exemption for the `observability` namespace or has to do without host metrics.
 - **The chart's own external-secret path is not used.** Setting
   `secret.create = false` makes it emit references to every *optional*
   credential a destination supports — tenant ID, client certificate and its

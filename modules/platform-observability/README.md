@@ -1,4 +1,4 @@
-# platform-monitoring module
+# platform-observability module
 
 Installs Grafana's [**k8s-monitoring**][chart] chart on one cluster and points
 it at a **Grafana Cloud** stack. It is the same module on all four clouds —
@@ -8,9 +8,9 @@ differ only by the value of their `cluster` label.
 [chart]: https://github.com/grafana/k8s-monitoring-helm
 
 ```hcl
-module "monitoring" {
-  source = "../../modules/platform-monitoring"
-  count  = var.enable_monitoring ? 1 : 0
+module "observability" {
+  source = "../../modules/platform-observability"
+  count  = var.enable_observability ? 1 : 0
 
   cluster_name = "onek8s-azure-prototype"
   metrics_url  = var.grafana_cloud_metrics_url

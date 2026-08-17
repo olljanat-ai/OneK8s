@@ -1,5 +1,5 @@
-# Grafana Cloud monitoring, the same module every other cloud runs
-# (modules/platform-monitoring), plus the one thing that is GCP-shaped: reading
+# Grafana Cloud observability, the same module every other cloud runs
+# (modules/platform-observability), plus the one thing that is GCP-shaped: reading
 # the Grafana Cloud credentials out of Secret Manager.
 #
 # The credentials arrive there the way the wildcard certificate does — written
@@ -11,47 +11,47 @@
 #       Secret grafana-cloud-credentials
 #         --(Alloy remote.kubernetes.secret)--> Grafana Cloud
 locals {
-  monitoring_namespace            = "monitoring"
-  monitoring_service_account_name = "platform-monitoring"
-  monitoring_secret_store_name    = "platform-store"
-  monitoring_credentials_secret   = "grafana-cloud-credentials"
+  observability_namespace            = "observability"
+  observability_service_account_name = "platform-observability"
+  observability_secret_store_name    = "platform-store"
+  observability_credentials_secret   = "grafana-cloud-credentials"
 
   # One Grafana Cloud stack holds all four clusters, told apart only by this
   # label, so it carries both the cloud and the environment.
-  monitoring_cluster_name = "${var.name_prefix}-gcp-${var.environment}"
+  observability_cluster_name = "${var.name_prefix}-gcp-${var.environment}"
 
   # GSA account IDs are limited to 30 characters.
-  monitoring_gsa_account_id = substr("platform-monitoring-${var.environment}", 0, 30)
+  observability_gsa_account_id = substr("platform-observability-${var.environment}", 0, 30)
 }
 
 # --- Platform identity: Google Service Account + Workload Identity -----------
 # A second platform identity rather than a share of the ingress': the two
 # components are independently deployable, and each reads exactly one secret.
-resource "google_service_account" "monitoring" {
-  count = var.enable_monitoring ? 1 : 0
+resource "google_service_account" "observability" {
+  count = var.enable_observability ? 1 : 0
 
   project      = var.project_id
-  account_id   = local.monitoring_gsa_account_id
-  display_name = "Platform monitoring (${var.environment})"
+  account_id   = local.observability_gsa_account_id
+  display_name = "Platform observability (${var.environment})"
 }
 
-resource "google_service_account_iam_member" "monitoring_workload_identity" {
-  count = var.enable_monitoring ? 1 : 0
+resource "google_service_account_iam_member" "observability_workload_identity" {
+  count = var.enable_observability ? 1 : 0
 
-  service_account_id = google_service_account.monitoring[0].name
+  service_account_id = google_service_account.observability[0].name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.project_id}.svc.id.goog[${local.monitoring_namespace}/${local.monitoring_service_account_name}]"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[${local.observability_namespace}/${local.observability_service_account_name}]"
 }
 
 # Narrowed to the one secret rather than to the whole "platform-" prefix: this
 # identity has no business reading the wildcard certificate's private key,
 # which is the other thing that prefix holds.
-resource "google_project_iam_member" "monitoring_secret_accessor" {
-  count = var.enable_monitoring ? 1 : 0
+resource "google_project_iam_member" "observability_secret_accessor" {
+  count = var.enable_observability ? 1 : 0
 
   project = var.project_id
   role    = "roles/secretmanager.secretAccessor"
-  member  = "serviceAccount:${google_service_account.monitoring[0].email}"
+  member  = "serviceAccount:${google_service_account.observability[0].email}"
 
   condition {
     title       = "grafana-cloud-credentials"
@@ -61,21 +61,21 @@ resource "google_project_iam_member" "monitoring_secret_accessor" {
 }
 
 # --- The collectors ----------------------------------------------------------
-module "monitoring" {
-  source = "../../modules/platform-monitoring"
-  count  = var.enable_monitoring ? 1 : 0
+module "observability" {
+  source = "../../modules/platform-observability"
+  count  = var.enable_observability ? 1 : 0
 
-  chart_version           = var.k8s_monitoring_chart_version
-  namespace               = local.monitoring_namespace
-  cluster_name            = local.monitoring_cluster_name
-  credentials_secret_name = local.monitoring_credentials_secret
-  collector_preset        = var.monitoring_collector_preset
+  chart_version           = var.k8s_observability_chart_version
+  namespace               = local.observability_namespace
+  cluster_name            = local.observability_cluster_name
+  credentials_secret_name = local.observability_credentials_secret
+  collector_preset        = var.observability_collector_preset
 
   metrics_url = var.grafana_cloud_metrics_url
   logs_url    = var.grafana_cloud_logs_url
   traces_url  = var.grafana_cloud_traces_url
 
-  enable_pod_logs = var.monitoring_enable_pod_logs
+  enable_pod_logs = var.observability_enable_pod_logs
 
   # The credential plumbing is applied with the release rather than as
   # kubernetes_manifest resources, which would need the External Secrets CRDs
@@ -85,9 +85,9 @@ module "monitoring" {
       apiVersion = "v1"
       kind       = "ServiceAccount"
       metadata = {
-        name = local.monitoring_service_account_name
+        name = local.observability_service_account_name
         annotations = {
-          "iam.gke.io/gcp-service-account" = google_service_account.monitoring[0].email
+          "iam.gke.io/gcp-service-account" = google_service_account.observability[0].email
         }
       }
     },
@@ -95,7 +95,7 @@ module "monitoring" {
       apiVersion = "external-secrets.io/v1"
       kind       = "SecretStore"
       metadata = {
-        name = local.monitoring_secret_store_name
+        name = local.observability_secret_store_name
       }
       spec = {
         provider = {
@@ -107,7 +107,7 @@ module "monitoring" {
                 clusterName      = google_container_cluster.this.name
                 clusterProjectID = var.project_id
                 serviceAccountRef = {
-                  name = local.monitoring_service_account_name
+                  name = local.observability_service_account_name
                 }
               }
             }
@@ -129,10 +129,10 @@ module "monitoring" {
         refreshInterval = "1h"
         secretStoreRef = {
           kind = "SecretStore"
-          name = local.monitoring_secret_store_name
+          name = local.observability_secret_store_name
         }
         target = {
-          name           = local.monitoring_credentials_secret
+          name           = local.observability_credentials_secret
           creationPolicy = "Owner"
         }
         # The stored value is one JSON object of instance IDs and the token,

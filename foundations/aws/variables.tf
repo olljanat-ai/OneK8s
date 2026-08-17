@@ -81,18 +81,18 @@ variable "ingress_dashboard_hostname" {
   default     = "aws-traefik.onek8s.lol"
 }
 
-variable "enable_monitoring" {
+variable "enable_observability" {
   description = "Install the Grafana k8s-monitoring collectors and ship this cluster's metrics, logs and events to Grafana Cloud. Off by default: it needs a Grafana Cloud stack's endpoints, and its credentials in Secrets Manager under var.grafana_cloud_secret_name."
   type        = bool
-  default     = false
+  default     = true
 
   validation {
-    condition     = !var.enable_monitoring || (var.grafana_cloud_metrics_url != null && var.grafana_cloud_logs_url != null)
-    error_message = "enable_monitoring needs grafana_cloud_metrics_url and grafana_cloud_logs_url: both are on the Grafana Cloud stack's Details page and neither can be derived from the stack name."
+    condition     = !var.enable_observability || (var.grafana_cloud_metrics_url != null && var.grafana_cloud_logs_url != null)
+    error_message = "enable_observability needs grafana_cloud_metrics_url and grafana_cloud_logs_url: both are on the Grafana Cloud stack's Details page and neither can be derived from the stack name."
   }
 }
 
-variable "k8s_monitoring_chart_version" {
+variable "k8s_observability_chart_version" {
   description = "grafana/k8s-monitoring Helm chart version."
   type        = string
   default     = "4.4.0"
@@ -105,30 +105,30 @@ variable "grafana_cloud_secret_name" {
 }
 
 variable "grafana_cloud_metrics_url" {
-  description = "Prometheus remote-write endpoint of the Grafana Cloud stack, e.g. 'https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push'."
+  description = "Prometheus remote-write endpoint of the Grafana Cloud stack"
   type        = string
-  default     = null
+  default     = "https://prometheus-prod-39-prod-eu-north-0.grafana.net/api/prom/push"
 }
 
 variable "grafana_cloud_logs_url" {
-  description = "Loki push endpoint of the Grafana Cloud stack, e.g. 'https://logs-prod-012.grafana.net/loki/api/v1/push'."
+  description = "Loki push endpoint of the Grafana Cloud stack"
   type        = string
-  default     = null
+  default     = "https://logs-prod-025.grafana.net/loki/api/v1/push"
 }
 
 variable "grafana_cloud_traces_url" {
-  description = "OTLP endpoint traces are sent to, e.g. 'https://tempo-prod-01-prod-eu-west-0.grafana.net:443'. Null configures no traces destination."
+  description = "OTLP endpoint traces are sent to. Null configures no traces destination."
   type        = string
-  default     = null
+  default     = "https://tempo-prod-18-prod-eu-north-0.grafana.net/tempo"
 }
 
-variable "monitoring_enable_pod_logs" {
+variable "observability_enable_pod_logs" {
   description = "Ship every pod's logs to Grafana Cloud. This is the largest single contributor to the bill on a chatty cluster; metrics and cluster events are unaffected by turning it off."
   type        = bool
-  default     = true
+  default     = false
 }
 
-variable "monitoring_collector_preset" {
+variable "observability_collector_preset" {
   description = "Sizing preset applied to every Alloy collector: small (up to ~50 nodes), medium, large or xlarge."
   type        = string
   default     = "small"

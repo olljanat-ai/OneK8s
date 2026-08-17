@@ -211,7 +211,7 @@ locals {
   }, var.extra_values)
 }
 
-resource "helm_release" "k8s_monitoring" {
+resource "helm_release" "k8s_observability" {
   name             = "k8s-monitoring"
   repository       = "https://grafana.github.io/helm-charts"
   chart            = "k8s-monitoring"
@@ -230,10 +230,10 @@ resource "helm_release" "k8s_monitoring" {
     precondition {
       condition = local.needs_metrics_collector || local.needs_logs_collector || local.needs_singleton_collector || local.needs_receiver_collector
       error_message = join(" ", [
-        "platform-monitoring has every feature disabled, so it would install collectors with nothing to collect.",
+        "platform-observability has every feature disabled, so it would install collectors with nothing to collect.",
         "Enable at least one of enable_cluster_metrics, enable_host_metrics, enable_annotation_autodiscovery,",
         "enable_cluster_events, enable_pod_logs, enable_node_logs or enable_application_observability —",
-        "or turn the whole module off with the foundation's enable_monitoring.",
+        "or turn the whole module off with the foundation's enable_observability.",
       ])
     }
   }

@@ -13,9 +13,9 @@ node_count       = 1
 # derived from the stack name, so they are configuration; the credentials are
 # not, and reach the cluster from this cloud's secret backend — run the
 # Publish Grafana Cloud Credentials workflow once before enabling this.
-# See docs/monitoring.md.
+# See docs/observability.md.
 #
-# enable_monitoring         = true
+# enable_observability         = true
 # grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 # grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
 # grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"

@@ -47,8 +47,8 @@ resource "google_service_account" "nodes" {
 resource "google_project_iam_member" "nodes_minimal" {
   for_each = toset([
     "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
-    "roles/monitoring.viewer",
+    "roles/observability.metricWriter",
+    "roles/observability.viewer",
     "roles/artifactregistry.reader",
   ])
 
@@ -73,7 +73,6 @@ resource "google_container_node_pool" "default" {
 
     shielded_instance_config {
       enable_secure_boot          = true
-      enable_integrity_monitoring = true
     }
   }
 
