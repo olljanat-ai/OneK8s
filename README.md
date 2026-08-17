@@ -187,11 +187,11 @@ alongside the code.
 The database is the Azure foundation's, on the **free offer**: 100,000 vCore
 seconds and 32 GB a month, auto-pausing rather than billing when that runs out.
 The server is **Entra-only**, so it has no SQL login to leak. Two things about it cannot be Terraform — applying a migration and creating a
-contained database user both happen *inside* the database — so they are a
-workflow, like the tenant test secret:
-`gh workflow run bootstrap-sql.yml -f tenant=team-alpha`. The application never
-migrates itself: it holds `db_datareader` and `db_datawriter`, and could not
-change the schema if it tried.
+contained database user both happen *inside* the database — so both are one
+command in the application itself, run by a workflow like the tenant test
+secret: `gh workflow run bootstrap-sql.yml -f tenant=team-alpha`. The pod runs
+that same image and cannot do either: it holds `db_datareader` and
+`db_datawriter`, so the database refuses it DDL.
 This is the platform's one deliberately Azure-only application, because its
 database is an Azure resource and its identity is an Entra one.
 [docs/db-hello-app.md](docs/db-hello-app.md).
@@ -217,11 +217,12 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   them; pull requests build without pushing. The only pipelines here that
   produce an artefact rather than applying Terraform — from there Argo CD takes
   over.
-- **Bootstrap SQL** — applies db-hello's EF Core migrations (`dotnet ef
-  database update`) and gives the tenant's managed identity a user in the
-  database (`db_datareader` + `db_datawriter`). Manual, idempotent, and where a
-  later schema change is deployed from: neither a table nor a database user has
-  an ARM representation, so neither can be Terraform.
+- **Bootstrap SQL** — runs `db-hello bootstrap`, the application's own
+  migrate-and-grant command, as the SQL server's Entra administrator: it
+  applies the EF Core migrations and gives the tenant's managed identity a user
+  in the database (`db_datareader` + `db_datawriter`). Manual, idempotent, and
+  where a later schema change is deployed from — neither a table nor a database
+  user has an ARM representation, so neither can be Terraform.
 - **Renew Certificate** — monthly; issues and renews the `*.onek8s.lol`
   wildcard from Let's Encrypt over DNS-01 against the Azure-hosted
   `onek8s.lol` zone and imports it into the AKS cluster's Key Vault, together

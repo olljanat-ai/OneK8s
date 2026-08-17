@@ -22,6 +22,16 @@ using OneK8s.DbHello.Data;
 // Data access is Entity Framework Core, code-first: Data/Visit.cs *is* the
 // table, and the only SQL written by hand is the one query that asks the
 // server who it thinks we are (Data/DatabaseIdentity.cs).
+
+// The one code path that is not the web page. `bootstrap` applies the
+// migrations and creates a tenant's database user, and it is run by CI as the
+// server's Entra administrator — never by the pod, whose identity the database
+// refuses both acts to. See Bootstrap.cs.
+if (args is ["bootstrap", ..])
+{
+    return await Bootstrap.RunAsync(args[1..], CancellationToken.None);
+}
+
 var builder = WebApplication.CreateSlimBuilder(args);
 
 builder.Services.AddDbContext<VisitsContext>(VisitsContext.Configure);
@@ -52,6 +62,8 @@ app.MapGet("/favicon.svg", (HttpContext http) =>
 });
 
 app.Run();
+
+return 0;
 
 namespace OneK8s.DbHello
 {

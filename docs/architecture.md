@@ -492,11 +492,12 @@ spec:
   Terraform. The schema is code-first — EF Core migrations generated from
   `apps/db-hello`'s model — and a contained database user is `CREATE USER`,
   T-SQL executed inside the database; no provider expresses either without
-  opening a database connection at plan time. Both are applied by the
-  **Bootstrap SQL** workflow, the same place and the same reasoning as the
-  tenant test secret. The application deliberately does not migrate itself:
-  it holds `db_datareader` and `db_datawriter`, so runtime DDL rights never
-  exist to be abused. The cost is that deploying the foundation is not
+  opening a database connection at plan time. Both are applied by one command in the
+  application itself (`db-hello bootstrap`), which the **Bootstrap SQL**
+  workflow runs as the server's Entra administrator — the same place and the
+  same reasoning as the tenant test secret. The pod runs that image too and
+  cannot do either: it holds `db_datareader` and `db_datawriter`, so runtime
+  DDL rights never exist to be abused. The cost is that deploying the foundation is not
   sufficient to make the page work — somebody runs the workflow once per
   tenant, and until they do the application says which step is missing rather
   than failing obscurely ([db-hello-app.md](db-hello-app.md)).

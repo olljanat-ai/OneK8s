@@ -1,15 +1,22 @@
 name: Bootstrap SQL
 
-# Makes an empty database usable by a tenant, in two acts:
+# Makes an empty database usable by a tenant, in one command:
 #
-#   1. the schema, applied from apps/db-hello's EF Core migrations
-#      (`dotnet ef database update`) — code-first, so the model in
-#      apps/db-hello/src/Data is the only description of the tables anywhere,
-#   2. the access, granted in T-SQL: a contained user for the tenant's managed
-#      identity, with db_datareader and db_datawriter.
+#   dotnet db-hello bootstrap --user <identity> --client-id <guid>
+#
+#     1. the schema, from apps/db-hello's committed EF Core migrations —
+#        code-first, so the model in apps/db-hello/src/Data is the only
+#        description of the tables anywhere,
+#     2. the access: a contained user for the tenant's managed identity, with
+#        db_datareader and db_datawriter.
 #
 #   Entra ID (tenant UAMI)  ──▶  <tenant user>  ──▶  db_datareader
 #                                                    db_datawriter
+#
+# Everything this workflow does beyond resolving inputs is that command, which
+# lives in the application (apps/db-hello/src/Bootstrap.cs) rather than in a
+# script here: one language, one connection, and the SQL that maps an Entra
+# principal to a database principal sits next to the model it grants access to.
 #
 # Neither act can be Terraform. Both are data-plane, over TDS, against the
 # database itself, and there is no ARM resource for a table or a database user
@@ -18,13 +25,14 @@ name: Bootstrap SQL
 # workflow writes into every cloud's vault. foundations/azure builds the server
 # and an empty database and stops there (foundations/azure/sql.tf).
 #
-# The application never migrates itself. It runs with db_datareader and
-# db_datawriter and could not change the schema if it tried, which is the
-# property worth keeping — so migrations are applied here, by the deploy
-# identity, and not on pod start-up.
+# The application never migrates *itself*. The pod runs the same image, but its
+# identity holds db_datareader and db_datawriter, so the database refuses both
+# acts to it — the boundary is the grant, not the absence of the code. Here the
+# same command runs as the server's Entra administrator.
 #
 # It is safe to re-run: every step is guarded, so a second run over an
 # already-bootstrapped database changes nothing and still prints what it found.
+# That is also how a later schema change is deployed.
 #
 # What it needs to work:
 #
@@ -85,8 +93,6 @@ jobs:
       # Firewall rule opened for this run and removed again at the end. The
       # server carries no standing exception for CI.
       FIREWALL_RULE: bootstrap-sql-${{ github.run_id }}
-      # Must match the EF Core packages in apps/db-hello/src/DbHello.csproj.
-      EF_VERSION: "10.0.11"
     steps:
       - uses: actions/checkout@v4
 
@@ -199,41 +205,21 @@ jobs:
             --output none
           echo "Opened $FIREWALL_RULE for $ip"
 
-      # msodbcsql18 + pyodbc rather than sqlcmd: the go sqlcmd, which is the
-      # only variant that speaks service-principal authentication, is not in
-      # the Microsoft apt feed for the runner's Ubuntu release. pyodbc takes
-      # the access token directly (SQL_COPT_SS_ACCESS_TOKEN, 1256), which is
-      # the same mechanism the application uses and one fewer credential shape
-      # to pass around.
-      - name: Install the SQL client
-        run: |
-          set -euo pipefail
-          curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-            | sudo tee /etc/apt/trusted.gpg.d/microsoft.asc > /dev/null
-          curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" \
-            | sudo tee /etc/apt/sources.list.d/mssql-release.list > /dev/null
-          sudo apt-get update -qq
-          sudo ACCEPT_EULA=Y apt-get install -y -qq msodbcsql18
-          python3 -m venv .venv
-          .venv/bin/pip install --quiet --disable-pip-version-check pyodbc
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
 
-      # The schema, from the model. `database update` compares the migrations
-      # in apps/db-hello/src/Migrations with the __EFMigrationsHistory table
-      # and applies what is missing, so this is both the first deployment and
-      # every later schema change — and a re-run with nothing to apply is a
-      # no-op.
+      # The whole of the work, as one command in the application itself: apply
+      # the migrations, then create the tenant's database user and grant it the
+      # two roles. Both are guarded, so a re-run with nothing to do says so.
       #
-      # It authenticates exactly as the application does: the design-time
-      # factory goes through VisitsContext.Configure, whose interceptor puts an
-      # Entra token on the connection. Here the token comes from the AZURE_*
-      # variables below (the deploy service principal, and the server's Entra
-      # administrator); in the pod it comes from a federated ServiceAccount
-      # token. One code path, two credentials.
-      - name: Apply the EF Core migrations
+      # It authenticates exactly as the pod does — the same context factory,
+      # the same interceptor putting an Entra token on the connection. The only
+      # difference is whose token: here the deploy service principal (the
+      # server's Entra administrator) from the AZURE_* variables below, in the
+      # pod a federated ServiceAccount token. One code path, two credentials,
+      # and no connection string with a password in either.
+      - name: Apply the migrations and grant the tenant access
         env:
           SQL_SERVER: ${{ steps.db.outputs.server }}
           SQL_DATABASE: ${{ steps.db.outputs.database }}
@@ -242,25 +228,12 @@ jobs:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-        run: |
-          set -euo pipefail
-          dotnet tool install dotnet-ef --version "$EF_VERSION" --tool-path .ef-tools
-          ./.ef-tools/dotnet-ef database update \
-            --project apps/db-hello/src --no-color | tee /tmp/migrations.out
-
-      - name: Create the database user
-        env:
-          SQL_SERVER: ${{ steps.db.outputs.server }}
-          SQL_DATABASE: ${{ steps.db.outputs.database }}
           DB_USER: ${{ steps.uami.outputs.name }}
           CLIENT_ID: ${{ steps.identity.outputs.client_id }}
         run: |
           set -euo pipefail
-          # The same audience the application asks for, from the CLI session
-          # of the server's Entra administrator.
-          SQL_ACCESS_TOKEN="$(az account get-access-token \
-            --resource https://database.windows.net/ --query accessToken -o tsv)" \
-            .venv/bin/python .github/scripts/bootstrap_sql.py | tee /tmp/bootstrap.out
+          dotnet run --project apps/db-hello/src -c Release --no-launch-profile -- \
+            bootstrap --user "$DB_USER" --client-id "$CLIENT_ID" | tee /tmp/bootstrap.out
 
       - name: Close the firewall
         if: always()
@@ -292,11 +265,9 @@ jobs:
             echo "| Database | \`${SQL_DATABASE:-unresolved}\` |"
             echo "| Database user | \`${DB_USER:-unresolved}\` |"
             echo
-            for out in /tmp/migrations.out /tmp/bootstrap.out; do
-              if [ -f "$out" ]; then
-                echo '```'
-                cat "$out"
-                echo '```'
-              fi
-            done
+            if [ -f /tmp/bootstrap.out ]; then
+              echo '```'
+              cat /tmp/bootstrap.out
+              echo '```'
+            fi
           } >> "$GITHUB_STEP_SUMMARY"

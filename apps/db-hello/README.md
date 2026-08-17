@@ -10,19 +10,27 @@ the image.
 apps/db-hello/
 ├── src/
 │   ├── Program.cs                       the page, and the queries as LINQ
+│   ├── Bootstrap.cs                     `db-hello bootstrap`, run by CI only
 │   ├── Data/Visit.cs                    the entity — and therefore the table
 │   ├── Data/VisitsContext.cs            the model, and how to connect
 │   ├── Data/EntraTokenInterceptor.cs    where the password would have been
-│   ├── Data/VisitsContextFactory.cs     how `dotnet ef` builds a context
+│   ├── Data/VisitsContextFactory.cs     a context with no web app around it
 │   └── Migrations/                      generated, committed, applied by CI
 ├── Dockerfile      # SDK build → chiseled ASP.NET runtime
 └── chart/          # what Argo CD renders on the hub
 ```
 
-The schema is code-first and the application never applies it: it runs with
-`db_datareader` + `db_datawriter`, so it could not create a table if it tried.
-`dotnet ef database update` runs in the **Bootstrap SQL** workflow instead,
-which is also how a later model change reaches the database.
+The schema is code-first, and the application never applies it *as the pod*:
+its identity holds `db_datareader` + `db_datawriter`, so the database refuses
+DDL to it. The same image carries a second entry point for that —
+
+```bash
+db-hello bootstrap --user <identity> --client-id <guid>
+```
+
+— which applies the migrations and creates the tenant's database user. The
+**Bootstrap SQL** workflow runs it as the server's Entra administrator, and
+re-running it is how a later model change reaches the database.
 
 Every page view is a row: the app adds a `Visit`, saves it, then reads the last
 ten back with LINQ and prints them, along with who the database thinks it is.

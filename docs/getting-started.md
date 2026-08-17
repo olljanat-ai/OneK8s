@@ -404,8 +404,9 @@ tenant's identity has no user in the database until somebody creates one:
 gh workflow run bootstrap-sql.yml -f environment=prototype -f tenant=team-alpha
 ```
 
-That applies the application's EF Core migrations — the schema is code-first,
-so the model in `apps/db-hello/src/Data` is where the table is defined — and
+That runs the application's own `bootstrap` command as the SQL server's Entra
+administrator: it applies the EF Core migrations — the schema is code-first, so
+the model in `apps/db-hello/src/Data` is where the table is defined — and
 creates the database user with `db_datareader` + `db_datawriter`. It is safe to
 re-run, it is how a later schema change is deployed, and it must be re-run
 after a foundation rebuild (the server name carries a random suffix, so a new

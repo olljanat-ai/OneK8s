@@ -49,36 +49,42 @@ place that *can* own it.
 |---|---|---|
 | Logical server, database, network rules | `foundations/azure/sql.tf` | ARM resources, and the cluster's own VNet is here |
 | The **tables** | the EF Core model in `apps/db-hello/src/Data` | code-first: the schema is a consequence of the model, versioned with the code that uses it |
-| Applying the migrations, and the tenant's **database user** | **Bootstrap SQL** workflow | data-plane acts over TDS — neither a table nor a database user has an ARM representation, on any provider |
+| Applying the migrations, and the tenant's **database user** | `db-hello bootstrap`, run by the **Bootstrap SQL** workflow | data-plane acts over TDS — neither a table nor a database user has an ARM representation, on any provider |
 | The Application, its host and its image | `gitops/argocd/` | a commit, like every other workload |
 
 The two middle rows are the interesting ones. There is no `CREATE TABLE`
-anywhere in this repository: `Visit.cs` is the table, `dotnet ef migrations
-add` turns a change to it into a migration, and the workflow applies that
-migration with `dotnet ef database update`. A contained database user is the
+anywhere in this repository: `Visit.cs` is the table, and `dotnet ef migrations
+add` turns a change to it into a migration. A contained database user is the
 other half — `CREATE USER`, executed *inside* the database, which Terraform
 cannot express without a third-party provider that would need a database
-connection at plan time. Both go where this platform already puts data-plane
-work: a workflow, exactly like the tenant test secret that the Renew
-Certificate workflow writes into all four clouds' vaults.
+connection at plan time.
 
-## Code-first, and why the application never migrates
+Both are one command, `db-hello bootstrap`, which is part of the application
+rather than a script in CI: the same image, the same context, the same
+interceptor, so there is one definition of how to reach this database and the
+SQL that grants access sits beside the model it grants access to. The workflow
+around it only resolves inputs from Terraform state and opens a firewall — the
+same shape as the tenant test secret the Renew Certificate workflow writes into
+all four clouds' vaults.
+
+## Code-first, and why the pod never migrates
 
 ```
 apps/db-hello/src/
 ├── Data/Visit.cs             the table
 ├── Data/VisitsContext.cs     the model, and how to connect
 ├── Data/EntraTokenInterceptor.cs   where the password would have been
-├── Data/VisitsContextFactory.cs    how `dotnet ef` builds a context
-└── Migrations/               generated, committed, applied by the workflow
+├── Data/VisitsContextFactory.cs    a context with no web app around it
+├── Bootstrap.cs              migrate + grant, run by CI as the admin
+└── Migrations/               generated, committed, applied by bootstrap
 ```
 
 The application holds `db_datareader` and `db_datawriter` and nothing else, so
-it *could not* change the schema even if it tried — which is why migrations are
-applied by the workflow, as the deploy identity, and never on pod start-up. A
-`Migrate()` call at boot would mean handing the pod DDL rights permanently to
-save one manual step, and permanent DDL rights are exactly what a compromised
-workload would want.
+it *could not* change the schema even if it tried — which is why `Migrate()` is
+reached through the `bootstrap` command, run by the deploy identity, and never
+on pod start-up. A `Migrate()` call at boot would mean handing the pod DDL
+rights permanently to save one manual step, and permanent DDL rights are
+exactly what a compromised workload would want.
 
 ```bash
 # after changing the model
@@ -166,8 +172,9 @@ server and database from `foundations/azure`, the tenant's identity from the
 `tenants` stack — then does the two things an empty database needs:
 
 ```
-dotnet ef database update          the schema, from the committed migrations
-CREATE USER … / ALTER ROLE …       the access, for this tenant's identity
+db-hello bootstrap --user <identity> --client-id <guid>
+   ├── Database.MigrateAsync()     the schema, from the committed migrations
+   └── CREATE USER … / ALTER ROLE  the access, for this tenant's identity
 ```
 
 Every step is guarded, so running it again is a no-op that still prints what it
@@ -176,14 +183,16 @@ a migration, merge it, re-run the workflow. Run it once per tenant per
 environment, and again after a foundation rebuild (the server name carries a
 random suffix, so a rebuilt foundation is a new, empty database).
 
-The migration step authenticates exactly as the pod does. `dotnet ef` builds
-the context through the same `VisitsContext.Configure`, so the same interceptor
-puts an Entra token on the connection — from the deploy service principal in
-CI, from a federated ServiceAccount token in the pod. One code path, two
-credentials, and no connection string with a password in either.
+It authenticates exactly as the pod does: the same `VisitsContextFactory`, so
+the same interceptor puts an Entra token on the connection — from the deploy
+service principal in CI, from a federated ServiceAccount token in the pod. One
+code path, two credentials, and no connection string with a password in either.
+The pod runs the same image and cannot do any of this: the database refuses
+both acts to `db_datareader`/`db_datawriter`, so the boundary is the grant and
+not the absence of the code.
 
 ```sql
--- .github/scripts/bootstrap_sql.py, in essence
+-- apps/db-hello/src/Bootstrap.cs, in essence
 CREATE USER [id-tenant-team-alpha-prototype] WITH SID = 0x…, TYPE = E;
 ALTER ROLE db_datareader ADD MEMBER [id-tenant-team-alpha-prototype];
 ALTER ROLE db_datawriter ADD MEMBER [id-tenant-team-alpha-prototype];
