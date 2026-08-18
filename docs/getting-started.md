@@ -250,6 +250,19 @@ must be in place around it, none of which this stack owns:
    Leave `argocd_sso_client_id` unset and the built-in admin account is the
    only way in.
 
+The apply also creates the token-only `ci` account (`argocd_api_accounts`),
+which the **Promote to production** workflow authenticates as. The account is
+declarative but its token is not — once the extension is up, sign in as an
+admin and mint one:
+
+```bash
+argocd login argocd.onek8s.lol --grpc-web --sso
+argocd account generate-token --account ci --grpc-web --expires-in 90d
+```
+
+Put it in OneK8s-argocd's `secrets.ARGOCD_AUTH_TOKEN`, with the host in
+`vars.ARGOCD_SERVER`. Until then, promotion is the UI or the CLI.
+
 Set `enable_argocd = false` in an environment's tfvars to skip the extension
 (it is in public preview). Details, roles and login: [argocd.md](argocd.md).
 That cluster is also the **hub** the other clouds are registered with in step

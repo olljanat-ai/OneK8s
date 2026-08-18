@@ -129,6 +129,65 @@ The built-in `admin` account still exists. Set
 close it once group access is proven to work — do that only after signing in
 through Entra, since disabling it while SSO is broken locks everyone out.
 
+## What gets in without a person: the `ci` account
+
+SSO covers people. A pipeline has no browser to be redirected to Entra with, so
+callers that are not people get a **local API account** instead, configured
+through `argocd_api_accounts` (account name → role):
+
+```hcl
+argocd_api_accounts = {
+  ci = "role:ci"
+}
+```
+
+Each entry becomes an `accounts.<name>` key in `argocd-cm` with the single
+capability `apiKey`, and a `g, <name>, <role>` binding in the RBAC policy. The
+`ci` account is the default, because the delivery plane already expects it: the
+`Promote to production` workflow in
+[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) authenticates as
+it to diff and sync the production stage after a human approves the run.
+
+Two things `apiKey` deliberately does not include:
+
+- **No password.** The other capability, `login`, would give the account one and
+  a way into the UI. A machine account with a password is a shared password, so
+  the only credential these accounts have is a bearer token.
+- **No self-service tokens.** `role:ci` grants no `accounts` actions, so the
+  account cannot mint tokens for itself — an admin does that, once, out of band.
+
+`role:ci` is defined in `argocd_rbac_policies` alongside `role:org-admin`, and
+is scoped to what the promotion workflow actually does:
+
+| Rule | What it is for |
+|---|---|
+| `applications, get, */*` | `argocd app get`, `app diff`, `app wait` |
+| `applications, sync, onek8s-platform/*` | `argocd app sync`, for platform applications only |
+
+The sync rule's object is `<project>/<application>`, and `onek8s-platform` is
+the `AppProject` the delivery-plane chart creates — so the account can promote
+an application the root Application brought in, but not the root Application
+itself, which lives in `default`. Repositories, clusters and accounts are not
+in the role at all.
+
+### Minting the token
+
+The account is configuration; the token is not. Nothing in Terraform generates
+one, so no Argo CD token is ever written to state. Sign in as a member of a
+group mapped to `role:admin` (`role:org-admin` is not enough — it has no
+`accounts` actions) and generate it:
+
+```bash
+argocd login argocd.onek8s.lol --grpc-web --sso
+argocd account generate-token --account ci --grpc-web
+```
+
+Add `--expires-in 90d` to get a token that expires, then put the value in the
+consuming repository's `secrets.ARGOCD_AUTH_TOKEN`. Revoking is
+`argocd account delete-token --account ci <id>`, with the IDs from
+`argocd account get --account ci`; removing the account from
+`argocd_api_accounts` and applying invalidates every token it has.
+
 ## Operating it
 
 ```bash
@@ -177,6 +236,12 @@ first apply to sit in `Pending` for a few minutes while a node is added.
   a deliberately larger grant than this stack asks for today.
 - **The built-in admin account is still open.** It is the break-glass path
   while SSO settles; close it as described above once group sign-in works.
+- **The `ci` account's token is minted and rotated by hand.** The account is
+  declarative, the credential is not: it is generated once with the CLI and
+  pasted into a repository secret, and nothing here notices when it expires or
+  is leaked. Automating it would mean this stack holding an Argo CD admin
+  credential and writing tokens into state, which is worse than the manual
+  step it replaces.
 - **Preview auto-upgrade.** With `argocd_extension_version` unset Azure
   installs the latest build of the release train and upgrades it in place.
   The 0.0.x → 1.0.0-preview jump already changed every configuration key

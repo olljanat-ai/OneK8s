@@ -195,7 +195,36 @@ variable "argocd_rbac_policies" {
     "p, role:org-admin, repositories, create, *, allow",
     "p, role:org-admin, repositories, update, *, allow",
     "p, role:org-admin, repositories, delete, *, allow",
+    # role:ci — what the promotion workflow in OneK8s-argocd needs and nothing
+    # else: read every application (`app get`, `app diff`, `app wait`) and sync
+    # the platform's own. The object of a sync rule is "<project>/<app>", and
+    # onek8s-platform is the AppProject the delivery-plane chart creates, so
+    # the account can promote a platform application but cannot touch the root
+    # Application in the "default" project that brought it in. No repository,
+    # cluster or account writes either — it cannot even mint its own tokens.
+    "p, role:ci, applications, get, */*, allow",
+    "p, role:ci, applications, sync, onek8s-platform/*, allow",
   ]
+}
+
+variable "argocd_api_accounts" {
+  description = "Argo CD local API accounts -> the role bound to each. Every account is created token-only ('apiKey'): it can carry tokens minted with `argocd account generate-token --account <name>`, and has no password and no way into the UI. The role is a built-in or one defined in argocd_rbac_policies."
+  type        = map(string)
+  default = {
+    # The promotion workflow in OneK8s-argocd, which syncs the production
+    # stage after a human approves it in the "production" GitHub environment.
+    ci = "role:ci"
+  }
+
+  validation {
+    condition     = alltrue([for account in keys(var.argocd_api_accounts) : can(regex("^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$", account))])
+    error_message = "Account names become argocd-cm keys ('accounts.<name>') and RBAC subjects, so they must be lowercase alphanumeric, optionally separated by '.', '_' or '-'."
+  }
+
+  validation {
+    condition     = !contains(keys(var.argocd_api_accounts), "admin")
+    error_message = "'admin' is the built-in account and is not configured this way; toggle it with argocd_extra_configuration's \"configs.cm.admin\\.enabled\"."
+  }
 }
 
 variable "argocd_rbac_group_roles" {
