@@ -14,6 +14,9 @@ module "observability" {
 
   cluster_name = "onek8s-azure-prototype"
 
+  # Required on AKS and only on AKS — see "Azure AKS" below.
+  azure_aks = true
+
   # Null — which is what a foundation passes when its tfvars set nothing —
   # takes this module's own endpoints, so all four clusters land in one stack.
   metrics_url = var.grafana_cloud_metrics_url
@@ -41,6 +44,32 @@ runs no DaemonSet it has no logs to read:
 `kube-state-metrics` and Node Exporter are deployed with the features that
 scrape them (`telemetryServices`), because no foundation runs a Prometheus
 stack of its own.
+
+## Azure AKS
+
+`azure_aks = true` is the one collector setting Azure does not share with the
+other clouds, and it is **not optional there**: the chart detects AKS from the
+nodes' own labels and refuses to render until every Pod that talks to the API
+server carries the annotation, so an Azure apply without it fails at
+`validations.yaml` rather than at install time.
+
+The annotation is `kubernetes.azure.com/set-kube-service-host-fqdn`. AKS' own
+admission webhook reads it and sets `KUBERNETES_SERVICE_HOST` to the API
+server's FQDN instead of the in-cluster `kubernetes.default` ClusterIP, which
+takes kube-proxy and the tunnel behind it out of the path. This module applies
+it to everything the chart deploys that is an API server client:
+
+| Object | Value |
+|---|---|
+| every Alloy collector | `collectorCommon.alloy.controller.podAnnotations` |
+| the Alloy Operator | `alloy-operator.podAnnotations` |
+| its finalizer hook Jobs | `alloy-operator.waitForAlloyRemoval.podAnnotations` |
+| `kube-state-metrics` | `telemetryServices.kube-state-metrics.podAnnotations` |
+
+Node Exporter is deliberately not in that list: it reads `/proc` and `/sys` and
+never contacts the API server. Off Azure the flag stays `false`, the annotation
+map is empty, and the rendered manifests are byte-identical to what the module
+produced before the flag existed.
 
 ## Destinations
 
@@ -71,7 +100,7 @@ them would be chosen as a second home for the same data.
 ## Credentials
 
 The module does **not** fetch the credentials; it only says which Kubernetes
-Secret they will be in. Filling that Secret is the caller's job and is the one
+Secret they will be in. Filling that Secret is the caller's job and is the other
 genuinely cloud-shaped part, so it is passed in as `extra_objects` — exactly
 the arrangement `modules/platform-ingress` uses for the wildcard certificate:
 a platform `ServiceAccount`, a namespaced ESO `SecretStore` bound to it, and an
@@ -115,6 +144,8 @@ destinations' `...From` fields asks for exactly the three keys that exist.
 - `cluster_name` is the only thing separating four clusters inside one Grafana
   Cloud stack. Two clusters sharing it interleave their series, so it carries
   both the cloud and the environment.
+- `azure_aks` is a fact about the cluster, not a preference: leave it `false`
+  on EKS, GKE and OKE, where the annotation would be inert but misleading.
 - `collector_preset` sizes every collector at once (`small` … `xlarge`). Reach
   for `extra_values` for anything finer; top-level keys there replace the ones
   built here outright, so a partial `clusterMetrics = { … }` drops the

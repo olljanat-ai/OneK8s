@@ -1,6 +1,7 @@
 # Grafana Cloud observability, the same module every other cloud runs
-# (modules/platform-observability), plus the one thing that is Azure-shaped:
-# reading the Grafana Cloud credentials out of Key Vault.
+# (modules/platform-observability), plus the two things that are Azure-shaped:
+# reading the Grafana Cloud credentials out of Key Vault, and telling the module
+# it is on AKS so the collectors reach the API server the way AKS expects.
 #
 # It is the ingress' certificate story with a different payload, and it is
 # deliberately built from the same parts — a platform identity pinned to one
@@ -84,6 +85,11 @@ module "observability" {
   cluster_name            = local.observability_cluster_name
   credentials_secret_name = local.observability_credentials_secret
   collector_preset        = var.observability_collector_preset
+
+  # The chart detects AKS from the nodes' own labels and refuses to render
+  # until every Pod that talks to the API server is annotated for it, so this
+  # is the one collector setting Azure does not share with the other clouds.
+  azure_aks = true
 
   metrics_url = var.grafana_cloud_metrics_url
   logs_url    = var.grafana_cloud_logs_url

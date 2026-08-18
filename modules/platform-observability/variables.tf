@@ -15,6 +15,13 @@ variable "cluster_name" {
   type        = string
 }
 
+# --- Platform ----------------------------------------------------------------
+variable "azure_aks" {
+  description = "This cluster is Azure AKS. Annotates every Pod the chart deploys that talks to the API server with kubernetes.azure.com/set-kube-service-host-fqdn, which AKS' admission webhook turns into the API server's FQDN in KUBERNETES_SERVICE_HOST. The chart detects AKS on its own and refuses to install without it, so on Azure this is not optional; elsewhere it must stay false."
+  type        = bool
+  default     = false
+}
+
 # --- Grafana Cloud endpoints -------------------------------------------------
 # Not secrets, and not derivable from the stack name: every Grafana Cloud stack
 # is assigned its own cluster of hosted endpoints. They are on the stack's
