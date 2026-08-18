@@ -55,13 +55,33 @@ locals {
       - email
   EOT
 
-  # Role definitions first, then the group bindings. Built-in roles (admin,
-  # readonly) need no "p" lines; see
+  # Role definitions first, then the bindings: Entra groups, then the local API
+  # accounts below — an account is the subject of a "g" line exactly like a
+  # group is, the subject just happens to be the account name rather than an
+  # object ID. Built-in roles (admin, readonly) need no "p" lines; see
   # https://github.com/argoproj/argo-cd/blob/master/assets/builtin-policy.csv
   argocd_rbac_policy_csv = join("\n", concat(
     var.argocd_rbac_policies,
     [for group, role in var.argocd_rbac_group_roles : "g, \"${group}\", ${role}"],
+    [for account, role in var.argocd_api_accounts : "g, ${account}, ${role}"],
   ))
+
+  # Local API accounts, for the callers that are not people. The chart writes
+  # one accounts.<name> key per entry into argocd-cm and the value lists what
+  # the account may do: "apiKey" alone is a token-only account — it can carry
+  # bearer tokens minted with `argocd account generate-token`, and that is all
+  # it can do. Adding "login" would give it a password and a way into the UI,
+  # which is deliberately not offered here: a machine account with a password
+  # is a shared password.
+  #
+  # The account is configuration, the token is not. Nothing here mints one, so
+  # no token ever reaches Terraform state; an admin generates it out of band
+  # and puts it wherever the caller reads its credentials from (for CI, a
+  # repository secret — see docs/argocd.md).
+  argocd_account_settings = {
+    for account in keys(var.argocd_api_accounts) :
+    "configs.cm.accounts\\.${account}" => "apiKey"
+  }
 
   # Extension configuration is a flat map of Helm values (dots in a *value
   # key* — an argocd-cm/argocd-cmd-params-cm entry — are escaped with a
@@ -123,6 +143,9 @@ locals {
     length(var.argocd_application_namespaces) > 0 ? {
       "configs.params.application\\.namespaces" = join(",", var.argocd_application_namespaces)
     } : {},
+    # Token-only accounts for CI and anything else that talks to the API
+    # without a person behind it.
+    local.argocd_account_settings,
     var.argocd_extra_configuration,
   )
 }
