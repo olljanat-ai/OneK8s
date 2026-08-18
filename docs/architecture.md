@@ -364,11 +364,12 @@ The workloads themselves live in [OneK8s-hello](https://github.com/olljanat-ai/O
 side. The example is `hello`, a .NET page showing a welcome message and a test
 secret read from that cloud's own backend through the tenant's namespaced
 `SecretStore`. It is released along two stages, which is where the platform's
-two roles for its two biggest clouds are stated: **Azure is staging** —
-auto-synced, on the hub — and **AWS is production**, whose `Application`
-carries no automated sync policy at all, so nothing reaches it until a human
-promotes it. One image, one chart, two clusters, and the only cloud-specific
-thing in it is the *name* of the secret it asks for.
+two roles for its two biggest clouds are stated: **Azure is staging**, where
+Kargo promotes every new build by itself, and **AWS is production**, which runs
+only what staging has already run and only once a person promotes it. Both
+Applications are auto-synced; the gate is upstream of Argo CD, in the commit a
+promotion makes ([kargo.md](kargo.md)). One image, one chart, two clusters, and
+the only cloud-specific thing in it is the *name* of the secret it asks for.
 [hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md).
 
 ## Secret isolation (the core security invariant)
@@ -459,12 +460,14 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
 - `pr-validation.yml` — fmt, per-stack validate, tflint, checkov, and (once
   `ENABLE_CLOUD_PLANS=true`) credentialed prototype plans for all seven stacks.
   The Helm checks live with the charts: [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) renders the
-  delivery plane and asserts that the production stage stays manual, and
+  delivery plane and asserts that production still waits for a person and can
+  still only take what staging has run, and
   [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) renders the application charts on both stages.
 - Image builds are in [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello): a merge that touches an application
-  pushes its image to GHCR, and pull requests build without pushing. Delivery
-  is not their job — Argo CD picks the image up from the chart, automatically
-  on Azure/staging and only after a promotion on AWS/production.
+  pushes its image to GHCR under one immutable `sha-` tag, and pull requests
+  build without pushing. Delivery is not their job — Kargo turns the new tag
+  into Freight, promotes it to Azure/staging by itself, and waits for a person
+  before AWS/production.
 - `deploy-foundations.yml` / `deploy-tenants.yml` / `deploy-gitops.yml` /
   `deploy-portainer.yml` — independent pipelines; merge to `main` auto-deploys
   the prototype environment on path changes, other environments go through

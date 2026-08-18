@@ -99,6 +99,11 @@ variable "platform_apps" {
     apps_target_revision = optional(string, "main")
     # Wildcard domain the applications' hosts sit under: "<cloud>-<app>.<domain>".
     domain = optional(string, "onek8s.lol")
+    # Whether the delivery-plane chart renders the Kargo objects that define
+    # the hello application's release path. It is also skipped automatically
+    # when the hub's foundation was applied with enable_kargo = false: the
+    # objects would have no controller.
+    kargo_enabled = optional(bool, true)
     # Tenant namespace the platform's example applications are released into.
     # It must already exist on every targeted cluster — the tenants stack
     # creates it, Argo CD is barred from doing so.

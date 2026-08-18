@@ -76,8 +76,13 @@ locals {
   #
   # The account is configuration, the token is not. Nothing here mints one, so
   # no token ever reaches Terraform state; an admin generates it out of band
-  # and puts it wherever the caller reads its credentials from (for CI, a
-  # repository secret — see docs/argocd.md).
+  # and puts it wherever the caller reads its credentials from (see
+  # docs/argocd.md).
+  #
+  # The map is empty by default. It held a "ci" account while promoting to
+  # production meant a workflow pressing Sync through the Argo CD API; Kargo
+  # does that as a controller now, through the Kubernetes API, so the platform
+  # ships with no machine account in Argo CD at all.
   argocd_account_settings = {
     for account in keys(var.argocd_api_accounts) :
     "configs.cm.accounts\\.${account}" => "apiKey"

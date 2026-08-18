@@ -70,6 +70,21 @@ output "argocd_namespace" {
   value       = local.argocd_namespace
 }
 
+output "kargo_url" {
+  description = "Public URL of the Kargo UI and API (null when Kargo is disabled, or when it runs controller-only because no way to sign in is configured)."
+  value       = local.kargo_enabled && local.kargo_api_enabled ? local.kargo_url : null
+}
+
+output "kargo_namespace" {
+  description = "Namespace Kargo runs in on this cluster (null when Kargo is disabled)."
+  value       = local.kargo_enabled ? local.kargo_namespace : null
+}
+
+output "kargo_shared_resources_namespace" {
+  description = "Namespace Kargo reads credentials shared by every Project from — where the Git credential that lets a promotion push to the delivery-plane repository is put, out of band (null when Kargo is disabled)."
+  value       = local.kargo_enabled ? local.kargo_shared_resources_namespace : null
+}
+
 output "portainer_url" {
   description = "Public URL of the Portainer UI, and the address Edge Agents poll (null when Portainer is disabled). The portainer/ stack registers every spoke against it."
   value       = local.portainer_enabled ? local.portainer_url : null

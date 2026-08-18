@@ -1,0 +1,231 @@
+# Kargo: how a release moves between clouds
+
+Argo CD answers one question — *is the cluster what Git says it is* — and
+answers it continuously. It has no opinion about **which** revision of an
+application belongs on which cluster, and for a platform whose whole point is
+that Azure means staging and AWS means production, that second question is the
+interesting one.
+
+[Kargo](https://kargo.io) answers it, and writes the answer down.
+
+```
+ghcr.io/…/hello:sha-a1b2c3d ─┐
+                             ├─▶ Freight ──▶ Stage staging  ──▶ commit ──┐
+apps/hello/chart @ 9f4e2b1 ──┘      │            (auto)                  │
+                                    │                                    │
+                          a person promotes                        OneK8s-argocd
+                                    ▼                            stages/hello/*.yaml
+                              Stage production ──▶ commit ───────────────┘
+                                                                         │
+                                                          Argo CD syncs ─┘
+```
+
+Everything on the left is Kargo's; everything on the right is Argo CD's, and it
+is unchanged. Both `hello` Applications carry `syncPolicy.automated` — Argo CD
+applies what Git says, as fast as it can, on both clouds. **The gate in front of
+AWS is that no commit says production runs that build yet.**
+
+## Why this replaced the previous gate
+
+Before this, "production is gated" meant the `hello-production` Application
+deliberately carried no `syncPolicy.automated`, plus a *Promote to production*
+GitHub workflow that ran `argocd app sync` after an approval on a GitHub
+environment. It worked, and it had four problems that were not fixable in that
+shape:
+
+| The old gate | With Kargo |
+|---|---|
+| One missing YAML block, three lines from being "made consistent" by a well-meaning edit | A promotion is a commit; adding a sync policy changes nothing, because the Application is already synced — to the previous release |
+| Said nothing about *what* was promoted: the tag was `latest`, so a production pod that restarted pulled the newest build | Freight names an immutable `sha-` tag and a chart commit; the build workflow publishes no moving tag at all |
+| The audit trail was a workflow run, in a repository, next to the thing it approved | `git log stages/hello/production.yaml` — the list of every build production has run, and who asked |
+| Needed an Argo CD API account (`role:ci`) and a bearer token pasted into a repository secret | Kargo writes `Application` objects as a controller, through the Kubernetes API. No Argo CD machine account exists any more |
+
+The one credential that remains is a Git credential, because a promotion is a
+push. That is discussed below.
+
+## The objects, and where each one lives
+
+| Object | Kind | Lives in | Owned by |
+|---|---|---|---|
+| the engine | Helm release `kargo` | namespace `kargo` on the hub | `foundations/azure/kargo.tf` |
+| the project | `Project` `onek8s-hello` (cluster-scoped; Kargo creates a namespace of the same name) | the hub | [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd), `argocd/templates/kargo-project.yaml` |
+| what a release is | `Warehouse` `hello` | namespace `onek8s-hello` | the same chart |
+| the release path | `Stage` `staging`, `Stage` `production` | namespace `onek8s-hello` | the same chart |
+| who may promote | `ServiceAccount` + `Role` `promoter` | namespace `onek8s-hello` | the same chart |
+| what each stage runs | `stages/hello/<stage>.yaml` | OneK8s-argocd | **Kargo** — written by promotions |
+
+Only the first is Terraform's. Everything else arrives through the same root
+`Application` that already brings in the `AppProject` and the ApplicationSets
+(`gitops/root-app.tf`), so changing the release path is a reviewed commit in the
+delivery-plane repository rather than an apply.
+
+## Installing it: `foundations/azure/kargo.tf`
+
+Kargo is an ordinary Helm release rather than an AKS extension — Azure offers
+none — and follows Argo CD in every other respect:
+
+```hcl
+enable_kargo        = true
+kargo_hostname      = "kargo.onek8s.lol"     # platform wildcard, A record by hand
+kargo_sso_client_id = "<app registration>"   # Entra ID, as Argo CD's UI uses
+kargo_rbac_groups   = {
+  admins           = ["<group object id>"]
+  project_creators = ["<group object id>"]
+  viewers          = ["<group object id>"]
+}
+```
+
+- **TLS terminates at Traefik**, as everywhere else: the API serves plain HTTP
+  and is told that TLS is terminated upstream, so the URLs it renders and the
+  address `kargo login` is pointed at are `https://`.
+- **Entra ID is the way in.** The app registration needs no federated credential
+  and no client secret — Kargo verifies the ID token rather than calling Graph —
+  but it does need the loopback redirect on a *mobile and desktop* platform for
+  `kargo login`, alongside the web redirect the UI uses.
+- **The UI is installed only once somebody can sign in to it.** With neither
+  `kargo_sso_client_id` nor `kargo_admin_password_hash` set, Kargo runs
+  controller-only: Warehouses discover artifacts, staging is auto-promoted, and
+  a manual promotion is a `Promotion` object created with `kubectl`. The gate
+  holds either way — it is the Stage's promotion policy, not the UI.
+- **`kargo_rbac_groups` is cluster-wide capability** ("may create Projects",
+  "may see everything"). Who may promote *the hello application to production*
+  is not here: it is a `Role` in the Project's namespace, and it lives beside the
+  Stage it guards.
+
+`enable_kargo` is ignored when `enable_argocd` is false — every Stage's health
+and its last promotion step is an Argo CD Application, so a Kargo with no Argo CD
+would have nothing to promote onto.
+
+## The one credential
+
+A promotion is a commit, so Kargo needs a Git credential that may push to the
+delivery-plane repository. It is not created by Terraform, for the same reason
+Argo CD's account tokens never were: a credential in state is a credential in
+every plan output and every state backup.
+
+```bash
+kubectl -n kargo-shared-resources create secret generic onek8s-argocd-repo \
+  --from-literal=repoURL=https://github.com/olljanat-ai/OneK8s-argocd.git \
+  --from-literal=username=<user or app id> \
+  --from-literal=password=<PAT or installation token>
+
+kubectl -n kargo-shared-resources label secret onek8s-argocd-repo \
+  kargo.akuity.io/cred-type=git
+```
+
+`kargo-shared-resources` is the namespace the chart creates for credentials
+shared by every Project (`kargo_shared_resources_namespace` in the foundation's
+outputs); put it in the Project's own namespace instead to scope it to one
+project. A fine-grained PAT with *contents: read and write* on that one
+repository is enough; a GitHub App installation is the better long-lived answer.
+
+Nothing else is manual, and nothing else is a secret. Kargo's access to Argo CD
+is Kubernetes RBAC on `Application` resources, installed with its chart.
+
+## What a promotion actually does
+
+Each `Stage` carries the steps, and they are the same five for both stages
+(`argocd/templates/kargo-stages-hello.yaml` in OneK8s-argocd):
+
+1. `git-clone` — the delivery-plane repository, as the bot.
+2. `yaml-update` — write `image.tag` and `chartRevision` into
+   `stages/hello/<stage>.yaml`. Two lines: everything else about the stage —
+   which cluster, which host, which secret — belongs to the stage rather than to
+   the release, and is rendered by the ApplicationSet.
+3. `git-commit` — the record. The message carries the Freight, both artifacts
+   and, for a promotion somebody asked for, their name.
+4. `git-push` — to `main`.
+5. `argocd-update` — ask Argo CD to sync now rather than on its next refresh,
+   and wait until the Application is synced at both promoted revisions *and*
+   healthy. Without that wait a promotion would report success while the old
+   pods were still serving.
+
+Argo CD reads the file back through the `hello-<stage>` ApplicationSet, which
+uses it twice: `chartRevision` as the chart source's `targetRevision`, and the
+file itself as a Helm values file for `image.tag`. So a chart change travels the
+release path exactly like an image does — which the old gate did not manage,
+since only the image was ever "promoted".
+
+The `argocd-update` step will not touch an Application that has not named the
+Stage acting on it (`kargo.akuity.io/authorized-stage: onek8s-hello:<stage>`), so
+the production Stage cannot sync staging's Application or the reverse.
+
+## Promoting
+
+```bash
+kargo login https://kargo.onek8s.lol --sso
+
+kargo get stages     --project onek8s-hello    # what each stage runs now
+kargo get freight    --project onek8s-hello    # what could be promoted
+kargo promote        --project onek8s-hello --stage production --freight <name>
+kargo get promotions --project onek8s-hello    # who promoted what, when
+```
+
+Or the UI at `https://kargo.onek8s.lol`, or — with neither — the object itself:
+
+```yaml
+apiVersion: kargo.akuity.io/v1alpha1
+kind: Promotion
+metadata:
+  generateName: production-
+  namespace: onek8s-hello
+spec:
+  stage: production
+  freight: <freight name>
+```
+
+All three leave the same commit behind.
+
+**Who may.** `kargo.promoters` in the delivery-plane chart's values is a list of
+Entra ID group object IDs. It renders a `ServiceAccount` whose claims Kargo
+matches against the signed-in identity, and a `Role` granting `promote` on
+exactly the stages that wait for a person — plus read on the Project and nothing
+else. Not editing a Stage, not changing what the Warehouse watches, not
+promoting in another Project.
+
+**What may.** `production` requests its Freight from `staging`, not from the
+Warehouse, so a build that has never run on AKS cannot be promoted to EKS even
+by somebody who is allowed to promote. `soakTime` adds "and only after it has
+run there this long".
+
+## Operating it
+
+```bash
+kubectl -n kargo get pods                       # the engine
+kubectl -n onek8s-hello get warehouses,stages,freight
+kubectl -n onek8s-hello describe stage production
+
+# why is there no new Freight?
+kubectl -n onek8s-hello describe warehouse hello   # discovery errors show here
+
+# what does Git say production runs?
+git -C ../OneK8s-argocd log --oneline -- stages/hello/production.yaml
+```
+
+Common causes, in the order they usually happen:
+
+| Symptom | Usually |
+|---|---|
+| no Freight after a merge | the build pushed a tag the Warehouse's `tagRegex` does not allow, or the package is private |
+| a promotion fails at `git-push` | the Git credential is missing, unlabelled, or has no write access |
+| a promotion fails at `argocd-update` | the Application is missing the `kargo.akuity.io/authorized-stage` annotation, or the spoke is not registered so no Application was generated |
+| the Application renders "image.tag is required" | nothing has been promoted to that stage yet — the seed file in `stages/` has an empty tag on purpose |
+| a promotion succeeds but the page is unchanged | the chart source's `targetRevision` moved; give the ApplicationSet's git generator a moment, or check its `revision` |
+
+## Known gaps
+
+- **Kargo commits straight to `main`.** A promotion is not reviewed the way a
+  pull request is — the review is the approval to promote, and Kargo's RBAC
+  stands in for branch protection on `stages/`. The `git-open-pr` step is the
+  alternative, at the cost of a second click on every staging deploy.
+- **The Git credential can write to the whole delivery-plane repository.** A
+  promotion only ever touches `stages/`, but nothing enforces that.
+- **No verification beyond "the pods are healthy".** Kargo can hold Freight
+  behind an Argo Rollouts `AnalysisTemplate` or a smoke-test `Job` before it
+  becomes promotable; this platform installs no Argo Rollouts, so both
+  integrations are explicitly disabled and `soakTime` is the blunt substitute.
+- **One Project, one application with a release path.** `db-hello` has a single
+  cluster and therefore no path to travel, so it has no Kargo objects at all.
+- **The chart version is pinned by hand** (`kargo_chart_version`). Deliberate —
+  a promotion engine that upgrades itself unannounced is one nobody can reason
+  about — but it means somebody has to bump it.

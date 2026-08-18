@@ -24,7 +24,8 @@ state_home = {
 # AWS is not just any spoke here: it is where the hello application's
 # production stage runs, so removing it from this map removes production
 # (the ApplicationSet's cluster generator finds no cluster and generates no
-# Application) rather than breaking anything.
+# Application) rather than breaking anything. Kargo's production Stage stays,
+# with nothing to promote onto — it is the release path, not the cluster.
 spokes = {
   aws = {}
 }
@@ -37,8 +38,9 @@ spokes = {
 # Two repositories, because they change for different reasons:
 #
 #   repo_url       OneK8s-argocd  where and when an application is deployed
-#                                 (the stages: staging on Azure, production on
-#                                 AWS behind a manual sync)
+#                                 (the Kargo Warehouse and Stages: staging on
+#                                 Azure, production on AWS behind a manual
+#                                 promotion, and the revision each one runs)
 #   apps_repo_url  OneK8s-hello   what is deployed: the applications and their
 #                                 charts
 #
