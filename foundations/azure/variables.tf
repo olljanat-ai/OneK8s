@@ -195,26 +195,18 @@ variable "argocd_rbac_policies" {
     "p, role:org-admin, repositories, create, *, allow",
     "p, role:org-admin, repositories, update, *, allow",
     "p, role:org-admin, repositories, delete, *, allow",
-    # role:ci — what the promotion workflow in OneK8s-argocd needs and nothing
-    # else: read every application (`app get`, `app diff`, `app wait`) and sync
-    # the platform's own. The object of a sync rule is "<project>/<app>", and
-    # onek8s-platform is the AppProject the delivery-plane chart creates, so
-    # the account can promote a platform application but cannot touch the root
-    # Application in the "default" project that brought it in. No repository,
-    # cluster or account writes either — it cannot even mint its own tokens.
-    "p, role:ci, applications, get, */*, allow",
-    "p, role:ci, applications, sync, onek8s-platform/*, allow",
   ]
 }
 
 variable "argocd_api_accounts" {
   description = "Argo CD local API accounts -> the role bound to each. Every account is created token-only ('apiKey'): it can carry tokens minted with `argocd account generate-token --account <name>`, and has no password and no way into the UI. The role is a built-in or one defined in argocd_rbac_policies."
   type        = map(string)
-  default = {
-    # The promotion workflow in OneK8s-argocd, which syncs the production
-    # stage after a human approves it in the "production" GitHub environment.
-    ci = "role:ci"
-  }
+  # Empty, and that is the point: nothing outside the cluster syncs an
+  # application any more. Promotion belongs to Kargo, which writes the
+  # Application objects through the Kubernetes API as a controller, so there is
+  # no Argo CD API account behind it, no bearer token to mint and hand to CI,
+  # and no token to rotate when somebody leaves.
+  default = {}
 
   validation {
     condition     = alltrue([for account in keys(var.argocd_api_accounts) : can(regex("^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$", account))])
@@ -236,6 +228,77 @@ variable "argocd_rbac_group_roles" {
 variable "argocd_extra_configuration" {
   description = "Extra Argo CD extension configuration settings (flat Helm values; dots inside a ConfigMap key are backslash-escaped). Merged last, so it overrides the defaults set in argocd.tf."
   type        = map(string)
+  default     = {}
+}
+
+# --- Kargo --------------------------------------------------------------------
+variable "enable_kargo" {
+  description = "Install Kargo on the hub: the promotion engine that moves an application's Freight along its stages and commits the result to the delivery-plane repository. Skipped automatically when enable_argocd is false — every Stage's health and last promotion step is an Argo CD Application."
+  type        = bool
+  default     = true
+}
+
+variable "kargo_hostname" {
+  description = "Public hostname of the Kargo UI and API. Must be covered by the platform wildcard certificate, and its A record is pointed at the ingress by hand."
+  type        = string
+  default     = "kargo.onek8s.lol"
+}
+
+variable "kargo_chart_version" {
+  description = "Version of the upstream Kargo Helm chart (oci://ghcr.io/akuity/kargo-charts/kargo). Pinned rather than floating: a promotion engine that upgrades itself unannounced is a promotion engine nobody can reason about."
+  type        = string
+  default     = "1.11.2"
+}
+
+variable "kargo_admin_password_hash" {
+  description = "bcrypt hash of the Kargo admin account's password, e.g. `htpasswd -bnBC 10 \"\" '<password>' | tr -d ':\\n'`. Null (the default) disables the account, leaving Entra ID SSO as the only way in. Only the hash is configuration: the password itself never reaches this stack, and the key that signs the tokens it mints is generated in kargo.tf."
+  type        = string
+  default     = null
+  sensitive   = true
+}
+
+variable "kargo_sso_client_id" {
+  description = "Application (client) ID of the Entra ID app registration users sign in to for the Kargo UI. Null leaves SSO off, in which case kargo_admin_password_hash is the only way in. Unlike Argo CD's, this registration needs no federated credential: Kargo verifies ID tokens rather than calling Graph, so it holds no client secret either."
+  type        = string
+  default     = null
+}
+
+variable "kargo_sso_cli_client_id" {
+  description = "Client ID `kargo login` uses. Defaults to kargo_sso_client_id, which is right when that registration also declares a 'mobile and desktop' platform with the loopback redirect the CLI needs; give a second registration here when it does not."
+  type        = string
+  default     = null
+}
+
+variable "kargo_sso_tenant_id" {
+  description = "Entra ID tenant that issues Kargo's ID tokens. Defaults to the deploy identity's tenant; set it for a multi-tenant app registration."
+  type        = string
+  default     = null
+}
+
+variable "kargo_rbac_groups" {
+  description = <<-EOT
+    Entra ID group object IDs bound to each of Kargo's four system roles. These
+    are cluster-wide capabilities — "may create Projects", "may see
+    everything" — and deliberately not the answer to "who may promote to
+    production": that is a Role in the Project's own namespace, which lives in
+    the delivery-plane repository beside the Stage it guards, so a change to it
+    is a reviewed commit rather than a `terraform apply`.
+
+    An unmapped but authenticated user gets nothing at all, which is Kargo's
+    default and is left alone.
+  EOT
+  type = object({
+    admins           = optional(list(string), [])
+    project_creators = optional(list(string), [])
+    users            = optional(list(string), [])
+    viewers          = optional(list(string), [])
+  })
+  default = {}
+}
+
+variable "kargo_extra_values" {
+  description = "Extra Helm values for the Kargo chart, merged last so an environment can override anything kargo.tf sets."
+  type        = any
   default     = {}
 }
 

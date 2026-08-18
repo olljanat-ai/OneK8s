@@ -250,18 +250,25 @@ must be in place around it, none of which this stack owns:
    Leave `argocd_sso_client_id` unset and the built-in admin account is the
    only way in.
 
-The apply also creates the token-only `ci` account (`argocd_api_accounts`),
-which the **Promote to production** workflow authenticates as. The account is
-declarative but its token is not — once the extension is up, sign in as an
-admin and mint one:
+No machine account is created: nothing outside the cluster syncs an application,
+because promotion belongs to Kargo, which the same apply installs beside Argo CD
+(`enable_kargo`). Kargo needs one thing that is not configuration — a Git
+credential that may push to the delivery-plane repository, since a promotion is
+a commit:
 
 ```bash
-argocd login argocd.onek8s.lol --grpc-web --sso
-argocd account generate-token --account ci --grpc-web --expires-in 90d
+kubectl -n kargo-shared-resources create secret generic onek8s-argocd-repo \
+  --from-literal=repoURL=https://github.com/olljanat-ai/OneK8s-argocd.git \
+  --from-literal=username=<user or app id> --from-literal=password=<token>
+kubectl -n kargo-shared-resources label secret onek8s-argocd-repo \
+  kargo.akuity.io/cred-type=git
 ```
 
-Put it in OneK8s-argocd's `secrets.ARGOCD_AUTH_TOKEN`, with the host in
-`vars.ARGOCD_SERVER`. Until then, promotion is the UI or the CLI.
+Kargo's own UI is published like Argo CD's, on `kargo_hostname`, and is
+installed only once there is a way to sign in to it — set `kargo_sso_client_id`
+to a second Entra app registration, or leave it unset and Kargo runs
+controller-only, with promotions made as objects (`kubectl`). Details:
+[kargo.md](kargo.md).
 
 Set `enable_argocd = false` in an environment's tfvars to skip the extension
 (it is in public preview). Details, roles and login: [argocd.md](argocd.md).
@@ -434,14 +441,18 @@ kubectl -n argocd get applications -L onek8s.io/stage,onek8s.io/cloud
 ```
 
 `hello` runs on two clusters that mean two different things: **Azure is
-staging**, synced automatically, and **AWS is production**, which carries no
-automated sync policy at all — Argo CD shows it `OutOfSync` and applies nothing
-until somebody promotes it:
+staging**, where Kargo promotes every new build by itself, and **AWS is
+production**, which only ever runs what staging has already run, and only once
+somebody promotes it. Both Applications are auto-synced — the gate is that no
+commit says production runs that build yet:
 
 ```bash
-argocd app diff hello-production --grpc-web     # what would change
-argocd app sync hello-production --grpc-web     # or the approval-gated
-                                                # "Promote to production" workflow
+kargo get freight --project onek8s-hello                    # what could be promoted
+kargo promote --project onek8s-hello --stage production --freight <name>
+
+# the same thing, from the hub, with no CLI installed
+kubectl -n onek8s-hello get stages
+git -C ../OneK8s-argocd log --oneline -- stages/hello/production.yaml
 ```
 
 Three things are needed before the pages actually render, none of them in

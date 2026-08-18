@@ -210,7 +210,7 @@ Three repositories, split by what changes for what reason:
 | Repository | Owns |
 |---|---|
 | **OneK8s** (here) | The clusters and the platform: foundations, tenants, the hub, the root Application |
-| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | **Where and when** an application is deployed: the `AppProject`, the ApplicationSets, the release stages, the gate in front of production |
+| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | **Where and when** an application is deployed: the `AppProject`, the ApplicationSets, and the Kargo `Warehouse` and `Stage`s that decide which build each cluster runs |
 | [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) | **What** is deployed: the example applications, their charts and their images |
 
 The example is **hello**: a minimal .NET 10 page showing a welcome message and
@@ -218,15 +218,18 @@ the value of a test secret, read out of the host cloud's own secret backend
 through the tenant's namespaced `SecretStore`. One image and one chart, along a
 release path of two stages on two clouds:
 
-| Stage | Host | Cluster | Sync |
+| Stage | Host | Cluster | How a build gets there |
 |---|---|---|---|
-| `staging` | https://azure-hello.onek8s.lol | AKS (hub) | automatic, on every merge |
-| `production` | https://aws-hello.onek8s.lol | EKS (spoke) | **manual promotion** |
+| `staging` | https://azure-hello.onek8s.lol | AKS (hub) | Kargo promotes every new build automatically |
+| `production` | https://aws-hello.onek8s.lol | EKS (spoke) | **a person promotes it, and only from `staging`** |
 
-The production `Application` carries no automated sync policy, so Argo CD shows
-it `OutOfSync` when staging moves ahead and applies nothing to AWS until a human
-syncs it — from the UI, from the CLI, or through the *Promote to production*
-workflow, which waits on a GitHub environment with required reviewers.
+[Kargo](https://kargo.io) on the hub freezes each build together with the chart
+it is deployed with, and a promotion writes that pair into the delivery-plane
+repository — so both Applications are plainly auto-synced and the gate in front
+of AWS is that **no commit says production runs that build yet**. It cannot be
+lifted by editing a sync policy, it covers chart changes as well as images, and
+`git log stages/hello/production.yaml` is the list of every build production has
+ever run. [docs/kargo.md](docs/kargo.md).
 
 The only cloud-specific thing in the application is the *name* of the secret it
 asks for — `team-alpha-test` on Key Vault, `prototype/team-alpha/test` on
@@ -301,7 +304,8 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 - **PR validation** — fmt, validate (all 7 stacks), tflint, checkov, and
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`). The Helm side moved with
   the charts: OneK8s-argocd renders the delivery plane (and asserts that
-  production stays manual), OneK8s-hello renders the application charts.
+  production still waits for a person, and can still only take what staging has
+  run), OneK8s-hello renders the application charts.
 - **Deploy Foundations / Deploy Tenants / Deploy GitOps / Deploy Portainer** —
   separate pipelines; the prototype environment deploys on merge to `main`,
   other environments via `workflow_dispatch`, authenticated with cloud

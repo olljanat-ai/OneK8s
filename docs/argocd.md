@@ -129,48 +129,29 @@ The built-in `admin` account still exists. Set
 close it once group access is proven to work — do that only after signing in
 through Entra, since disabling it while SSO is broken locks everyone out.
 
-## What gets in without a person: the `ci` account
+## What gets in without a person
 
 SSO covers people. A pipeline has no browser to be redirected to Entra with, so
-callers that are not people get a **local API account** instead, configured
-through `argocd_api_accounts` (account name → role):
+callers that are not people would get a **local API account** instead,
+configured through `argocd_api_accounts` (account name → role). Each entry
+becomes an `accounts.<name>` key in `argocd-cm` with the single capability
+`apiKey` — a bearer token and nothing else, no password and no way into the UI
+— plus a `g, <name>, <role>` binding in the RBAC policy.
+
+**The map is empty, and that is the interesting part.** It held a `ci` account
+while promoting to production meant a workflow calling `argocd app sync` after
+a GitHub approval. That job belongs to [Kargo](kargo.md) now, and Kargo is a
+controller on the same cluster: it writes `Application` objects through the
+Kubernetes API under RBAC installed with its chart. So the platform ships with
+no Argo CD machine account at all — no token to mint, hand to a CI system,
+store in a repository secret, or rotate when somebody leaves.
+
+Add one back only for a caller that genuinely has to talk to the Argo CD *API*:
 
 ```hcl
-argocd_api_accounts = {
-  ci = "role:ci"
-}
+argocd_api_accounts   = { reporting = "role:readonly" }
+argocd_rbac_policies  = [ ... ]   # if the built-in roles do not fit
 ```
-
-Each entry becomes an `accounts.<name>` key in `argocd-cm` with the single
-capability `apiKey`, and a `g, <name>, <role>` binding in the RBAC policy. The
-`ci` account is the default, because the delivery plane already expects it: the
-`Promote to production` workflow in
-[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) authenticates as
-it to diff and sync the production stage after a human approves the run.
-
-Two things `apiKey` deliberately does not include:
-
-- **No password.** The other capability, `login`, would give the account one and
-  a way into the UI. A machine account with a password is a shared password, so
-  the only credential these accounts have is a bearer token.
-- **No self-service tokens.** `role:ci` grants no `accounts` actions, so the
-  account cannot mint tokens for itself — an admin does that, once, out of band.
-
-`role:ci` is defined in `argocd_rbac_policies` alongside `role:org-admin`, and
-is scoped to what the promotion workflow actually does:
-
-| Rule | What it is for |
-|---|---|
-| `applications, get, */*` | `argocd app get`, `app diff`, `app wait` |
-| `applications, sync, onek8s-platform/*` | `argocd app sync`, for platform applications only |
-
-The sync rule's object is `<project>/<application>`, and `onek8s-platform` is
-the `AppProject` the delivery-plane chart creates — so the account can promote
-an application the root Application brought in, but not the root Application
-itself, which lives in `default`. Repositories, clusters and accounts are not
-in the role at all.
-
-### Minting the token
 
 The account is configuration; the token is not. Nothing in Terraform generates
 one, so no Argo CD token is ever written to state. Sign in as a member of a
@@ -179,13 +160,11 @@ group mapped to `role:admin` (`role:org-admin` is not enough — it has no
 
 ```bash
 argocd login argocd.onek8s.lol --grpc-web --sso
-argocd account generate-token --account ci --grpc-web
+argocd account generate-token --account <name> --grpc-web --expires-in 90d
 ```
 
-Add `--expires-in 90d` to get a token that expires, then put the value in the
-consuming repository's `secrets.ARGOCD_AUTH_TOKEN`. Revoking is
-`argocd account delete-token --account ci <id>`, with the IDs from
-`argocd account get --account ci`; removing the account from
+Revoking is `argocd account delete-token --account <name> <id>`, with the IDs
+from `argocd account get --account <name>`; removing the account from
 `argocd_api_accounts` and applying invalidates every token it has.
 
 ## Operating it
@@ -236,12 +215,12 @@ first apply to sit in `Pending` for a few minutes while a node is added.
   a deliberately larger grant than this stack asks for today.
 - **The built-in admin account is still open.** It is the break-glass path
   while SSO settles; close it as described above once group sign-in works.
-- **The `ci` account's token is minted and rotated by hand.** The account is
-  declarative, the credential is not: it is generated once with the CLI and
-  pasted into a repository secret, and nothing here notices when it expires or
-  is leaked. Automating it would mean this stack holding an Argo CD admin
-  credential and writing tokens into state, which is worse than the manual
-  step it replaces.
+- **Any API account's token is minted and rotated by hand.** The account is
+  declarative, the credential is not: it is generated once with the CLI, and
+  nothing here notices when it expires or is leaked. Automating it would mean
+  this stack holding an Argo CD admin credential and writing tokens into state,
+  which is worse than the manual step it replaces. The platform ships with no
+  such account — promotion, which used to need one, is [Kargo's](kargo.md).
 - **Preview auto-upgrade.** With `argocd_extension_version` unset Azure
   installs the latest build of the release train and upgrades it in place.
   The 0.0.x → 1.0.0-preview jump already changed every configuration key
@@ -427,13 +406,17 @@ the hub; what runs on them lives in two repositories of its own:
 | Repository | Owns |
 |---|---|
 | **OneK8s** (here) | The clusters, the tenants, the hub, and the root `Application` — `gitops/root-app.tf` |
-| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | Where and when an application is deployed: the `AppProject`, the ApplicationSets, the release stages |
+| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | Where and when an application is deployed: the `AppProject`, the ApplicationSets, and the Kargo `Warehouse` and `Stage`s |
 | [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) | What is deployed: the example applications, their charts and their images |
 
 ```
 root-app.tf ──▶ Application "platform-gitops"  (project: default)
                   └── OneK8s-argocd, path argocd
                         ├── AppProject onek8s-platform
+                        ├── Kargo Project onek8s-hello       ──▶ what each stage runs
+                        │     ├── Warehouse hello
+                        │     ├── Stage staging
+                        │     └── Stage production
                         ├── ApplicationSet hello-staging     ──▶ hello-staging     (azure, in-cluster)
                         ├── ApplicationSet hello-production  ──▶ hello-production  (aws, spoke)
                         └── ApplicationSet db-hello          ──▶ db-hello-azure    (hub only)
@@ -450,15 +433,16 @@ rather than being committed per environment.
 The `hello` application is released along **two stages**, which is the reason
 there are two ApplicationSets rather than one fan-out:
 
-| Stage | Cloud | Cluster | Sync |
+| Stage | Cloud | Cluster | How a build gets there |
 |---|---|---|---|
-| `staging` | `azure` | AKS, the hub (`in-cluster`) | automated: prune + selfHeal |
-| `production` | `aws` | EKS, a registered spoke | **manual** — the Application carries no `syncPolicy.automated` |
+| `staging` | `azure` | AKS, the hub (`in-cluster`) | Kargo promotes every new build automatically |
+| `production` | `aws` | EKS, a registered spoke | **a person promotes it, and only from `staging`** |
 
-Nothing reaches the AWS cluster until a human syncs it, from the UI, with
-`argocd app sync hello-production`, or through the approval-gated *Promote to
-production* workflow in OneK8s-argocd, which binds to a GitHub environment with
-required reviewers. Removing `aws` from `var.spokes` removes production
+Both Applications are auto-synced (prune + selfHeal). The gate in front of AWS
+is upstream of Argo CD: Kargo writes the promoted image tag and chart revision
+into the delivery-plane repository, so nothing reaches the AWS cluster until a
+commit says it should, and that commit is made by a promotion. See
+[kargo.md](kargo.md). Removing `aws` from `var.spokes` removes production
 altogether: the cluster generator finds no cluster and generates no Application.
 
 `db-hello` has no stages, because it is deployed to Azure and nowhere else, and

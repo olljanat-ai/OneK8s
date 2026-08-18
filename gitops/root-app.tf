@@ -11,9 +11,17 @@
 #   root-app.tf ──▶ Application "platform-gitops"
 #                     └── OneK8s-argocd, path argocd
 #                           ├── AppProject onek8s-platform
-#                           ├── ApplicationSet hello-staging     azure, auto-synced
-#                           ├── ApplicationSet hello-production  aws, manual sync
+#                           ├── Kargo Project onek8s-hello
+#                           │     ├── Warehouse hello       watches image + chart
+#                           │     ├── Stage staging         azure, auto-promoted
+#                           │     └── Stage production      aws, promoted by hand
+#                           ├── ApplicationSet hello-staging     azure
+#                           ├── ApplicationSet hello-production  aws
 #                           └── ApplicationSet db-hello          azure only
+#
+# Both hello Applications are auto-synced: what reaches production is decided
+# before Argo CD sees it, by Kargo, which writes the promoted revision into the
+# same repository (docs/kargo.md). Argo CD stays a sync loop.
 #
 # The environment-specific facts (which environment's spokes to select, which
 # repositories and revisions to sync, which domain the hosts sit under) are
@@ -48,6 +56,22 @@ locals {
   # Passing the coordinates down rather than committing them matters because
   # the server name carries a random suffix: a rebuilt foundation reaches the
   # application on the next gitops apply, with nothing to edit.
+  # Kargo on the hub, if this environment's foundation installed it. The
+  # delivery-plane chart renders the Kargo Project, Warehouse and Stages of the
+  # hello application only when it did — the alternative, promotion objects
+  # nothing reconciles, would look like a release path and be a pile of inert
+  # YAML.
+  hub_kargo = {
+    enabled = (
+      var.platform_apps.kargo_enabled
+      && try(local.hub.kargo_namespace, null) != null
+    )
+    namespace = try(local.hub.kargo_namespace, "kargo")
+    # Empty when Kargo runs controller-only (no UI configured). It is only ever
+    # a link on a Stage, never something the chart needs to reach.
+    url = try(local.hub.kargo_url, null) == null ? "" : local.hub.kargo_url
+  }
+
   hub_sql = {
     server   = try(local.hub.sql_server_fqdn, null) == null ? "" : local.hub.sql_server_fqdn
     database = try(local.hub.sql_database_name, null) == null ? "" : local.hub.sql_database_name
@@ -64,6 +88,7 @@ locals {
     domain             = var.platform_apps.domain
     tenant             = var.platform_apps.tenant
     sql                = local.hub_sql
+    kargo              = local.hub_kargo
   }
 }
 
@@ -122,6 +147,20 @@ resource "kubernetes_manifest" "root_app" {
         automated = {
           prune    = true
           selfHeal = true
+        }
+        # A cold apply plants objects that depend on a namespace another
+        # controller is still creating: the Kargo Project is cluster-scoped and
+        # its namespace appears only once Kargo reconciles it, so the Warehouse
+        # and the Stages inside it can lose that race by a few seconds. Retry
+        # rather than leave the delivery plane half-applied until somebody
+        # notices.
+        retry = {
+          limit = 5
+          backoff = {
+            duration    = "15s"
+            factor      = 2
+            maxDuration = "3m"
+          }
         }
       }
     }
