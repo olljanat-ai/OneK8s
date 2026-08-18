@@ -17,13 +17,15 @@ output "clouds" {
 }
 
 output "root_application" {
-  description = "The Argo CD root Application this stack plants on the hub, and the repository path it hands the rest of the delivery plane over to. Null when platform applications are disabled or the hub has no Argo CD."
+  description = "The Argo CD root Application this stack plants on the hub, and the repositories it hands the rest of the delivery plane over to: repo_url holds the Argo CD objects, apps_repo_url the application charts they deploy. Null when platform applications are disabled or the hub has no Argo CD."
   value = local.platform_apps_enabled ? {
     name           = var.platform_apps.name
     namespace      = local.argocd_namespace
     repo_url       = var.platform_apps.repo_url
     revision       = var.platform_apps.target_revision
     path           = var.platform_apps.path
+    apps_repo_url  = var.platform_apps.apps_repo_url
+    apps_revision  = var.platform_apps.apps_target_revision
     tenant         = var.platform_apps.tenant
     url            = "${try(local.hub.argocd_url, "")}/applications/${var.platform_apps.name}"
     argocd_project = var.platform_apps.project
@@ -31,7 +33,7 @@ output "root_application" {
 }
 
 output "application_host_pattern" {
-  description = "How the applications Argo CD deploys are published: one host per cluster, one label deep under the platform wildcard. Which applications exist is gitops/argocd/values.yaml's business, not this stack's — 'hello' on all four clouds is https://azure-hello.onek8s.lol, https://aws-hello.onek8s.lol and so on. The A records are created out of band, like every other host here."
+  description = "How the applications Argo CD deploys are published: one host per cluster, one label deep under the platform wildcard. Which applications exist, and on which clusters, is the delivery-plane repository's business rather than this stack's — the 'hello' example is staging on Azure (https://azure-hello.onek8s.lol) and production on AWS (https://aws-hello.onek8s.lol). The A records are created out of band, like every other host here."
   value       = local.platform_apps_enabled ? "<cloud>-<app>.${var.platform_apps.domain}" : null
 }
 

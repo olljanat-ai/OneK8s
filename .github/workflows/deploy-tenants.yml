@@ -12,11 +12,15 @@ name: Deploy Tenants
 #   tenants  namespace, quota, netpol, cloud identity, namespaced SecretStore
 #   sql      a user in the Azure SQL database for that identity, and the schema
 #
-# The second one is `db-hello bootstrap` (apps/db-hello/src/Bootstrap.cs) run as
-# the SQL server's Entra administrator. CREATE USER is T-SQL executed inside the
-# database and has no ARM representation on any provider, so it happens here
-# rather than in the stack — but it happens on the same deploy, for every Azure
-# tenant, instead of being a separate thing to remember.
+# The second one is `db-hello bootstrap` run as the SQL server's Entra
+# administrator. CREATE USER is T-SQL executed inside the database and has no
+# ARM representation on any provider, so it happens here rather than in the
+# stack — but it happens on the same deploy, for every Azure tenant, instead of
+# being a separate thing to remember.
+#
+# That command is part of the db-hello application, which lives in the
+# OneK8s-hello repository, so this workflow checks out both: the platform for
+# the state the bootstrap reads, and the application for the code that runs.
 on:
   # push:
   #   branches: [main]
@@ -54,11 +58,12 @@ jobs:
   # job, so an unreachable database shows up as its own red mark and never
   # touches the apply that already succeeded.
   #
-  # The work itself is apps/db-hello/bootstrap.sh, not steps written out here,
-  # because an operator who applies the stacks from a laptop needs the same act
-  # and CI is not available to them. One script, two callers: this job runs it
-  # as the deploy service principal, and `./apps/db-hello/bootstrap.sh` run as
-  # the server's Entra administrator does exactly what this job does.
+  # The work itself is the applications repository's apps/db-hello/bootstrap.sh,
+  # not steps written out here, because an operator who applies the stacks from
+  # a laptop needs the same act and CI is not available to them. One script, two
+  # callers: this job runs it as the deploy service principal, and the same
+  # script run by hand as the server's Entra administrator does exactly what
+  # this job does. ONEK8S_ROOT is how it finds this repository's state.
   #
   # It is guarded and idempotent: no SQL server in this environment's Azure
   # foundation (enable_sql = false) or no Azure tenants, and it does nothing —
@@ -91,7 +96,23 @@ jobs:
       AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out the platform
+        uses: actions/checkout@v4
+        with:
+          path: platform
+
+      # The applications repository, for db-hello's bootstrap command and the
+      # migrations it applies. Pinned to a repository variable so a fork can
+      # point it at its own copy; the default branch is what the platform
+      # deploys, which is what the schema in the database has to match.
+      - name: Check out the applications
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.APPS_REPOSITORY || 'olljanat-ai/OneK8s-hello' }}
+          path: applications
+          # A public repository needs no token; set APPS_REPO_TOKEN (a PAT with
+          # read access) if it is private.
+          token: ${{ secrets.APPS_REPO_TOKEN || github.token }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -116,11 +137,15 @@ jobs:
       # puts on the connection — here the Entra administrator's, in the pod a
       # federated ServiceAccount token.
       - name: Build the bootstrap command
-        run: dotnet publish apps/db-hello/src -c Release -o /tmp/db-hello
+        run: dotnet publish applications/apps/db-hello/src -c Release -o /tmp/db-hello
 
       - name: Apply the migrations and grant each tenant access
+        working-directory: applications
         env:
           DB_HELLO_DLL: /tmp/db-hello/db-hello.dll
+          # Where the script reads foundations/azure and tenants state from:
+          # the platform checkout above, not its own repository.
+          ONEK8S_ROOT: ${{ github.workspace }}/platform
         run: |
           # pipefail, or `tee` would swallow a failed bootstrap and leave the
           # job green with a database nobody can log in to.

@@ -401,37 +401,50 @@ CD's own configuration stays in this repository instead of in the UI:
 ```hcl
 # gitops/envs/prototype.tfvars
 platform_apps = {
-  repo_url        = "https://github.com/olljanat-ai/OneK8s.git"
-  target_revision = "main"
-  tenant          = "team-alpha"
-  domain          = "onek8s.lol"
+  repo_url             = "https://github.com/olljanat-ai/OneK8s-argocd.git"
+  target_revision      = "main"
+  apps_repo_url        = "https://github.com/olljanat-ai/OneK8s-hello.git"
+  apps_target_revision = "main"
+  tenant               = "team-alpha"
+  domain               = "onek8s.lol"
 }
 ```
 
-It syncs `gitops/argocd/`, which holds the platform `AppProject` and the
-`ApplicationSet`s — and those deploy the example application to the hub and to
-every spoke registered above:
+It syncs the `argocd/` chart in [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd), which holds the platform
+`AppProject` and the `ApplicationSet`s — and those deploy the example
+applications, whose charts come from [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello):
 
 ```bash
 kubectl -n argocd get application platform-gitops
-kubectl -n argocd get applications -l app.kubernetes.io/part-of=onek8s
-# hello-azure  hello-aws  hello-gcp  hello-oci
+kubectl -n argocd get applications -L onek8s.io/stage,onek8s.io/cloud
+# hello-staging (azure)  hello-production (aws)  db-hello-azure
+```
+
+`hello` runs on two clusters that mean two different things: **Azure is
+staging**, synced automatically, and **AWS is production**, which carries no
+automated sync policy at all — Argo CD shows it `OutOfSync` and applies nothing
+until somebody promotes it:
+
+```bash
+argocd app diff hello-production --grpc-web     # what would change
+argocd app sync hello-production --grpc-web     # or the approval-gated
+                                                # "Promote to production" workflow
 ```
 
 Three things are needed before the pages actually render, none of them in
 Terraform:
 
-1. the image must be **public** on GHCR (the **Build Hello App** workflow
-   pushes it; GHCR packages default to private and no cluster has a pull
-   secret),
-2. an A record per host — `azure-hello.onek8s.lol`, `aws-hello.onek8s.lol`,
-   … — pointed at that cluster's Traefik Service, like every other host here,
+1. the image must be **public** on GHCR (the applications repository's build
+   workflow pushes it; GHCR packages default to private and no cluster has a
+   pull secret),
+2. an A record per host — `azure-hello.onek8s.lol`, `aws-hello.onek8s.lol` —
+   pointed at that cluster's Traefik Service, like every other host here,
 3. the test secret in each cloud's backend, which the **Renew Certificate**
    workflow writes (section 8); until it exists the page renders "not
    available" rather than failing.
 
 `platform_apps = { enabled = false }` registers spokes without deploying
-anything. Full walkthrough: [hello-app.md](hello-app.md).
+anything. Full walkthrough: [hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md).
 
 ### The Azure SQL example
 
@@ -453,19 +466,23 @@ gh workflow run deploy-tenants.yml -f environment=prototype
 # server's Entra administrator, which by default is whoever applied
 # foundations/azure. Same script the workflow runs.
 az login
-./apps/db-hello/bootstrap.sh prototype
+git clone https://github.com/olljanat-ai/OneK8s-hello.git   # next to this one
+cd OneK8s-hello && ./apps/db-hello/bootstrap.sh prototype
 ```
 
 Either runs the application's own `bootstrap` command as the SQL server's Entra
 administrator: it applies the EF Core migrations — the schema is code-first, so
-the model in `apps/db-hello/src/Data` is where the table is defined — and
+the model in the applications repository is where the table is defined — and
+the script finds this repository's state through `ONEK8S_ROOT` (default:
+`../OneK8s`) —
 creates the database user with `db_datareader` + `db_datawriter`. It is safe to
 re-run, it is how a later schema change is deployed, and it must be re-run
 after a foundation rebuild (the server name carries a random suffix, so a new
 foundation is a new, empty database). Until then the page says *"no
 database user"* rather than failing. Plus the usual two: the image public on
 GHCR, and an A record for `azure-db-hello.onek8s.lol`. Details, the free
-offer's limits and the known gaps: [db-hello-app.md](db-hello-app.md).
+offer's limits and the known gaps:
+[db-hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/db-hello-app.md).
 
 ## 6. Onboard the clusters into Portainer
 
@@ -537,11 +554,12 @@ tenant-store}` with `remoteRef.key: prototype/team-gamma/db-password` will
 materialize the Kubernetes Secret. Any attempt to read another tenant's
 prefix fails at the cloud IAM layer.
 
-The `hello` application is the working version of exactly that, on all four
-clouds at once — its secret is `test` under the `team-alpha` prefix, and it is
+The `hello` application is the working version of exactly that, on both of its
+stages at once — its secret is `test` under the `team-alpha` prefix, and it is
 the one tenant secret nobody has to write: the **Renew Certificate** workflow
 generates it in Key Vault and distributes it with the wildcard (section 8).
-[hello-app.md](hello-app.md) has the four commands to seed it by hand instead
+[hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md) has the commands to seed it by
+hand instead
 (note the AWS one: the secret must be encrypted with the tenant CMK, or the
 tenant's scoped `kms:Decrypt` grant cannot read it back).
 
@@ -563,7 +581,7 @@ would be granted read access to the certificate and the account key.
 
 The workflow writes one object outside that prefix, on purpose: the tenant
 **test secret** `team-alpha-test`, which the hello application reads on every
-cloud ([hello-app.md](hello-app.md#the-test-secret)). It is generated in the
+cloud ([hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md#the-test-secret)). It is generated in the
 same vault, rotated whenever the certificate is renewed — and seeded when it
 is missing, so a fresh environment gets one on the first run — and copied out
 to the other clouds by the same `distribute` mode. The `tenant` input names

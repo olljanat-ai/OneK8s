@@ -257,14 +257,16 @@ Azure's `enable_baseline_policy` initiative is unaffected and stays what it
 is: an ARM-side audit of the same ground.
 
 The example applications are what the guardrail looks like from the other
-side: both `apps/hello` and `apps/db-hello` run as UID 1654 with a read-only
-root filesystem, all capabilities dropped and no Kubernetes ServiceAccount
-token — stated in each `Dockerfile`, in each pod's `securityContext`, and
-checked by PR validation before the namespace ever gets to reject it. It
+side: both `hello` and `db-hello` (in [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello)) run as UID 1654 with
+a read-only root filesystem, all capabilities dropped and no Kubernetes
+ServiceAccount token — stated in each `Dockerfile`, in each pod's
+`securityContext`, and checked by that repository's PR validation before the
+namespace ever gets to reject it. It
 matters most for db-hello, whose runtime image is the full `aspnet:10.0-noble`
 rather than a chiseled one (`Microsoft.Data.SqlClient` needs ICU), so there
-*is* a root user in that image to drop from. See [hello-app.md](hello-app.md)
-and [db-hello-app.md](db-hello-app.md).
+*is* a root user in that image to drop from. See
+[hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md) and
+[db-hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/db-hello-app.md).
 
 ## Observability: one Grafana Cloud stack, four clusters
 
@@ -348,22 +350,26 @@ revoking a spoke is deleting one ServiceAccount. The Secret's labels
 cloud" is one object. See [argocd.md](argocd.md) for the mechanics, the
 scoping variables and the operational commands.
 
-What Argo CD *deploys* is version-controlled on the same terms. The `gitops/`
-stack additionally plants one **root Application** on the hub pointing at
-`gitops/argocd/` in this repository, and owns nothing else in Argo CD: the
+What Argo CD *deploys* is version-controlled on the same terms, and in its own
+repository. The `gitops/` stack additionally plants one **root Application** on
+the hub pointing at [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd), and owns nothing else in Argo CD: the
 platform `AppProject`, the `ApplicationSet`s and every `Application` they
-generate are YAML in that directory. Terraform bootstraps the delivery plane
-and Git configures it, so adding an application is a commit rather than an
-apply, and the environment-specific facts (which environment's spokes to
-select, which revision to sync, which domain the hosts sit under) are passed
-down as Helm values so one copy of the directory serves every environment.
+generate are YAML there. Terraform bootstraps the delivery plane and Git
+configures it, so adding an application is a commit rather than an apply, and
+the environment-specific facts (which environment's spokes to select, which
+repositories and revisions to sync, which domain the hosts sit under) are
+passed down as Helm values so one copy of that chart serves every environment.
 
-The workloads themselves live in `apps/`, source and chart side by side. The
-example is `hello`, a .NET page on `<cloud>-hello.onek8s.lol` showing a
-welcome message and a test secret read from that cloud's own backend through
-the tenant's namespaced `SecretStore` — one image, one chart, four clusters,
-and the only cloud-specific thing in it is the *name* of the secret it asks
-for. [hello-app.md](hello-app.md).
+The workloads themselves live in [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello), source and chart side by
+side. The example is `hello`, a .NET page showing a welcome message and a test
+secret read from that cloud's own backend through the tenant's namespaced
+`SecretStore`. It is released along two stages, which is where the platform's
+two roles for its two biggest clouds are stated: **Azure is staging** —
+auto-synced, on the hub — and **AWS is production**, whose `Application`
+carries no automated sync policy at all, so nothing reaches it until a human
+promotes it. One image, one chart, two clusters, and the only cloud-specific
+thing in it is the *name* of the secret it asks for.
+[hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md).
 
 ## Secret isolation (the core security invariant)
 
@@ -450,14 +456,15 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
 
 ## CI/CD
 
-- `pr-validation.yml` — fmt, per-stack validate, Helm lint/render of the
-  Argo CD configuration and of every application chart as it is rendered on
-  each cloud, tflint, checkov, and (once `ENABLE_CLOUD_PLANS=true`)
-  credentialed prototype plans for all seven stacks.
-- `build-hello.yml` — the one pipeline that produces an artefact rather than
-  applying Terraform: it builds `apps/hello` and pushes the image to GHCR on
-  merges that touch it, and builds without pushing on pull requests. Delivery
-  is not its job — Argo CD picks the image up from the chart.
+- `pr-validation.yml` — fmt, per-stack validate, tflint, checkov, and (once
+  `ENABLE_CLOUD_PLANS=true`) credentialed prototype plans for all seven stacks.
+  The Helm checks live with the charts: [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) renders the
+  delivery plane and asserts that the production stage stays manual, and
+  [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) renders the application charts on both stages.
+- Image builds are in [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello): a merge that touches an application
+  pushes its image to GHCR, and pull requests build without pushing. Delivery
+  is not their job — Argo CD picks the image up from the chart, automatically
+  on Azure/staging and only after a promotion on AWS/production.
 - `deploy-foundations.yml` / `deploy-tenants.yml` / `deploy-gitops.yml` /
   `deploy-portainer.yml` — independent pipelines; merge to `main` auto-deploys
   the prototype environment on path changes, other environments go through
@@ -655,7 +662,7 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
   by design (`managed_namespace_api_version` variable).
 - The Azure SQL database is the platform's one **cloud-specific** capability:
   there is no equivalent on the other three foundations, and the application
-  that uses it (`apps/db-hello`) is deployed to the hub only. Passwordless
+  that uses it (`db-hello`) is deployed to the hub only. Passwordless
   database access is what forces that — the token comes from Entra ID and the
   server validates it, so an EKS or GKE workload could only reach it by
   federating a second identity into Entra, which buys a demo nothing the
@@ -664,7 +671,7 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
   `freeLimitExhaustionBehavior`) are not in the pinned provider version.
 - Neither the database's **schema** nor a tenant's **access** to it is in
   Terraform. The schema is code-first — EF Core migrations generated from
-  `apps/db-hello`'s model — and a contained database user is `CREATE USER`,
+  `db-hello`'s model — and a contained database user is `CREATE USER`,
   T-SQL executed inside the database; no provider expresses either without
   opening a database connection at plan time. Both are applied by one command in the
   application itself (`db-hello bootstrap`), which the tenants deploy runs as
@@ -674,7 +681,7 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
   DDL rights never exist to be abused. The cost is that deploying the foundation is not
   sufficient to make the page work — somebody runs the workflow once per
   tenant, and until they do the application says which step is missing rather
-  than failing obscurely ([db-hello-app.md](db-hello-app.md)).
+  than failing obscurely ([db-hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/db-hello-app.md)).
 - Distributing the wildcard certificate copies a private key out of Key Vault
   into three more backends, so it exists in four places and a rotation is only
   complete once every copy is refreshed — nothing reconciles them, and a

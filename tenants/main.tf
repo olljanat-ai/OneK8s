@@ -73,9 +73,9 @@ module "tenants_azure" {
   for_each = local.tenants_by_cloud.azure
 
   providers = {
-    azurerm    = azurerm
-    azapi      = azapi
-    aws        = aws
+    azurerm = azurerm
+    azapi   = azapi
+    aws     = aws
     // google     = google
     kubernetes = kubernetes.azure
     // oci        = oci
@@ -97,9 +97,9 @@ module "tenants_aws" {
   for_each = local.tenants_by_cloud.aws
 
   providers = {
-    azurerm    = azurerm
-    azapi      = azapi
-    aws        = aws
+    azurerm = azurerm
+    azapi   = azapi
+    aws     = aws
     // google     = google
     kubernetes = kubernetes.aws
     // oci        = oci

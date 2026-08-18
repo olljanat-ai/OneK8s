@@ -18,7 +18,7 @@ name: Renew Certificate
 # coordinates to keep in sync.
 #
 # The same two hops carry one more value: the tenant **test secret** the hello
-# application reads on every cloud (docs/hello-app.md). It is generated here,
+# application reads on every cloud (docs/hello-app.md in OneK8s-hello). It is generated here,
 # beside the certificate, because it travels exactly the same road — one Key
 # Vault as the source of truth, one distribute run to publish it — and because
 # a value that rotates by itself is what turns "a rotated secret reaches the
@@ -133,7 +133,9 @@ jobs:
       # The tenant test secret rides along with the certificate. Its Key Vault
       # name is "<tenant>-<name>", which is the remote key the hello chart asks
       # for — TENANT is gitops/envs/<env>.tfvars "platform_apps.tenant" and
-      # TEST_SECRET is apps/hello/chart/values.yaml "secret.name".
+      # TEST_SECRET is the "secret.name" of the hello application's chart
+      # (apps/hello/chart/values.yaml in the OneK8s-hello repository), and the
+      # ApplicationSets that deploy it turn the two into the remote key.
       TENANT: ${{ inputs.tenant || 'team-alpha' }}
       TEST_SECRET: test
       ACME_SERVER: ${{ inputs.acme_server || 'letsencrypt' }}

@@ -55,17 +55,23 @@ variable "spokes" {
 variable "platform_apps" {
   description = <<-EOT
     The Argo CD "root application": one Terraform-managed Application on the
-    hub, pointing Argo CD at gitops/argocd/ in this repository.
+    hub, pointing Argo CD at the delivery-plane repository (OneK8s-argocd).
 
-    That directory is a Helm chart holding the platform's AppProject and its
+    That repository holds a Helm chart with the platform's AppProject and its
     ApplicationSets, so everything Argo CD deploys — to the hub and to every
-    spoke — is version-controlled here rather than configured in the UI. This
+    spoke — is version-controlled there rather than configured in the UI. This
     stack bootstraps it and owns nothing else in Argo CD; after the first
-    apply, adding or changing an application is a commit.
+    apply, adding or changing an application is a commit in that repository.
+
+    Two repositories, because they change for different reasons: repo_url is
+    the delivery plane (where and when an application is deployed) and
+    apps_repo_url is the applications themselves (OneK8s-hello: their source,
+    their charts, their images). The AppProject allows those two and nothing
+    else.
 
     The environment-specific values are passed down from here (environment,
-    repository, revision, domain, tenant), which is why one copy of
-    gitops/argocd/ serves every environment.
+    repositories, revisions, domain, tenant), which is why one copy of the
+    delivery-plane chart serves every environment.
 
     Set enabled = false for an environment that should register spokes but not
     run any platform application. It is also skipped automatically when the
@@ -79,12 +85,18 @@ variable "platform_apps" {
     # project the chart creates — that one does not exist yet when the root
     # application is first reconciled.
     project = optional(string, "default")
-    # Repository Argo CD reads. Must be reachable by the hub's repo-server;
-    # a private repository additionally needs credentials registered with
-    # Argo CD (see docs/hello-app.md).
-    repo_url        = optional(string, "https://github.com/olljanat-ai/OneK8s.git")
+    # The delivery-plane repository Argo CD reads. Must be reachable by the
+    # hub's repo-server; a private repository additionally needs credentials
+    # registered with Argo CD (see docs/argocd.md).
+    repo_url        = optional(string, "https://github.com/olljanat-ai/OneK8s-argocd.git")
     target_revision = optional(string, "main")
-    path            = optional(string, "gitops/argocd")
+    path            = optional(string, "argocd")
+    # The applications' repository: the charts the ApplicationSets deploy. It
+    # is not read by this stack at all — it is handed to the delivery-plane
+    # chart, which puts it in the AppProject's sourceRepos and in every
+    # Application's source.
+    apps_repo_url        = optional(string, "https://github.com/olljanat-ai/OneK8s-hello.git")
+    apps_target_revision = optional(string, "main")
     # Wildcard domain the applications' hosts sit under: "<cloud>-<app>.<domain>".
     domain = optional(string, "onek8s.lol")
     # Tenant namespace the platform's example applications are released into.

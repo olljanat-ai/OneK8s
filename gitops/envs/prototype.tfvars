@@ -20,29 +20,45 @@ state_home = {
 # manifests get tried out. Narrow a spoke with
 # `namespaces = [...]` + `cluster_resources = false`, which binds the manager
 # ServiceAccount per namespace instead of cluster-wide.
+#
+# AWS is not just any spoke here: it is where the hello application's
+# production stage runs, so removing it from this map removes production
+# (the ApplicationSet's cluster generator finds no cluster and generates no
+# Application) rather than breaking anything.
 spokes = {
   aws = {}
 }
 
 # The root Application: the only Argo CD object Terraform creates. It points
-# Argo CD at gitops/argocd/ in this repository, and everything from there down
-# — the AppProject, the ApplicationSets, and every Application they generate on
-# the hub and on each spoke — is Git, not Terraform.
+# Argo CD at the OneK8s-argocd repository, and everything from there down — the
+# AppProject, the ApplicationSets, and every Application they generate on the
+# hub and on each spoke — is Git, not Terraform.
 #
-# The values below are what make one copy of gitops/argocd/ serve every
-# environment: they are handed to that chart as Helm values, so the spoke
-# selector, the hosts and the tenant follow the environment rather than being
-# committed per environment.
+# Two repositories, because they change for different reasons:
+#
+#   repo_url       OneK8s-argocd  where and when an application is deployed
+#                                 (the stages: staging on Azure, production on
+#                                 AWS behind a manual sync)
+#   apps_repo_url  OneK8s-hello   what is deployed: the applications and their
+#                                 charts
+#
+# The values below are what make one copy of that chart serve every
+# environment: they are handed to it as Helm values, so the spoke selector, the
+# hosts and the tenant follow the environment rather than being committed per
+# environment.
 platform_apps = {
-  repo_url        = "https://github.com/olljanat-ai/OneK8s.git"
-  target_revision = "main"
+  repo_url             = "https://github.com/olljanat-ai/OneK8s-argocd.git"
+  target_revision      = "main"
+  apps_repo_url        = "https://github.com/olljanat-ai/OneK8s-hello.git"
+  apps_target_revision = "main"
 
-  # Where the example application lands. team-alpha exists on all four clouds
+  # Where the example applications land. team-alpha exists on all four clouds
   # in this environment (tenants/envs/prototype.tfvars), and its namespaced
-  # SecretStore is what the app reads its test secret through.
+  # SecretStore is what the hello app reads its test secret through.
   tenant = "team-alpha"
 
   # Application hosts are "<cloud>-<app>.onek8s.lol", one label deep, which is
-  # all the platform wildcard covers.
+  # all the platform wildcard covers. The cloud is the stage's: azure-hello is
+  # staging, aws-hello is production.
   domain = "onek8s.lol"
 }

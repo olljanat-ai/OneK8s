@@ -33,15 +33,12 @@ via External Secrets Operator and per-tenant workload identities.
 ├── gitops/                 # ONE stack for all clouds — Argo CD hub-spoke wiring
 │   ├── envs/               #   <env>.tfvars: spokes, keyed by cloud
 │   ├── backend/            #   <env>.hcl state config (Azure state home)
-│   ├── root-app.tf         #   the one Argo CD object Terraform owns
-│   └── argocd/             #   ...pointing at THIS: AppProject + ApplicationSets
+│   └── root-app.tf         #   the one Argo CD object Terraform owns: it points
+│                           #   Argo CD at the OneK8s-argocd repository
 ├── portainer/              # ONE stack for all clouds — Portainer server + agents
 │   ├── envs/               #   <env>.tfvars: clusters to onboard, keyed by cloud
 │   └── backend/            #   <env>.hcl state config (Azure state home)
-├── apps/                   # Workloads Argo CD deploys, source and chart together
-│   ├── hello/              #   .NET 10 example: a welcome message and a test secret
-│   └── db-hello/           #   .NET 10 example: Azure SQL as the tenant's managed identity
-├── .github/workflows/      # PR validation + deploy pipelines + image build
+├── .github/workflows/      # PR validation + deploy pipelines
 └── docs/                   # architecture, getting started, ADRs
 ```
 
@@ -199,30 +196,43 @@ token — so no cloud's admin kubeconfig ever lives on the hub, and an
 registered. Details, scoping and trade-offs:
 [docs/argocd.md](docs/argocd.md).
 
-Argo CD's own configuration is version-controlled too. Terraform creates
-exactly one object — a **root Application** pointing at `gitops/argocd/` in
-this repository — and everything below it (the platform `AppProject`, the
-`ApplicationSet`s, and every `Application` they generate on the hub and on each
-spoke) is YAML in that directory. Adding an application is a commit, not a
-`terraform apply`, and nothing is clicked together in the UI.
+Argo CD's own configuration is version-controlled too — in a repository of its
+own. Terraform creates exactly one object, a **root Application** pointing at
+[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd), and everything below it (the platform `AppProject`,
+the `ApplicationSet`s, and every `Application` they generate on the hub and on
+each spoke) is YAML there. Adding an application is a commit, not a `terraform
+apply`, and nothing is clicked together in the UI.
 
 ## Applications
 
-`apps/` holds what Argo CD deploys, source and chart side by side. The example
-is **hello**: a minimal .NET 10 page showing a welcome message and the value of
-a test secret, read out of the host cloud's own secret backend through the
-tenant's namespaced `SecretStore`. One image and one chart, on all four clouds:
+Three repositories, split by what changes for what reason:
 
-| https://azure-hello.onek8s.lol | https://aws-hello.onek8s.lol | https://gcp-hello.onek8s.lol | https://oci-hello.onek8s.lol |
+| Repository | Owns |
+|---|---|
+| **OneK8s** (here) | The clusters and the platform: foundations, tenants, the hub, the root Application |
+| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | **Where and when** an application is deployed: the `AppProject`, the ApplicationSets, the release stages, the gate in front of production |
+| [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) | **What** is deployed: the example applications, their charts and their images |
+
+The example is **hello**: a minimal .NET 10 page showing a welcome message and
+the value of a test secret, read out of the host cloud's own secret backend
+through the tenant's namespaced `SecretStore`. One image and one chart, along a
+release path of two stages on two clouds:
+
+| Stage | Host | Cluster | Sync |
 |---|---|---|---|
-| AKS (hub) | EKS | GKE | OKE |
+| `staging` | https://azure-hello.onek8s.lol | AKS (hub) | automatic, on every merge |
+| `production` | https://aws-hello.onek8s.lol | EKS (spoke) | **manual promotion** |
 
-The only cloud-specific thing in it is the *name* of the secret it asks for —
-`team-alpha-test` on Key Vault, Secret Manager and OCI Vault,
-`prototype/team-alpha/test` on Secrets Manager, because that is what each
-cloud's per-tenant prefix restriction is written against. Everything else,
-ingress and TLS included, is identical.
-[docs/hello-app.md](docs/hello-app.md).
+The production `Application` carries no automated sync policy, so Argo CD shows
+it `OutOfSync` when staging moves ahead and applies nothing to AWS until a human
+syncs it — from the UI, from the CLI, or through the *Promote to production*
+workflow, which waits on a GitHub environment with required reviewers.
+
+The only cloud-specific thing in the application is the *name* of the secret it
+asks for — `team-alpha-test` on Key Vault, `prototype/team-alpha/test` on
+Secrets Manager, because that is what each cloud's per-tenant prefix
+restriction is written against. Everything else, ingress and TLS included, is
+identical. [docs/hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md).
 
 The second example is **db-hello**, on <https://azure-db-hello.onek8s.lol>, and
 it carries no secret at all: it reads and writes an **Azure SQL Database** as
@@ -230,7 +240,7 @@ the tenant's own managed identity, with a token minted from the ServiceAccount
 token Kubernetes projects into the pod. No connection string, no password,
 nothing to rotate — the chart passes it a host name and a database name, and
 neither authorizes anybody. Data access is **Entity Framework Core**,
-code-first: the model in `apps/db-hello/src/Data` is the only description of
+code-first: the model in the applications repository is the only description of
 the schema anywhere, and the migrations generated from it are committed
 alongside the code.
 
@@ -245,7 +255,8 @@ runs that same image and cannot do either: it holds `db_datareader` and
 `db_datawriter`, so the database refuses it DDL.
 This is the platform's one deliberately Azure-only application, because its
 database is an Azure resource and its identity is an Entra one.
-[docs/db-hello-app.md](docs/db-hello-app.md).
+It has no production stage: there is no AWS cluster it could honestly be
+promoted to. [docs/db-hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/db-hello-app.md).
 
 ## Fleet console
 
@@ -287,24 +298,22 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
 
 ## CI/CD
 
-- **PR validation** — fmt, validate (all 7 stacks), Helm lint/render of the
-  Argo CD configuration and every application chart, tflint, checkov, and
-  optional cloud plans (`ENABLE_CLOUD_PLANS=true`).
+- **PR validation** — fmt, validate (all 7 stacks), tflint, checkov, and
+  optional cloud plans (`ENABLE_CLOUD_PLANS=true`). The Helm side moved with
+  the charts: OneK8s-argocd renders the delivery plane (and asserts that
+  production stays manual), OneK8s-hello renders the application charts.
 - **Deploy Foundations / Deploy Tenants / Deploy GitOps / Deploy Portainer** —
   separate pipelines; the prototype environment deploys on merge to `main`,
   other environments via `workflow_dispatch`, authenticated with cloud
   credentials stored as GitHub secrets. Foundation jobs are gated by the GitHub
   environments `<cloud>-<env>`, the all-clouds tenants, gitops and portainer
   jobs by `tenants-<env>`, `gitops-<env>` and `portainer-<env>`.
-- **Build Hello App** / **Build DB Hello App** — build `apps/hello` and
-  `apps/db-hello` and push their images to GHCR on every merge that touches
-  them; pull requests build without pushing. The only pipelines here that
-  produce an artefact rather than applying Terraform — from there Argo CD takes
-  over.
-  **Deploy Tenants** has a second job for the one thing a tenant gets that
-  cannot be a Terraform resource: it runs `apps/db-hello/bootstrap.sh`, which
-  invokes the application's own migrate-and-grant command as the SQL server's
-  Entra administrator for every Azure tenant the apply just onboarded.
+- **Deploy Tenants** has a second job for the one thing a tenant gets that
+  cannot be a Terraform resource: it checks out the applications repository and
+  runs `apps/db-hello/bootstrap.sh` from it (with `ONEK8S_ROOT` pointing back
+  here, since the script resolves everything from this repository's state),
+  which invokes the application's own migrate-and-grant command as the SQL
+  server's Entra administrator for every Azure tenant the apply just onboarded.
   Idempotent, and where a later schema change is deployed from — neither a
   table nor a database user has an ARM representation, so neither can be in
   the stack. Run the same script by hand after applying the stacks by hand;
