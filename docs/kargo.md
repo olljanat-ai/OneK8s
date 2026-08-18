@@ -48,11 +48,28 @@ push. That is discussed below.
 | Object | Kind | Lives in | Owned by |
 |---|---|---|---|
 | the engine | Helm release `kargo` | namespace `kargo` on the hub | `foundations/azure/kargo.tf` |
-| the project | `Project` `onek8s-hello` (cluster-scoped; Kargo creates a namespace of the same name) | the hub | [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd), `argocd/templates/kargo-project.yaml` |
-| what a release is | `Warehouse` `hello` | namespace `onek8s-hello` | the same chart |
-| the release path | `Stage` `staging`, `Stage` `production` | namespace `onek8s-hello` | the same chart |
-| who may promote | `ServiceAccount` + `Role` `promoter` | namespace `onek8s-hello` | the same chart |
-| what each stage runs | `stages/hello/<stage>.yaml` | OneK8s-argocd | **Kargo** — written by promotions |
+| **how a promotion is performed** | `ClusterPromotionTask` `onek8s-promote` (cluster-scoped, **one for the whole platform**) | the hub | [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd), `argocd/templates/kargo-promotion-task.yaml` |
+| the project | `Project` `onek8s-<app>` (cluster-scoped, **one per application**; Kargo creates a namespace of the same name) | the hub | the same chart, `kargo-projects.yaml` |
+| what a release is | `Warehouse` `<app>` | namespace `onek8s-<app>` | the same chart, `kargo-warehouses.yaml` |
+| the release path | `Stage` `staging`, `Stage` `production` | namespace `onek8s-<app>` | the same chart, `kargo-stages.yaml` |
+| who may promote | `ServiceAccount` + `Role` `promoter` | namespace `onek8s-<app>` | the same chart |
+| what each stage runs | `stages/<app>/<stage>.yaml` | OneK8s-argocd | **Kargo** — written by promotions |
+
+Two of those rows carry the design's weight for a platform that expects many
+applications:
+
+- **One `ClusterPromotionTask`, shared.** The five steps of a promotion are the
+  same for every application and every stage — only the repository, the file and
+  the Argo CD Application differ, and those are variables. Fifty applications
+  share one copy, so fixing the procedure is one commit rather than fifty.
+- **One Kargo `Project` per application.** A Project is Kargo's unit of
+  isolation: its own namespace, Freight, promoters and place to hold a
+  credential — and its own Stage names, since every application wants one called
+  `production`.
+
+No template in that chart names an application. They range over `apps:` in its
+values, so onboarding one is an entry there, and CI renders a throwaway second
+application on every pull request to prove it stayed that way.
 
 Only the first is Terraform's. Everything else arrives through the same root
 `Application` that already brings in the `AppProject` and the ApplicationSets
@@ -124,8 +141,9 @@ is Kubernetes RBAC on `Application` resources, installed with its chart.
 
 ## What a promotion actually does
 
-Each `Stage` carries the steps, and they are the same five for both stages
-(`argocd/templates/kargo-stages-hello.yaml` in OneK8s-argocd):
+The steps live once, in the `ClusterPromotionTask`
+(`argocd/templates/kargo-promotion-task.yaml` in OneK8s-argocd); each `Stage`
+supplies the variables and delegates to it:
 
 1. `git-clone` — the delivery-plane repository, as the bot.
 2. `yaml-update` — write `image.tag` and `chartRevision` into
@@ -176,12 +194,13 @@ spec:
 
 All three leave the same commit behind.
 
-**Who may.** `kargo.promoters` in the delivery-plane chart's values is a list of
-Entra ID group object IDs. It renders a `ServiceAccount` whose claims Kargo
-matches against the signed-in identity, and a `Role` granting `promote` on
-exactly the stages that wait for a person — plus read on the Project and nothing
-else. Not editing a Stage, not changing what the Warehouse watches, not
-promoting in another Project.
+**Who may.** `apps.<name>.promoters` in the delivery-plane chart's values
+(falling back to `kargo.promoters`) is a list of Entra ID group object IDs. It
+renders a `ServiceAccount` whose claims Kargo matches against the signed-in
+identity, and a `Role` granting `promote` on exactly the stages of *that
+application* that wait for a person — plus read on its Project and nothing else.
+Not editing a Stage, not changing what the Warehouse watches, not promoting
+another application.
 
 **What may.** `production` requests its Freight from `staging`, not from the
 Warehouse, so a build that has never run on AKS cannot be promoted to EKS even
@@ -206,7 +225,7 @@ Common causes, in the order they usually happen:
 
 | Symptom | Usually |
 |---|---|
-| no Freight after a merge | the build pushed a tag the Warehouse's `tagRegex` does not allow, or the package is private |
+| no Freight after a merge | the build pushed a tag the Warehouse's `tagRegexes` do not allow, the `selectionStrategy` is `SemVer` and the tag is not one, or the package is private |
 | a promotion fails at `git-push` | the Git credential is missing, unlabelled, or has no write access |
 | a promotion fails at `argocd-update` | the Application is missing the `kargo.akuity.io/authorized-stage` annotation, or the spoke is not registered so no Application was generated |
 | the Application renders "image.tag is required" | nothing has been promoted to that stage yet — the seed file in `stages/` has an empty tag on purpose |
@@ -224,8 +243,15 @@ Common causes, in the order they usually happen:
   behind an Argo Rollouts `AnalysisTemplate` or a smoke-test `Job` before it
   becomes promotable; this platform installs no Argo Rollouts, so both
   integrations are explicitly disabled and `soakTime` is the blunt substitute.
-- **One Project, one application with a release path.** `db-hello` has a single
-  cluster and therefore no path to travel, so it has no Kargo objects at all.
+- **`db-hello` has no release path.** A single cluster, so no path to travel and
+  no Kargo objects — deliberate, but it does mean its image tag is still the
+  moving `latest` that `hello` no longer uses.
+- **Selection strategy is per application, and `hello` uses the weaker one.**
+  `NewestBuild` orders content-addressed `sha-` tags by build time, which is
+  right for an application that builds on every merge and has no releases. An
+  application with real versions should use `SemVer` with a `semverConstraint`
+  per stage — the build workflow already publishes a semver tag on a `v*` git
+  tag, so switching is a values change.
 - **The chart version is pinned by hand** (`kargo_chart_version`). Deliberate —
   a promotion engine that upgrades itself unannounced is one nobody can reason
   about — but it means somebody has to bump it.

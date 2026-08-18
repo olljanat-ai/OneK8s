@@ -394,7 +394,7 @@ The hub itself is *not* labelled — Argo CD's built-in
 selector like the above hits the spokes only. Deploying to the hub means naming
 it in a one-element `list` generator instead, which is what the `hello`
 application's staging stage does in
-[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd/blob/main/argocd/templates/applicationset-hello.yaml).
+[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd/blob/main/argocd/templates/applicationsets.yaml).
 
 ### What Argo CD deploys, and where that is configured
 
