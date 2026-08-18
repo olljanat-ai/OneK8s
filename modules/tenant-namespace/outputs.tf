@@ -4,8 +4,8 @@ output "namespace" {
   value = coalesce(
     one(module.azure[*].namespace),
     one(module.aws[*].namespace),
-    one(module.gcp[*].namespace),
-    one(module.oci[*].namespace),
+    // one(module.gcp[*].namespace),
+    // one(module.oci[*].namespace),
   )
 }
 
@@ -14,8 +14,8 @@ output "service_account_name" {
   value = coalesce(
     one(module.azure[*].service_account_name),
     one(module.aws[*].service_account_name),
-    one(module.gcp[*].service_account_name),
-    one(module.oci[*].service_account_name),
+    // one(module.gcp[*].service_account_name),
+    // one(module.oci[*].service_account_name),
   )
 }
 
@@ -24,8 +24,8 @@ output "identity" {
   value = coalesce(
     one(module.azure[*].identity_client_id),
     one(module.aws[*].iam_role_arn),
-    one(module.gcp[*].gsa_email),
-    one(module.oci[*].workload_principal),
+    // one(module.gcp[*].gsa_email),
+    // one(module.oci[*].workload_principal),
   )
 }
 
@@ -34,8 +34,8 @@ output "secret_prefix" {
   value = coalesce(
     one(module.azure[*].secret_prefix),
     one(module.aws[*].secret_prefix),
-    one(module.gcp[*].secret_prefix),
-    one(module.oci[*].secret_prefix),
+    // one(module.gcp[*].secret_prefix),
+    // one(module.oci[*].secret_prefix),
   )
 }
 
@@ -44,7 +44,7 @@ output "secret_store_name" {
   value = coalesce(
     one(module.azure[*].secret_store_name),
     one(module.aws[*].secret_store_name),
-    one(module.gcp[*].secret_store_name),
-    one(module.oci[*].secret_store_name),
+    // one(module.gcp[*].secret_store_name),
+    // one(module.oci[*].secret_store_name),
   )
 }

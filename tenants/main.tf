@@ -1,5 +1,5 @@
 locals {
-  clouds = ["azure", "aws", "gcp", "oci"]
+  clouds = ["azure", "aws"] // , "gcp", "oci"]
 
   # The cloud is a per-tenant parameter, so one apply covers all of them. The
   # tenants are grouped by cloud here because a module's providers are static:
@@ -76,10 +76,10 @@ module "tenants_azure" {
     azurerm    = azurerm
     azapi      = azapi
     aws        = aws
-    google     = google
+    // google     = google
     kubernetes = kubernetes.azure
-    oci        = oci
-    oci.home   = oci.home
+    // oci        = oci
+    // oci.home   = oci.home
   }
 
   cloud       = "azure"
@@ -100,10 +100,10 @@ module "tenants_aws" {
     azurerm    = azurerm
     azapi      = azapi
     aws        = aws
-    google     = google
+    // google     = google
     kubernetes = kubernetes.aws
-    oci        = oci
-    oci.home   = oci.home
+    // oci        = oci
+    // oci.home   = oci.home
   }
 
   cloud       = "aws"
@@ -116,6 +116,7 @@ module "tenants_aws" {
   pod_security_standard = each.value.pod_security_standard
 }
 
+/*
 module "tenants_gcp" {
   source   = "../modules/tenant-namespace"
   for_each = local.tenants_by_cloud.gcp
@@ -163,3 +164,4 @@ module "tenants_oci" {
   namespace_labels      = each.value.labels
   pod_security_standard = each.value.pod_security_standard
 }
+*/

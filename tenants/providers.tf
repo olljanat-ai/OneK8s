@@ -27,6 +27,7 @@ provider "aws" {
   secret_key                  = local.active.aws ? null : "unused"
 }
 
+/*
 provider "google" {
   project = local.wired.gcp ? local.foundation.gcp.project_id : "unused"
 
@@ -47,6 +48,7 @@ provider "oci" {
   alias  = "home"
   region = local.wired.oci ? local.foundation.oci.home_region : null
 }
+*/
 
 # --- Kubernetes access to the foundation clusters ----------------------------
 # One provider alias per cloud, because one apply spans up to four clusters.
@@ -63,9 +65,11 @@ data "aws_eks_cluster_auth" "this" {
   name = local.foundation.aws.cluster_name
 }
 
+/*
 data "google_client_config" "this" {
   count = local.wired.gcp ? 1 : 0
 }
+*/
 
 provider "kubernetes" {
   alias = "azure"
@@ -85,6 +89,7 @@ provider "kubernetes" {
   token                  = try(data.aws_eks_cluster_auth.this[0].token, null)
 }
 
+/*
 provider "kubernetes" {
   alias = "gcp"
 
@@ -116,3 +121,4 @@ provider "kubernetes" {
     }
   }
 }
+*/

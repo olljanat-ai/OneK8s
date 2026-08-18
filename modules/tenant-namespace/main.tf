@@ -40,6 +40,7 @@ module "aws" {
   ingress_controller_namespace = var.ingress_controller_namespace
 }
 
+/*
 module "gcp" {
   source = "./gcp"
   count  = var.cloud == "gcp" ? 1 : 0
@@ -83,3 +84,4 @@ module "oci" {
 
   ingress_controller_namespace = var.ingress_controller_namespace
 }
+*/

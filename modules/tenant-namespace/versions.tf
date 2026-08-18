@@ -25,6 +25,7 @@ terraform {
       source  = "hashicorp/aws"
       version = "= 6.58.0"
     }
+    /*
     google = {
       source  = "hashicorp/google"
       version = "= 7.44.0"
@@ -34,6 +35,7 @@ terraform {
       version               = "= 8.26.0"
       configuration_aliases = [oci.home]
     }
+    */
     kubernetes = {
       source  = "hashicorp/kubernetes"
       version = "= 3.2.1"

@@ -2,8 +2,10 @@ locals {
   tenant_modules = {
     azure = module.tenants_azure
     aws   = module.tenants_aws
+    /*
     gcp   = module.tenants_gcp
     oci   = module.tenants_oci
+    */
   }
 }
 
