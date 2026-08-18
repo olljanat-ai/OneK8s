@@ -71,6 +71,20 @@ locals {
 
   hub_wired = length(local.hub) > 0 && local.portainer_url != null
 
+  # Where an Edge Agent opens its reverse tunnel, as a bare host and port.
+  # Business Edition does not derive this from the URL above the way Community
+  # Edition does — it is a setting of its own, and registering an environment
+  # against a server where it is empty fails outright. settings.tf sets it.
+  #
+  # The hub publishes exactly this string when its ingress carries the tunnel.
+  # When it does not, the address an agent would be told to dial is still
+  # <host>:8000, so registration keeps working and the check below is left to
+  # explain what will not: nothing answers there.
+  edge_tunnel_address = local.portainer_url == null ? null : coalesce(
+    try(local.hub.portainer_edge_tunnel, null),
+    "${replace(trimsuffix(local.portainer_url, "/"), "/^https?:\\/\\//", "")}:8000",
+  )
+
   wired = {
     for c in local.agent_clouds : c => local.active[c] && local.hub_wired && length(local.foundation[c]) > 0
   }
@@ -145,9 +159,13 @@ resource "portainer_environment" "agent" {
   tag_ids  = each.value.tag_ids
 
   # Edge compute has to be on before an environment can be registered against
-  # it, and the URL the UI shows for edge deployments comes from the same
-  # settings object.
-  depends_on = [portainer_settings.this]
+  # it, the URL the UI shows for edge deployments comes from the same settings
+  # object, and Business Edition refuses to generate an Edge key at all until
+  # the tunnel server address next to them is set.
+  depends_on = [
+    portainer_settings.this,
+    terraform_data.edge_tunnel_address,
+  ]
 }
 
 # -----------------------------------------------------------------------------
