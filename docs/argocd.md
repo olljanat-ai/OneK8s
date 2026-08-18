@@ -185,10 +185,10 @@ first apply to sit in `Pending` for a few minutes while a node is added.
   strictly larger blast radius than the per-tenant identities in
   [ADR-0001](adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
   Applications brought in by the root Application are confined by the
-  `onek8s-platform` `AppProject` (this repository only, one namespace, no
-  cluster-scoped resources — see [hello-app.md](hello-app.md)), but the
-  built-in `default` project is still wide open, so anything created outside
-  that root Application is unrestricted.
+  `onek8s-platform` `AppProject` (the platform's own two repositories only, one
+  namespace, no cluster-scoped resources — see [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd)), but
+  the built-in `default` project is still wide open, so anything created
+  outside that root Application is unrestricted.
 
 ## AKS as the hub of a hub-spoke topology
 
@@ -347,51 +347,70 @@ generators:
 
 The hub itself is *not* labelled — Argo CD's built-in
 `https://kubernetes.default.svc` entry has no Secret — so a cluster-generator
-selector like the above hits the spokes only. Including the hub means adding it
-as a one-element `list` generator alongside the cluster one, which is what
-`gitops/argocd/templates/applicationset-hello.yaml` does.
+selector like the above hits the spokes only. Deploying to the hub means naming
+it in a one-element `list` generator instead, which is what the `hello`
+application's staging stage does in
+[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd/blob/main/argocd/templates/applicationset-hello.yaml).
 
 ### What Argo CD deploys, and where that is configured
 
 Argo CD's own configuration is version-controlled rather than clicked
-together, on the "app of apps" pattern. `gitops/root-app.tf` creates **one**
-Application on the hub:
+together, on the "app of apps" pattern — and it is version-controlled
+*elsewhere*. This repository builds the clusters and plants one Application on
+the hub; what runs on them lives in two repositories of its own:
+
+| Repository | Owns |
+|---|---|
+| **OneK8s** (here) | The clusters, the tenants, the hub, and the root `Application` — `gitops/root-app.tf` |
+| [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | Where and when an application is deployed: the `AppProject`, the ApplicationSets, the release stages |
+| [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) | What is deployed: the example applications, their charts and their images |
 
 ```
 root-app.tf ──▶ Application "platform-gitops"  (project: default)
-                  └── path gitops/argocd  ──▶ AppProject onek8s-platform
-                                              ApplicationSet hello
-                                                ├── hello-azure  (hub, in-cluster)
-                                                ├── hello-aws    (spoke)
-                                                ├── hello-gcp    (spoke)
-                                                └── hello-oci    (spoke)
-                                              ApplicationSet db-hello
-                                                └── db-hello-azure  (hub only)
+                  └── OneK8s-argocd, path argocd
+                        ├── AppProject onek8s-platform
+                        ├── ApplicationSet hello-staging     ──▶ hello-staging     (azure, in-cluster)
+                        ├── ApplicationSet hello-production  ──▶ hello-production  (aws, spoke)
+                        └── ApplicationSet db-hello          ──▶ db-hello-azure    (hub only)
 ```
 
-`gitops/argocd/` is a Helm chart, and the root Application supplies its values
-from `var.environment` and `var.platform_apps` — the environment, the
-repository and revision to sync, the wildcard domain, the tenant namespace and
-the Azure SQL coordinates read out of the hub's foundation state. That is what
-lets one copy of the directory serve every environment: the cluster generator's
-selector, the applications' hostnames and the database they talk to follow the
-environment rather than being committed per environment.
+That chart is a Helm chart, and the root Application supplies its values from
+`var.environment` and `var.platform_apps` — the environment, both repositories
+and revisions to sync, the wildcard domain, the tenant namespace and the Azure
+SQL coordinates read out of the hub's foundation state. That is what lets one
+copy of it serve every environment: the cluster generators' selectors, the
+applications' hostnames and the database they talk to follow the environment
+rather than being committed per environment.
 
-`db-hello` has one generator rather than two, because it is deployed to the hub
-and nowhere else, and it is not rendered at all in an environment whose Azure
-foundation was applied with `enable_sql = false` — the application follows the
-database instead of a switch of its own.
+The `hello` application is released along **two stages**, which is the reason
+there are two ApplicationSets rather than one fan-out:
+
+| Stage | Cloud | Cluster | Sync |
+|---|---|---|---|
+| `staging` | `azure` | AKS, the hub (`in-cluster`) | automated: prune + selfHeal |
+| `production` | `aws` | EKS, a registered spoke | **manual** — the Application carries no `syncPolicy.automated` |
+
+Nothing reaches the AWS cluster until a human syncs it, from the UI, with
+`argocd app sync hello-production`, or through the approval-gated *Promote to
+production* workflow in OneK8s-argocd, which binds to a GitHub environment with
+required reviewers. Removing `aws` from `var.spokes` removes production
+altogether: the cluster generator finds no cluster and generates no Application.
+
+`db-hello` has no stages, because it is deployed to Azure and nowhere else, and
+it is not rendered at all in an environment whose Azure foundation was applied
+with `enable_sql = false` — the application follows the database instead of a
+switch of its own.
 
 Terraform owns nothing else in Argo CD. After the first apply, adding an
-application or changing one is a commit; `terraform apply` is only needed to
-move the whole delivery plane to a different repository, revision or
-environment. `platform_apps = { enabled = false }` registers spokes without
-deploying anything, and the root Application is skipped automatically when the
-hub was applied with `enable_argocd = false`.
+application or changing one is a commit in one of the other two repositories;
+`terraform apply` is only needed to move the delivery plane to a different
+repository, revision or environment. `platform_apps = { enabled = false }`
+registers spokes without deploying anything, and the root Application is
+skipped automatically when the hub was applied with `enable_argocd = false`.
 
-The applications deployed today are the `hello` example on every cloud
-([hello-app.md](hello-app.md)) and the Azure-only `db-hello`
-([db-hello-app.md](db-hello-app.md)).
+The applications deployed today are the `hello` example on Azure and AWS
+([docs/hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md)) and the Azure-only
+`db-hello` ([docs/db-hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/db-hello-app.md)).
 
 ### Operating it
 
@@ -432,6 +451,11 @@ kubectl -n kube-system delete sa argocd-manager
 - **The hub is now a platform-wide dependency.** Losing the AKS cluster
   stops delivery on all four clouds. Argo CD keeps no state a spoke needs at
   runtime, so workloads keep running, but nothing syncs until it is back.
+- **A repository the hub cannot reach stops delivery.** The AppProject allows
+  exactly two repositories, and both are public GitHub repositories the hub's
+  repo-server fetches over the internet. Making either private means
+  registering credentials with Argo CD; renaming one means a `terraform apply`
+  here as well as a commit there.
 - **The boundary against the tenants stack is a convention, not a
   mechanism.** Tenant onboarding (namespaces, quotas, SecretStores) stays in
   Terraform and only workloads belong in GitOps. Nothing stops an Application

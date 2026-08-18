@@ -1,24 +1,30 @@
 # The one Argo CD object Terraform owns.
 #
 # Everything else Argo CD runs — the AppProject, the ApplicationSets, and every
-# Application they generate — is YAML under gitops/argocd/ in this repository.
-# This resource is the bootstrap that points Argo CD at that directory and then
-# gets out of the way ("app of apps"): after the first apply, adding an
-# application to any cloud is a commit, not a terraform run, and nothing about
-# the delivery plane is configured by hand in the UI.
+# Application they generate — is YAML in the OneK8s-argocd repository, and the
+# applications those deploy are charts in OneK8s-hello. This resource is the
+# bootstrap that points Argo CD at the first of those and then gets out of the
+# way ("app of apps"): after the first apply, adding an application, or moving
+# one along its stages, is a commit in a repository this stack never reads, and
+# nothing about the delivery plane is configured by hand in the UI.
 #
 #   root-app.tf ──▶ Application "platform-gitops"
-#                     └── path gitops/argocd  ──▶ AppProject onek8s-platform
-#                                                 ApplicationSet hello
-#                                                   ├── hello-azure   (hub, in-cluster)
-#                                                   ├── hello-aws     (spoke)
-#                                                   ├── hello-gcp     (spoke)
-#                                                   └── hello-oci     (spoke)
+#                     └── OneK8s-argocd, path argocd
+#                           ├── AppProject onek8s-platform
+#                           ├── ApplicationSet hello-staging     azure, auto-synced
+#                           ├── ApplicationSet hello-production  aws, manual sync
+#                           └── ApplicationSet db-hello          azure only
 #
 # The environment-specific facts (which environment's spokes to select, which
-# repository and revision to sync, which domain the hosts sit under) are passed
-# down as Helm values rather than committed per environment, so prototype, dev,
-# staging and prod all share one copy of gitops/argocd/.
+# repositories and revisions to sync, which domain the hosts sit under) are
+# passed down as Helm values rather than committed per environment, so
+# prototype, dev, staging and prod all share one copy of that chart.
+#
+# Note the two meanings of "staging" that meet here and stay apart: an
+# environment is a set of foundations (this stack's var.environment), while a
+# stage is one step of an application's release path across the clusters of one
+# environment. The stages are the delivery plane's business and are not
+# configured here.
 locals {
   argocd_namespace = try(local.hub.argocd_namespace, "argocd")
 
@@ -47,15 +53,17 @@ locals {
     database = try(local.hub.sql_database_name, null) == null ? "" : local.hub.sql_database_name
   }
 
-  # Values handed to gitops/argocd/values.yaml. Keys must match it.
+  # Values handed to the delivery-plane chart's values.yaml. Keys must match it.
   platform_apps_values = {
-    environment     = var.environment
-    repoURL         = var.platform_apps.repo_url
-    targetRevision  = var.platform_apps.target_revision
-    argocdNamespace = local.argocd_namespace
-    domain          = var.platform_apps.domain
-    tenant          = var.platform_apps.tenant
-    sql             = local.hub_sql
+    environment        = var.environment
+    repoURL            = var.platform_apps.repo_url
+    targetRevision     = var.platform_apps.target_revision
+    appsRepoURL        = var.platform_apps.apps_repo_url
+    appsTargetRevision = var.platform_apps.apps_target_revision
+    argocdNamespace    = local.argocd_namespace
+    domain             = var.platform_apps.domain
+    tenant             = var.platform_apps.tenant
+    sql                = local.hub_sql
   }
 }
 
