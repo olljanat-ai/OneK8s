@@ -62,10 +62,23 @@ of its own, applied after the server exists and its DNS record resolves.
 
 ## Why the tunnel rides on the ingress
 
-Portainer derives the tunnel address from **the host of its own URL** plus its
-tunnel port: an agent told to poll `https://portainer.onek8s.lol` will tunnel
-to `portainer.onek8s.lol:8000`, and nowhere else. There is one A record, so
-port 8000 has to answer on the same load balancer as port 443.
+The tunnel address is the host of Portainer's own URL plus its tunnel port: an
+agent told to poll `https://portainer.onek8s.lol` tunnels to
+`portainer.onek8s.lol:8000`, and nowhere else. There is one A record, so port
+8000 has to answer on the same load balancer as port 443.
+
+Community Edition works that address out for itself. **Business Edition does
+not**: it keeps it as a setting of its own — Settings → Edge Compute → *Tunnel
+server address* — and until that is filled in, registering an Edge environment
+does not degrade, it fails:
+
+```
+Error: failed to create environment: [POST /endpoints][500]
+{"message":"Tunnel server address not set in Edge Compute settings"}
+```
+
+A server installed by `foundations/azure` comes up with it empty, so the
+`portainer/` stack sets it before it registers anything — see below.
 
 So the Azure foundation asks the shared ingress module for one extra Traefik
 entrypoint (`extra_ports`) and renders an `IngressRouteTCP` next to it that
@@ -136,13 +149,29 @@ connects and identifies itself — the provider expects that and does not report
 it as drift) and installs `modules/portainer-agent` on that cluster with the
 `edge_id` / `edge_key` the server just generated.
 
-It also owns the server's **settings**, because two of them are prerequisites
-rather than preferences: Edge compute has to be enabled before an Edge
-environment can be registered, and the Edge Portainer URL is what the server
-tells agents to come back to. Portainer's settings API replaces the whole
-object, so `settings = { enabled = false }` is there for an environment whose
-Portainer settings (SSO, for one) are managed elsewhere — then those two have
-to be set by hand.
+It also owns the server's **settings**, because three of them are
+prerequisites rather than preferences: Edge compute has to be enabled before
+an Edge environment can be registered, the Edge Portainer URL is what the
+server tells agents to come back to, and the tunnel server address is what
+Business Edition refuses to generate an Edge key without. `settings =
+{ enabled = false }` is there for an environment whose Portainer settings (SSO,
+for one) are managed elsewhere — then all three have to be set by hand.
+
+The first two are `portainer_settings`. The third is not: the provider's
+settings resource sends no `Edge` object at all, and `portainer_environment`
+sends no `EdgeTunnelServerAddress` field either, which is the only other place
+the API takes one. So `portainer/settings.tf` writes that single field with a
+`terraform_data` provisioner — one `PUT /api/settings` carrying nothing but
+`edge.tunnelServerAddress`, with the same credentials the provider reads out
+of the environment, and a read-back afterwards because a Business Edition
+server has been known to accept the write and keep its old value
+([portainer/portainer#12744](https://github.com/portainer/portainer/issues/12744)).
+It needs `curl` on the machine running Terraform.
+
+The address comes from the hub's `portainer_edge_tunnel` output. When the hub
+publishes no tunnel (`enable_ingress = false`) it is still set, to `<host>:8000`
+— registration then works and the tunnel is simply what nothing answers on,
+which is what the stack's `portainer_edge_tunnel` check warns about.
 
 Azure is never listed in `var.agents` (the hub manages itself), and a cloud
 left out is untouched: no foundation state is read, no cluster is contacted,
@@ -198,7 +227,7 @@ Prerequisites, in order:
    not work before DNS does.
 3. The foundations of every cloud listed in `var.agents`.
 4. `PORTAINER_API_KEY` (or `PORTAINER_USER`/`PORTAINER_PASSWORD`) in the
-   environment.
+   environment, and `curl` on `PATH`.
 
 ## Operating
 
@@ -219,6 +248,20 @@ record does not resolve from the spoke, :8000 is not published (the hub's
 chained by the agent (`insecure_poll = true` is the escape hatch, and should
 not be needed behind the platform wildcard), or the environment was deleted
 on the server and the key is stale.
+
+A registration that fails with *"Tunnel server address not set in Edge Compute
+settings"* is the Business Edition setting above. Terraform sets it on every
+apply that touches the settings; to check or set it by hand:
+
+```bash
+curl -fsS -H "X-API-Key: $PORTAINER_API_KEY" \
+  https://portainer.onek8s.lol/api/settings | jq .Edge
+
+curl -fsS -X PUT -H "X-API-Key: $PORTAINER_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"edge":{"tunnelServerAddress":"portainer.onek8s.lol:8000"}}' \
+  https://portainer.onek8s.lol/api/settings
+```
 
 ## Known gaps
 
