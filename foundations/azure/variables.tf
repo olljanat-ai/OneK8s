@@ -337,7 +337,7 @@ variable "portainer_storage_size" {
 }
 
 variable "portainer_storage_class" {
-  description = "StorageClass of the Portainer data volume (null = the cluster's default class)."
+  description = "StorageClass of the Portainer data volume (null = the cluster's default class, which on AKS reclaims with Delete). The claim itself is annotated helm.sh/resource-policy: keep, so it survives a Helm uninstall; a class with reclaimPolicy: Retain would also keep the disk if the claim itself is ever deleted."
   type        = string
   default     = null
 }
