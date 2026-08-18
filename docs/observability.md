@@ -276,6 +276,15 @@ environment already.
   of a `Standard_B2s` / `t3.medium` between them at the `small` preset. Raise
   `observability_collector_preset` for real clusters, and consider
   `observability_enable_pod_logs = false` on the small ones.
+- **AKS is the one cloud the collectors are not configured identically on.**
+  The chart detects AKS from the nodes' own labels and refuses to render until
+  every Pod that talks to the API server carries
+  `kubernetes.azure.com/set-kube-service-host-fqdn`, which makes AKS' admission
+  webhook point `KUBERNETES_SERVICE_HOST` at the API server's FQDN rather than
+  the in-cluster ClusterIP. `foundations/azure` passes `azure_aks = true` for
+  it; without the flag an Azure apply fails inside the chart's `validations.yaml`,
+  not at install time. The other three clouds leave it `false` and render
+  exactly as before.
 - **Node Exporter wants host mounts**, which the AKS pod security baseline
   initiative flags. That initiative is assigned in *audit* mode
   (`foundations/azure/policy.tf`), so the DaemonSet runs and is recorded as

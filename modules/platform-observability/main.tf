@@ -4,12 +4,13 @@
 # a Grafana Cloud stack — one stack for all four clusters, told apart by the
 # "cluster" label this module sets from var.cluster_name.
 #
-# Everything that differs between clouds is an input, and there is only one
-# thing: how the Grafana Cloud credentials get into the cluster. They arrive
-# the same way the ingress' certificate does — an ESO SecretStore +
-# ExternalSecret over the cloud's own identity, passed in as var.extra_objects —
-# so the collectors themselves are configured identically on AKS, EKS, GKE and
-# OKE.
+# Everything that differs between clouds is an input, and there are two things.
+# The first is how the Grafana Cloud credentials get into the cluster: they
+# arrive the same way the ingress' certificate does — an ESO SecretStore +
+# ExternalSecret over the cloud's own identity, passed in as var.extra_objects.
+# The second is var.azure_aks, which annotates the Pods that talk to the API
+# server the way AKS wants them annotated. Off Azure it changes nothing, so the
+# collectors are configured identically on EKS, GKE and OKE.
 #
 #   <cloud> secret backend  platform-grafana-cloud
 #     --(SecretStore + ExternalSecret, workload identity)-->
@@ -140,9 +141,46 @@ locals {
     } : {},
   )
 
+  # --- Azure AKS -------------------------------------------------------------
+  # The one place a cloud shows through in the collectors themselves. AKS' own
+  # admission webhook reads this annotation and points KUBERNETES_SERVICE_HOST
+  # at the API server's FQDN instead of the in-cluster kubernetes.default
+  # ClusterIP, which keeps a Pod's API traffic off kube-proxy and the tunnel
+  # behind it. Grafana's chart treats it as mandatory rather than advisory: its
+  # validations detect AKS from the nodes' own labels and refuse to render
+  # until every Pod that talks to the API server carries it, which is what an
+  # Azure apply hits as "execution error at validations.yaml".
+  #
+  # Empty off Azure, and an empty podAnnotations map is what those fields
+  # default to anyway, so the values below are the same on the other clouds.
+  aks_pod_annotations = var.azure_aks ? {
+    "kubernetes.azure.com/set-kube-service-host-fqdn" = "true"
+  } : {}
+
   values = merge({
     cluster = {
       name = var.cluster_name
+    }
+
+    # Applied to every Alloy instance, so the AKS annotation is stated once
+    # here rather than repeated in each entry of local.collectors.
+    collectorCommon = {
+      alloy = {
+        controller = {
+          podAnnotations = local.aks_pod_annotations
+        }
+      }
+    }
+
+    "alloy-operator" = {
+      podAnnotations = local.aks_pod_annotations
+
+      # The post-install and pre-delete hook Jobs that add and remove the
+      # operator's finalizer. They run kubectl, so they are API server clients
+      # like everything else here.
+      waitForAlloyRemoval = {
+        podAnnotations = local.aks_pod_annotations
+      }
     }
 
     destinations = local.destinations
@@ -197,8 +235,11 @@ locals {
     # Prometheus stack of its own.
     telemetryServices = {
       kube-state-metrics = {
-        deploy = var.enable_cluster_metrics
+        deploy         = var.enable_cluster_metrics
+        podAnnotations = local.aks_pod_annotations
       }
+      # No annotation: Node Exporter reads /proc and /sys and never speaks to
+      # the API server.
       node-exporter = {
         deploy = var.enable_host_metrics
       }
