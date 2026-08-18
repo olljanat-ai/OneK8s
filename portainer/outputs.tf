@@ -1,8 +1,10 @@
 locals {
   agent_modules = {
     aws = module.agent_aws
+    /*
     gcp = module.agent_gcp
     oci = module.agent_oci
+    */
   }
 }
 

@@ -38,6 +38,7 @@ provider "aws" {
   secret_key                  = local.active.aws ? null : "unused"
 }
 
+/*
 provider "google" {
   project = local.wired.gcp ? local.foundation.gcp.project_id : "unused"
 
@@ -45,6 +46,7 @@ provider "google" {
   # the provider from looking up Application Default Credentials.
   access_token = local.active.gcp ? null : "unused"
 }
+*/
 
 data "aws_eks_cluster_auth" "agent" {
   count = local.wired.aws ? 1 : 0
@@ -52,9 +54,11 @@ data "aws_eks_cluster_auth" "agent" {
   name = local.foundation.aws.cluster_name
 }
 
+/*
 data "google_client_config" "agent" {
   count = local.wired.gcp ? 1 : 0
 }
+*/
 
 provider "kubernetes" {
   alias = "aws"
@@ -65,6 +69,7 @@ provider "kubernetes" {
   token                  = try(data.aws_eks_cluster_auth.agent[0].token, null)
 }
 
+/*
 provider "kubernetes" {
   alias = "gcp"
 
@@ -100,3 +105,4 @@ provider "kubernetes" {
     }
   }
 }
+*/

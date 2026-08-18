@@ -3,7 +3,7 @@ locals {
   # builds, and it manages that cluster directly through the ServiceAccount the
   # Portainer chart binds to cluster-admin. So "azure" never needs an agent.
   # These are the clouds that do.
-  agent_clouds = ["aws", "gcp", "oci"]
+  agent_clouds = ["aws"] // , "gcp", "oci"]
 
   # var.agents is keyed by cloud, and regrouped here for the same reason the
   # gitops stack regroups its spokes: a module's providers are static, so each
@@ -178,6 +178,7 @@ module "agent_aws" {
   labels        = each.value.labels
 }
 
+/*
 module "agent_gcp" {
   source   = "../modules/portainer-agent"
   for_each = local.agents.gcp
@@ -219,3 +220,4 @@ module "agent_oci" {
   cluster_role  = each.value.cluster_role
   labels        = each.value.labels
 }
+*/

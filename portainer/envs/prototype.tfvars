@@ -21,6 +21,8 @@ state_home = {
 # modules/portainer-agent/README.md for what that grant covers and why.
 agents = {
   aws = {}
+  /*
   gcp = {}
   oci = {}
+  */
 }
