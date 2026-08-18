@@ -129,6 +129,54 @@ is a paid entitlement rather than an infrastructure credential — it grants
 nothing in this platform — and the alternative is a licence screen on every
 rebuild.
 
+## Where the state lives
+
+Portainer's database — every user, every environment, every Edge key — is a
+file on disk, `/data/portainer.db`. The chart's `persistence` values are what
+put that on a PersistentVolume rather than in the pod:
+
+```
+PersistentVolumeClaim portainer (10Gi, ReadWriteOnce, default StorageClass)
+  └─ mounted at /data in deploy/portainer   (strategy: Recreate)
+```
+
+So a restarted, rescheduled or upgraded pod comes back on the same database.
+A pod that comes back **empty** means the claim itself went away, because the
+claim is the only thing that carries the data — check that first:
+
+```bash
+kubectl -n portainer get pvc,pv
+kubectl -n portainer get deploy portainer \
+  -o jsonpath='{.spec.template.spec.volumes[?(@.name=="data")]}{"\n"}'
+kubectl -n portainer get pvc portainer -o jsonpath='{.metadata.creationTimestamp}{"\n"}'
+helm -n portainer history portainer
+```
+
+A claim younger than the release, or a release history with an `uninstall` in
+it, is the answer: the claim was the chart's, so it belonged to the release,
+and a Helm uninstall deleted it — along with the managed disk behind it, since
+the AKS default StorageClass reclaims with `Delete`.
+
+Terraform uninstalls the release on every *replacement* of `helm_release`,
+which an ordinary apply can reach: flipping `enable_portainer` to false and
+back (the two-pass bootstrap above does exactly that), changing a ForceNew
+argument (`name`, `namespace`, `chart`, `repository`), or applying after an
+install that failed once and left the resource tainted.
+
+The claim is therefore annotated `helm.sh/resource-policy: keep`. Helm skips
+it on uninstall, and a reinstall under the same release name and namespace
+adopts it back, so the server returns to the database it had. Two things
+follow:
+
+- Deleting Portainer's data is now deliberate: `kubectl -n portainer delete
+  pvc portainer`. A `terraform destroy` of the foundation leaves the claim and
+  its disk behind, which is a cost line until someone removes it.
+- A StorageClass with `reclaimPolicy: Retain` (`portainer_storage_class`)
+  would keep the disk even then, at the price of a manual re-bind to recover.
+
+Nothing here backs the volume up. Portainer BE has scheduled S3 backups and
+this platform configures none; the volume is the thing to snapshot.
+
 ## What the `portainer/` stack does
 
 One stack, one state file per environment, every cloud in one run — the same
@@ -278,7 +326,8 @@ curl -fsS -X PUT -H "X-API-Key: $PORTAINER_API_KEY" \
 - **One replica, one PVC.** The server is a single stateful pod. Its database
   holds the environments and their Edge keys, so the volume is the thing to
   back up (Portainer BE has scheduled S3 backups; nothing here configures
-  them).
+  them). It survives the release — see [Where the state lives](#where-the-state-lives)
+  — but nothing copies it anywhere.
 - **No agent is deployed by Argo CD.** The agents are Terraform's because
   their Edge keys are generated per cluster at registration time, which is not
   something a Git-committed manifest can carry.

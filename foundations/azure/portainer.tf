@@ -175,10 +175,32 @@ resource "helm_release" "portainer" {
 
     # Portainer keeps its database on disk (users, environments, Edge keys),
     # so this is the one platform component in this stack that is stateful.
+    #
+    # The claim is the chart's, which means it is part of the release: a Helm
+    # uninstall would take it, and with the default StorageClass — Delete
+    # reclaim policy — the managed disk behind it. That is not a hypothetical
+    # here. Terraform uninstalls this release whenever it replaces it: a flip
+    # of enable_portainer to false and back, a change to a ForceNew argument
+    # (name, namespace, chart, repository), or an install that failed once and
+    # left the resource tainted. Every one of those is an ordinary apply, and
+    # each would silently discard every environment and Edge key on the
+    # server.
+    #
+    # So the claim opts out of the release's lifecycle. Uninstall leaves it
+    # (and its PersistentVolume) alone; a reinstall under the same release
+    # name and namespace adopts it back — same name, and the ownership
+    # metadata Helm wrote on it still matches — and the server comes up on the
+    # database it had. Deleting the data is then a deliberate `kubectl delete
+    # pvc portainer -n portainer`, which is the right amount of friction for
+    # the one volume in this platform that cannot be rebuilt from Git.
     persistence = {
       enabled      = true
       size         = var.portainer_storage_size
       storageClass = var.portainer_storage_class
+
+      annotations = {
+        "helm.sh/resource-policy" = "keep"
+      }
     }
 
     resources = var.portainer_resources
