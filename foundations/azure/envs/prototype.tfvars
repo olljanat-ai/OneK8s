@@ -28,8 +28,10 @@ argocd_sso_client_id               = "6598a87b-227b-4f20-9f3b-dbdd74604492"
 # the API are only installed once there is a way to sign in to them, which is
 # an Entra ID app registration created out of band — as Argo CD's is. It needs
 # no federated credential and no client secret (Kargo only verifies the ID
-# token), but it does need the loopback redirect on a "mobile and desktop"
-# platform for `kargo login`, alongside the web redirect the UI uses.
+# token), but both of its redirects are fussier than Argo CD's: the UI's on a
+# "single-page application" platform, the CLI's loopback on a "mobile and
+# desktop" one, and no groups scope anywhere. docs/kargo.md has the whole list,
+# and the client IDs are the defaults in variables.tf.
 #
 # Until one is registered, promotions are `kubectl create` of a Promotion
 # object (docs/kargo.md) — the gate in front of production holds regardless,
@@ -37,18 +39,24 @@ argocd_sso_client_id               = "6598a87b-227b-4f20-9f3b-dbdd74604492"
 enable_kargo   = true
 kargo_hostname = "kargo.onek8s.lol"
 
-# kargo_sso_client_id = "<application (client) ID of the Kargo app registration>"
-#
 # Entra group object ID -> Kargo system role. These are cluster-wide
 # capabilities; who may promote the hello application to production is a Role
 # in that Project's namespace, and lives in OneK8s-argocd beside the Stage it
 # guards.
 #
-# kargo_rbac_groups = {
-#   admins           = ["46a1d986-c8a7-42d3-b2a4-a88f789f7ecc"]
-#   project_creators = ["59a92e0b-f653-4d5d-bdba-473eb331a5be"]
-#   viewers          = ["4301eb89-fc3d-4836-95d1-41b497f102ad"]
-# }
+# The same group that is role:admin in Argo CD below, so one group administers
+# the whole delivery plane rather than two lists drifting apart. Nothing else
+# is mapped yet, and Kargo grants an unmapped identity nothing at all — not
+# even the read that lists Projects, which is what a signed-in user with no
+# entry here runs into first ("projects.kargo.akuity.io is forbidden"). The two
+# remaining Argo CD groups are the obvious next entries when somebody who is
+# not a platform admin needs the UI:
+#
+#   project_creators = ["59a92e0b-f653-4d5d-bdba-473eb331a5be"]  # role:org-admin
+#   viewers          = ["4301eb89-fc3d-4836-95d1-41b497f102ad"]  # role:readonly
+kargo_rbac_groups = {
+  admins = ["46a1d986-c8a7-42d3-b2a4-a88f789f7ecc"]
+}
 
 # Azure SQL on the free offer: 100,000 vCore seconds and 32 GB a month, with
 # the database auto-pausing rather than billing when that runs out. Entra-only
