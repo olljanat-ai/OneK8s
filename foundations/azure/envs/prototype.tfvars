@@ -1,8 +1,50 @@
-environment         = "prototype"
-location            = "swedencentral"
-name_prefix         = "onek8s"
-system_node_count   = 1
-system_node_vm_size = "Standard_B2s"
+environment = "prototype"
+location    = "swedencentral"
+name_prefix = "onek8s"
+
+# --- One node, and everything that follows from it ----------------------------
+# The defaults in variables.tf are what a cluster in a large enterprise estate
+# is expected to have. This environment is a single-node lab on one
+# subscription, so it opts each of them back down — and every opt-down below
+# says what production uses instead, so the difference is a diff rather than a
+# discovery.
+#
+# One burstable node, in whichever zone the region puts it. Production runs
+# three nodes of Standard_D4s_v5 spread across zones 1-3, with the node disks
+# encrypted on the host as well as at rest.
+system_node_count                      = 1
+system_node_vm_size                    = "Standard_B2s"
+system_node_availability_zones         = []
+system_node_encryption_at_host_enabled = false
+
+# Free has no API server SLA and no cost analysis. Production runs Standard,
+# or Premium where a Kubernetes minor has to stay supported past its community
+# window.
+aks_sku_tier = "Free"
+
+# Gatekeeper's three pods do not fit beside Argo CD, Kargo, Portainer, Traefik,
+# External Secrets and the Alloy collectors on one B2s. The initiative in
+# policy.tf is still assigned — it just has nothing evaluating it here.
+# Production leaves the add-on on and moves baseline_policy_effect to "deny"
+# once its workloads are clean.
+aks_azure_policy_enabled = false
+
+# Defender for Containers is priced per vCPU-hour. Production leaves it on.
+enable_defender = false
+
+# The control plane's logs and the vault's audit trail still go to Log
+# Analytics here — that is the record an incident is reconstructed from, and it
+# is the one thing no in-cluster collector can see. Capped and short-retained
+# rather than turned off: production keeps 90 days and no cap.
+log_analytics_retention_days = 30
+log_analytics_daily_quota_gb = 1
+
+# A lab vault is torn down and rebuilt under the same name, which purge
+# protection makes impossible. Production keeps purge protection on, 90 days of
+# soft-delete retention, and the premium (HSM-backed) SKU.
+key_vault_sku_name                   = "standard"
+key_vault_purge_protection_enabled   = false
+key_vault_soft_delete_retention_days = 7
 
 # DNS is out of band on every cloud: the onek8s.lol zone lives outside this
 # stack, and the record for each published host is pointed at the ingress
@@ -66,6 +108,11 @@ kargo_rbac_groups = {
 #
 # The Entra administrator is left at its default: the service principal that
 # deploys this stack, which is what lets that workflow create the user.
+#
+# The free offer excludes zone redundancy and geo-redundant backups, and asking
+# for it overrides both rather than failing the apply. Production leaves
+# sql_use_free_limit off and gets zone-redundant compute with geo-redundant
+# backups.
 enable_sql         = true
 sql_database_name  = "appdb"
 sql_use_free_limit = true

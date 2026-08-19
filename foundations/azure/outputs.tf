@@ -3,37 +3,42 @@
 # foundations -> tenants.
 output "resource_group_name" {
   description = "Resource group containing the cluster and vault."
-  value       = azurerm_resource_group.this.name
+  value       = module.resource_group.name
 }
 
 output "location" {
   description = "Azure region."
-  value       = azurerm_resource_group.this.location
+  value       = module.resource_group.location
 }
 
 output "cluster_name" {
   description = "AKS cluster name."
-  value       = azurerm_kubernetes_cluster.this.name
+  value       = module.aks.name
 }
 
 output "cluster_id" {
   description = "AKS cluster resource ID (parent for azapi managed namespaces)."
-  value       = azurerm_kubernetes_cluster.this.id
+  value       = module.aks.resource_id
 }
 
 output "oidc_issuer_url" {
   description = "AKS OIDC issuer URL for workload identity federation."
-  value       = azurerm_kubernetes_cluster.this.oidc_issuer_url
+  value       = module.aks.oidc_issuer_profile_issuer_url
 }
 
 output "key_vault_id" {
   description = "Resource ID of the shared Key Vault."
-  value       = azurerm_key_vault.this.id
+  value       = local.key_vault_id
 }
 
 output "key_vault_uri" {
   description = "Vault URI of the shared Key Vault."
-  value       = azurerm_key_vault.this.vault_uri
+  value       = local.key_vault_uri
+}
+
+output "log_analytics_workspace_id" {
+  description = "Resource ID of the Log Analytics workspace the AKS control plane and the vault write their diagnostics to (null when Azure-native diagnostics are disabled)."
+  value       = local.log_analytics_workspace_id
 }
 
 # --- Azure SQL ----------------------------------------------------------------
@@ -42,7 +47,7 @@ output "key_vault_uri" {
 # application, and nothing to keep in sync between the two.
 output "sql_server_name" {
   description = "Name of the Entra-only SQL logical server (null when SQL is disabled)."
-  value       = one(azurerm_mssql_server.this[*].name)
+  value       = local.sql_server_name
 }
 
 output "sql_server_fqdn" {

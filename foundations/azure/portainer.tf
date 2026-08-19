@@ -64,10 +64,10 @@ data "azurerm_key_vault_secret" "portainer_license" {
   count = local.portainer_enabled ? 1 : 0
 
   name         = var.portainer_license_secret_name
-  key_vault_id = azurerm_key_vault.this.id
+  key_vault_id = local.key_vault_id
 
   # The role assignment is what makes this readable at all on a cold apply.
-  depends_on = [azurerm_role_assignment.deployer_secrets_officer]
+  depends_on = [module.key_vault]
 }
 
 # --- Namespace ---------------------------------------------------------------
@@ -116,9 +116,9 @@ data "azurerm_key_vault_secret" "portainer_admin_password" {
   count = local.portainer_enabled && var.portainer_admin_password_secret_name != null ? 1 : 0
 
   name         = var.portainer_admin_password_secret_name
-  key_vault_id = azurerm_key_vault.this.id
+  key_vault_id = local.key_vault_id
 
-  depends_on = [azurerm_role_assignment.deployer_secrets_officer]
+  depends_on = [module.key_vault]
 }
 
 # --- The server --------------------------------------------------------------
