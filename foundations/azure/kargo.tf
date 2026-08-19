@@ -48,6 +48,35 @@ locals {
   # promotion is a commit.
   kargo_shared_resources_namespace = "kargo-shared-resources"
 
+  # The Git credential that lives in that namespace, and the identity that
+  # reads it. Kargo needs a username and a password that may push to the
+  # delivery-plane repository, and this platform's answer to "a workload needs
+  # a secret" is always the same one: a platform identity federated to one
+  # ServiceAccount, a Key Vault role assignment narrowed by ABAC to one secret,
+  # and External Secrets doing the reading (ingress.tf, monitoring.tf).
+  #
+  #   Key Vault platform-kargo-git
+  #     --(SecretStore + ExternalSecret, workload identity)-->
+  #       Secret onek8s-argocd-repo, labelled kargo.akuity.io/cred-type=git
+  #         --(the git-push step of every promotion)--> OneK8s-argocd
+  #
+  # The PAT therefore never reaches Terraform: this stack says which Key Vault
+  # secret to read and which Kubernetes Secret it lands in, exactly as the
+  # Grafana Cloud token is handled, so nothing sensitive enters the state file
+  # or a plan output. It also means the vault is read at *run* time rather than
+  # at apply time — unlike Portainer's licence — so a brand-new environment
+  # needs no second pass: the ExternalSecret simply stays unready until the
+  # secret is put in the vault it created.
+  kargo_git_credential_enabled = local.kargo_enabled && var.kargo_git_credential_secret_name != null
+
+  # The Kubernetes Secret Kargo matches. Its name is arbitrary — Kargo finds it
+  # by label and then by repoURL — but a Project-scoped copy would be named the
+  # same way, so it says which repository it is for.
+  kargo_git_credential_k8s_secret = "onek8s-argocd-repo"
+
+  kargo_secrets_service_account_name = "platform-kargo"
+  kargo_secret_store_name            = "platform-store"
+
   kargo_url = "https://${var.kargo_hostname}"
 
   # Kargo's admission webhooks are not decoration: the ValidatingWebhook on
@@ -223,6 +252,164 @@ locals {
       sharedResources = { namespace = local.kargo_shared_resources_namespace }
     }
   }
+
+  # The three objects that turn a Key Vault secret into the credential Kargo
+  # looks up. Applied with the release rather than as kubernetes_manifest
+  # resources, which would need the External Secrets CRDs to exist at *plan*
+  # time — before this stack has ever been applied. The same reason the ingress
+  # and the collectors pass theirs to their module as extra_objects.
+  #
+  # Every object names its namespace: the chart renders extraObjects into the
+  # release namespace otherwise, and these belong to the shared-resources one
+  # the chart also creates. Helm applies a Namespace before anything else in a
+  # release, so the first install orders itself.
+  #
+  # Rendered into the release only when a Key Vault secret is configured (see
+  # the values below); without one the namespace is left for a Secret created
+  # by hand.
+  kargo_credential_objects = [
+    {
+      apiVersion = "v1"
+      kind       = "ServiceAccount"
+      metadata = {
+        name      = local.kargo_secrets_service_account_name
+        namespace = local.kargo_shared_resources_namespace
+        annotations = {
+          "azure.workload.identity/client-id" = one(azurerm_user_assigned_identity.kargo[*].client_id)
+          "azure.workload.identity/tenant-id" = data.azurerm_client_config.current.tenant_id
+        }
+        labels = {
+          "azure.workload.identity/use" = "true"
+        }
+      }
+    },
+    {
+      apiVersion = "external-secrets.io/v1"
+      kind       = "SecretStore"
+      metadata = {
+        name      = local.kargo_secret_store_name
+        namespace = local.kargo_shared_resources_namespace
+      }
+      spec = {
+        provider = {
+          azurekv = {
+            authType = "WorkloadIdentity"
+            vaultUrl = azurerm_key_vault.this.vault_uri
+            serviceAccountRef = {
+              name = local.kargo_secrets_service_account_name
+            }
+          }
+        }
+      }
+    },
+    {
+      apiVersion = "external-secrets.io/v1"
+      kind       = "ExternalSecret"
+      metadata = {
+        name      = "kargo-git"
+        namespace = local.kargo_shared_resources_namespace
+      }
+      spec = {
+        # A rotated PAT is picked up within the hour without an apply and
+        # without a restart — the controller reads the Secret per promotion.
+        refreshInterval = "1h"
+        secretStoreRef = {
+          kind = "SecretStore"
+          name = local.kargo_secret_store_name
+        }
+        target = {
+          name           = local.kargo_git_credential_k8s_secret
+          creationPolicy = "Owner"
+          # The label is the whole point: Kargo finds credentials by listing
+          # Secrets with it, then compares repoURL. A copy of this Secret
+          # without the label is invisible to the credential lookup.
+          #
+          # repoURL is written here rather than kept in the vault because it is
+          # configuration, not a secret — and it has to agree with what the
+          # Stage passes the promotion task. Kargo lowercases both sides and
+          # strips ".git" before comparing, so capitals and the suffix do not
+          # matter; the host and the path do.
+          #
+          # The backticks are not decoration: the chart runs every extraObject
+          # through `tpl`, so an ESO template written plainly would be
+          # evaluated (and emptied) at chart render time. Wrapping it in a Go
+          # raw string makes Helm emit it verbatim for ESO to evaluate later —
+          # the same trick ingress.tf plays with filterPEM.
+          template = {
+            engineVersion = "v2"
+            metadata = {
+              labels = {
+                "kargo.akuity.io/cred-type" = "git"
+              }
+            }
+            data = {
+              repoURL  = var.kargo_git_repo_url
+              username = "{{ `{{ .username }}` }}"
+              password = "{{ `{{ .password }}` }}"
+            }
+          }
+        }
+        # One JSON object in the vault, mapped through under its own keys —
+        # the shape the Grafana Cloud credentials already use:
+        #
+        #   { "username": "<user or app id>", "password": "<PAT>" }
+        dataFrom = [{
+          extract = {
+            key = var.kargo_git_credential_secret_name
+          }
+        }]
+      }
+    },
+  ]
+}
+
+# --- The identity that reads the Git credential -------------------------------
+# A platform identity of its own rather than a share of the ingress' or the
+# collectors': the three components are independently deployable, and each one
+# is granted exactly the secret it needs and nothing else.
+resource "azurerm_user_assigned_identity" "kargo" {
+  count = local.kargo_git_credential_enabled ? 1 : 0
+
+  name                = "id-platform-kargo-${local.name}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  tags                = local.tags
+}
+
+resource "azurerm_federated_identity_credential" "kargo" {
+  count = local.kargo_git_credential_enabled ? 1 : 0
+
+  name                      = "aks-platform-kargo"
+  user_assigned_identity_id = azurerm_user_assigned_identity.kargo[0].id
+  audience                  = ["api://AzureADTokenExchange"]
+  issuer                    = azurerm_kubernetes_cluster.this.oidc_issuer_url
+  subject                   = "system:serviceaccount:${local.kargo_shared_resources_namespace}:${local.kargo_secrets_service_account_name}"
+}
+
+# "Key Vault Secrets User" grants getSecret/readMetadata on the whole vault —
+# every tenant's secrets and the platform wildcard's private key — so the ABAC
+# condition narrows it to exactly the Git credential.
+resource "azurerm_role_assignment" "kargo_git_credential_user" {
+  count = local.kargo_git_credential_enabled ? 1 : 0
+
+  scope                = azurerm_key_vault.this.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_user_assigned_identity.kargo[0].principal_id
+
+  condition_version = "2.0"
+  condition         = <<-EOT
+    (
+      (
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+        AND
+        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
+      )
+      OR
+      (
+        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.kargo_git_credential_secret_name}'
+      )
+    )
+  EOT
 }
 
 # The signing key for admin-account tokens. Generated rather than configured:
@@ -323,6 +510,7 @@ resource "helm_release" "kargo" {
   values = concat(
     [yamlencode(local.kargo_values)],
     local.kargo_sso_enabled ? [yamlencode({ api = { oidc = local.kargo_oidc } })] : [],
+    local.kargo_git_credential_enabled ? [yamlencode({ extraObjects = local.kargo_credential_objects })] : [],
     [yamlencode(var.kargo_extra_values)],
   )
 
@@ -333,6 +521,10 @@ resource "helm_release" "kargo" {
   depends_on = [
     azurerm_kubernetes_cluster_extension.argocd,
     kubernetes_secret_v1.kargo_webhooks_server_cert,
+    # The External Secrets CRDs and webhook have to be up before the credential
+    # objects above are applied, and the role assignment before the first read.
+    helm_release.external_secrets,
+    azurerm_role_assignment.kargo_git_credential_user,
   ]
 }
 

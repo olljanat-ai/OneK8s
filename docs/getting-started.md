@@ -254,15 +254,18 @@ No machine account is created: nothing outside the cluster syncs an application,
 because promotion belongs to Kargo, which the same apply installs beside Argo CD
 (`enable_kargo`). Kargo needs one thing that is not configuration — a Git
 credential that may push to the delivery-plane repository, since a promotion is
-a commit:
+a commit — and it reads it out of this environment's Key Vault, the way the
+wildcard certificate and the Grafana Cloud token are read:
 
 ```bash
-kubectl -n kargo-shared-resources create secret generic onek8s-argocd-repo \
-  --from-literal=repoURL=https://github.com/olljanat-ai/OneK8s-argocd.git \
-  --from-literal=username=<user or app id> --from-literal=password=<token>
-kubectl -n kargo-shared-resources label secret onek8s-argocd-repo \
-  kargo.akuity.io/cred-type=git
+az keyvault secret set --vault-name <kv> --name platform-kargo-git \
+  --value '{"username":"<user or app id>","password":"<PAT or installation token>"}'
 ```
+
+Nothing else: `foundations/azure` builds the identity, the `SecretStore` and the
+`ExternalSecret` that turn that object into the Secret Kargo looks up. Because
+the vault is read at run time, the order does not matter — put the object in
+before or after the apply, and the first promotion after it exists succeeds.
 
 Kargo's own UI is published like Argo CD's, on `kargo_hostname`, and is
 installed only once there is a way to sign in to it — set `kargo_sso_client_id`

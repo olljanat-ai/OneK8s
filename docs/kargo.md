@@ -82,11 +82,12 @@ Kargo is an ordinary Helm release rather than an AKS extension — Azure offers
 none — and follows Argo CD in every other respect:
 
 ```hcl
-enable_kargo        = true
-kargo_hostname      = "kargo.onek8s.lol"     # platform wildcard, A record by hand
-kargo_sso_client_id = "<app registration>"   # Entra ID, as Argo CD's UI uses
-kargo_rbac_groups   = {
-  admins           = ["<group object id>"]   # the same group Argo CD calls role:admin
+enable_kargo                     = true
+kargo_hostname                   = "kargo.onek8s.lol"   # platform wildcard, A record by hand
+kargo_sso_client_id              = "<app registration>" # Entra ID, as Argo CD's UI uses
+kargo_git_credential_secret_name = "platform-kargo-git"  # Key Vault, read by External Secrets
+kargo_rbac_groups = {
+  admins           = ["<group object id>"] # the same group Argo CD calls role:admin
   project_creators = ["<group object id>"]
   viewers          = ["<group object id>"]
 }
@@ -119,6 +120,10 @@ kargo_rbac_groups   = {
   controller-only: Warehouses discover artifacts, staging is auto-promoted, and
   a manual promotion is a `Promotion` object created with `kubectl`. The gate
   holds either way — it is the Stage's promotion policy, not the UI.
+- **The Git credential comes out of Key Vault**, like every other secret on this
+  platform: `kargo.tf` builds a platform identity, an ESO `SecretStore` and an
+  `ExternalSecret` that assembles the Secret Kargo looks up, so the PAT reaches
+  neither Terraform's state nor a plan output. See *The one credential*.
 - **`kargo_rbac_groups` is cluster-wide capability** ("may create Projects",
   "may see everything"). Who may promote *the hello application to production*
   is not here: it is a `Role` in the Project's namespace, and it lives beside the
@@ -203,60 +208,97 @@ same roleless state as above.
 ## The one credential
 
 A promotion is a commit, so Kargo needs a Git credential that may push to the
-delivery-plane repository. It is not created by Terraform, for the same reason
-Argo CD's account tokens never were: a credential in state is a credential in
-every plan output and every state backup.
+delivery-plane repository. It is the only secret this design has, and it arrives
+the way every other platform secret does — out of the environment's **Key Vault**,
+through External Secrets, never through Terraform:
+
+```
+Key Vault platform-kargo-git
+  --(SecretStore + ExternalSecret, workload identity)-->
+    Secret onek8s-argocd-repo, labelled kargo.akuity.io/cred-type=git
+      --(the git-push step of every promotion)--> OneK8s-argocd
+```
+
+`kargo.tf` builds the same three parts the ingress' certificate and the Grafana
+Cloud token are built from: a user-assigned identity federated to one
+ServiceAccount in `kargo-shared-resources`, a *Key Vault Secrets User* role
+assignment narrowed by an ABAC condition to that one secret, and an
+`ExternalSecret` that assembles the Secret Kargo looks up. The objects ride along
+with the Kargo release as `extraObjects`, rather than as `kubernetes_manifest`
+resources that would need the External Secrets CRDs to exist at *plan* time.
+
+**What you put in the vault** is one JSON object, the shape the Grafana Cloud
+credentials already use:
 
 ```bash
-kubectl -n kargo-shared-resources create secret generic onek8s-argocd-repo \
-  --from-literal=repoURL=https://github.com/olljanat-ai/OneK8s-argocd.git \
-  --from-literal=username=<user or app id> \
-  --from-literal=password=<PAT or installation token>
-
-kubectl -n kargo-shared-resources label secret onek8s-argocd-repo \
-  kargo.akuity.io/cred-type=git
+az keyvault secret set --vault-name <kv> --name platform-kargo-git \
+  --value '{"username":"<user or app id>","password":"<PAT or installation token>"}'
 ```
+
+A fine-grained PAT with *contents: read and write* on that one repository is
+enough; a GitHub App installation is the better long-lived answer. The name is
+`var.kargo_git_credential_secret_name`, and it carries the reserved `platform-`
+prefix that no tenant may claim.
+
+Three things follow from reading it at run time rather than at apply time:
+
+- **No two-pass bootstrap.** Portainer's licence is read by Terraform, so a
+  brand-new environment has to apply once without it, fill the vault, and apply
+  again. This is not: the `ExternalSecret` simply stays unready until the secret
+  exists, and the first promotion after that succeeds. Nothing to re-apply.
+- **A rotated PAT needs no apply and no restart.** `refreshInterval` is an hour,
+  and the controller reads the Secret per promotion.
+- **The PAT is in no state file and no plan output.** This stack says *which*
+  vault secret to read and *which* Kubernetes Secret it lands in. That is the
+  same reason Argo CD's account tokens never were Terraform's.
+
+`repoURL` is written by Terraform rather than kept in the vault, because it is
+configuration and not a secret (`var.kargo_git_repo_url`). It has to agree with
+`repoURL` in the delivery-plane chart's values — what every `Stage` passes the
+promotion task — though Kargo lowercases both sides and strips a trailing `.git`
+before comparing, so neither capitals nor the suffix matter.
 
 `kargo-shared-resources` is the namespace the chart creates for credentials
 shared by every Project (`kargo_shared_resources_namespace` in the foundation's
-outputs); put it in the Project's own namespace instead to scope it to one
-project. A fine-grained PAT with *contents: read and write* on that one
-repository is enough; a GitHub App installation is the better long-lived answer.
+outputs), and the chart also grants the controller read access to Secrets in it.
+Scoping the credential to one application instead means the same `ExternalSecret`
+in that Project's own namespace.
 
-**Until it exists, promotions get as far as the push and stop there.** The
-delivery-plane repository is public, so `git-clone` succeeds anonymously and the
-first four steps of a promotion look healthy; `git-push` is where the absence
-shows up, as Git asking an unattended container for a username:
+### When a promotion cannot push
+
+The delivery-plane repository is public, so `git-clone` succeeds anonymously and
+the first four steps of a promotion look healthy. `git-push` is the first step
+that actually needs the credential, and its absence shows up as Git asking an
+unattended container for a username:
 
 ```
 error pushing branch: ... fatal: could not read Username for
 'https://github.com': No such device or address
 ```
 
-`repoURL` is matched against what the `Stage` passes to the promotion task —
-`repoURL` in the delivery-plane chart's values,
-`https://github.com/olljanat-ai/OneK8s-argocd.git`. Kargo lowercases the URL and
-strips any `.git` on both sides before comparing, so neither the suffix nor the
-capitals in `OneK8s` matter; the host and path do. Check the Secret is seen at
-all with:
+Work backwards along the chain above — the Secret, then the `ExternalSecret`
+that fills it, then the vault:
 
 ```bash
-kubectl -n kargo-shared-resources get secret \
-  -l kargo.akuity.io/cred-type=git \
-  -o custom-columns=NAME:.metadata.name,REPO:.data.repoURL
-
 kubectl -n kargo-shared-resources get secret onek8s-argocd-repo \
-  -o jsonpath='{.data.repoURL}' | base64 -d
+  --show-labels                                   # exists? labelled cred-type=git?
+
+kubectl -n kargo-shared-resources describe externalsecret kargo-git
 ```
+
+A `SecretSynced` condition of `False` names its own cause: `SecretNotFound` is
+the vault object missing or misnamed, and a 403 from Key Vault is the ABAC
+condition disagreeing with `kargo_git_credential_secret_name` — the identity is
+granted that one secret and nothing else on purpose.
 
 A failed `Promotion` is terminal — Kargo does not retry it once the step has met
 its error threshold, and it does not re-promote the same Freight on its own. So
-after the Secret is in place, ask for the promotion again (`kargo promote`, the
-UI, or a fresh `Promotion` object); the failed one stays as the record that it
-was attempted.
+once the credential is in place, ask for the promotion again (`kargo promote`,
+the UI, or a fresh `Promotion` object); the failed one stays as the record that
+it was attempted.
 
-Nothing else is manual, and nothing else is a secret. Kargo's access to Argo CD
-is Kubernetes RBAC on `Application` resources, installed with its chart.
+Nothing else about Kargo is manual, and nothing else is a secret. Its access to
+Argo CD is Kubernetes RBAC on `Application` resources, installed with its chart.
 
 ## What a promotion actually does
 
@@ -345,7 +387,7 @@ Common causes, in the order they usually happen:
 | Symptom | Usually |
 |---|---|
 | no Freight after a merge | the build pushed a tag the Warehouse's `tagRegexes` do not allow, the `selectionStrategy` is `SemVer` and the tag is not one, or the package is private |
-| a promotion fails at `git-push` with `could not read Username for 'https://github.com'` | no credential matched, so the push went out anonymous: the Secret is missing, in the wrong namespace, unlabelled, or its `repoURL` is not this repository. Kargo lowercases and strips `.git` before comparing, so case and the suffix are not the problem |
+| a promotion fails at `git-push` with `could not read Username for 'https://github.com'` | no credential matched, so the push went out anonymous — `describe externalsecret kargo-git` in `kargo-shared-resources`, then check the vault object exists |
 | a promotion fails at `git-push` with a 403 | the credential matched but may not write — the PAT lacks *contents: write*, or `main` is protected against a direct push |
 | a Stage's health is `Unknown` and it has no Freight | nothing has been promoted to it yet. `production` requests its Freight from `staging`, so it stays that way until a staging promotion succeeds — not a fault of its own |
 | a promotion fails at `argocd-update` | the Application is missing the `kargo.akuity.io/authorized-stage` annotation, or the spoke is not registered so no Application was generated |
