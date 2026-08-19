@@ -112,8 +112,8 @@ kargo_rbac_groups   = {
   Turn it back on together with the first receiver.
 - **Entra ID is the way in.** The app registration needs no federated credential
   and no client secret — Kargo verifies the ID token rather than calling Graph —
-  but it does need the loopback redirect on a *mobile and desktop* platform for
-  `kargo login`, alongside the web redirect the UI uses.
+  but four things about it are not optional, and three of them are where a
+  first sign-in goes wrong. See *The app registration* below.
 - **The UI is installed only once somebody can sign in to it.** With neither
   `kargo_sso_client_id` nor `kargo_admin_password_hash` set, Kargo runs
   controller-only: Warehouses discover artifacts, staging is auto-promoted, and
@@ -127,6 +127,55 @@ kargo_rbac_groups   = {
 `enable_kargo` is ignored when `enable_argocd` is false — every Stage's health
 and its last promotion step is an Argo CD Application, so a Kargo with no Argo CD
 would have nothing to promote onto.
+
+## The app registration
+
+Kargo talks to Entra ID directly — no Dex, no client secret, no Graph call. It
+requests `openid profile email`, reads the ID token that comes back, and matches
+its claims against `kargo_rbac_groups`. Everything it needs, therefore, has to
+already be *in that token*, which is a property of the registration rather than
+of the request.
+
+| In the registration | Why |
+|---|---|
+| **Authentication → Web →** `https://kargo.onek8s.lol/login` | where the UI's browser is sent back to |
+| **Authentication → Mobile and desktop →** `http://localhost/auth/callback` | `kargo login --sso` listens on a loopback port; Entra allows an arbitrary port here only on this platform, and only for a public client |
+| **Token configuration → Add groups claim** → *Groups assigned to the application* (or *Security groups*), **ID** token, formatted as **Group ID** | `kargo_rbac_groups` is a list of group **object IDs**, matched against the `groups` claim. No claim, no roles — a valid sign-in that can see nothing |
+| **Token configuration → Add optional claim → ID →** `email` | `usernameClaim` is `email`, so this is the name on every Promotion Kargo records. Entra emits it only when asked, and only for a user who has a mail address; a directory of `.onmicrosoft.com` accounts with no mailbox will want `preferred_username` in `kargo.tf` instead |
+
+No client secret, no implicit grant, and no API permission beyond the delegated
+`openid`/`profile`/`email` that every sign-in carries: the authorization code
+flow with PKCE is what both clients use, and Kargo verifies the resulting token
+against the tenant's published keys.
+
+**Do not ask Entra for a `groups` scope.** Okta, Keycloak and Google publish one,
+so the upstream chart requests it by default (`api.oidc.additionalScopes`), and
+`kargo.tf` sets that list back to empty on purpose. Entra resolves an unqualified
+scope against Microsoft Graph, and Graph has no `groups`, so the *whole* request
+is refused before a consent screen is ever drawn:
+
+```
+AADSTS650053: The application 'Kargo SSO' asked for scope 'groups' that doesn't
+exist on the resource '00000003-0000-0000-c000-000000000000'.
+```
+
+The groups claim in the table above is what replaces it, and it needs no scope —
+Entra puts it in every ID token that registration issues.
+
+**Prefer *Groups assigned to the application* to *Security groups*.** Entra
+replaces the claim with a `_claim_names` / `_claim_sources` pointer to Graph once
+a user is in more than 200 groups, and Kargo does not call Graph — that user
+would sign in with no roles at all, while their colleagues are fine. Assigning
+the four RBAC groups to the enterprise application keeps the claim to those
+four, whatever else the directory grows.
+
+Two client IDs are configured (`kargo_sso_client_id` and
+`kargo_sso_cli_client_id`) because the loopback redirect may live on a second
+registration; one registration declaring both platforms is the simpler shape,
+and then both variables carry the same value. Whichever it is, **each
+registration needs its own token configuration** — the claims are not shared,
+and a CLI login against a registration missing the groups claim lands in the
+same roleless state as above.
 
 ## The one credential
 
@@ -245,6 +294,8 @@ Common causes, in the order they usually happen:
 | a promotion fails at `argocd-update` | the Application is missing the `kargo.akuity.io/authorized-stage` annotation, or the spoke is not registered so no Application was generated |
 | the Application renders "image.tag is required" | nothing has been promoted to that stage yet — the seed file in `stages/` has an empty tag on purpose |
 | a promotion succeeds but the page is unchanged | the chart source's `targetRevision` moved; give the ApplicationSet's git generator a moment, or check its `revision` |
+| Entra refuses the sign-in with `AADSTS650053` | something is still requesting the `groups` scope — `api.oidc.additionalScopes` in `kargo_extra_values`, or a chart version whose default `kargo.tf` no longer overrides |
+| sign-in works but everything is empty, or "you are not authorized" | the ID token carries no `groups` claim (not configured on *that* registration, or a group-overage `_claim_names` pointer), or `kargo_rbac_groups` holds a group's display name rather than its object ID — `kubectl -n kargo logs deploy/kargo-api` prints the claims it matched on |
 
 ## Known gaps
 

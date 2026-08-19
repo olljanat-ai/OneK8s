@@ -125,9 +125,26 @@ locals {
     issuerURL   = "https://login.microsoftonline.com/${local.kargo_sso_tenant_id}/v2.0"
     clientID    = var.kargo_sso_client_id
     cliClientID = coalesce(var.kargo_sso_cli_client_id, var.kargo_sso_client_id)
-    # Entra returns group membership as object IDs in the "groups" claim, which
-    # is the claim the bindings below are written against.
-    additionalScopes = ["groups"]
+    # Empty, and deliberately not the chart's default of ["groups"].
+    #
+    # Kargo always requests openid, profile and email; additionalScopes is
+    # appended to those, and upstream appends "groups" because Okta, Keycloak
+    # and Google all publish a scope by that name. Entra ID does not. It
+    # resolves an unqualified scope against Microsoft Graph, finds nothing
+    # called "groups" there, and refuses the whole authorization request before
+    # the user ever sees a consent screen:
+    #
+    #   AADSTS650053: The application asked for scope 'groups' that doesn't
+    #   exist on the resource '00000003-0000-0000-c000-000000000000'.
+    #
+    # Group membership on Entra is not something a client asks for per request:
+    # it is a property of the app registration ("Token configuration" -> "Add
+    # groups claim"), and a registration configured that way puts the object
+    # IDs in the ID token's "groups" claim for every sign-in. So the claim the
+    # bindings below match on arrives either way, and asking for it by name
+    # only breaks the request. See docs/kargo.md for what the registration has
+    # to declare.
+    additionalScopes = []
     usernameClaim    = "email"
     admins           = { claims = local.kargo_group_claims.admins }
     projectCreators  = { claims = local.kargo_group_claims.project_creators }
