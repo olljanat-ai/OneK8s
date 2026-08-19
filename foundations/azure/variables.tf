@@ -296,6 +296,18 @@ variable "kargo_rbac_groups" {
   default = {}
 }
 
+variable "kargo_git_credential_secret_name" {
+  description = "Key Vault secret holding the Git credential a promotion pushes with, as one JSON object: { \"username\": \"<user or app id>\", \"password\": \"<PAT or installation token>\" }. Read at run time by External Secrets, so it never reaches this stack's state and a rotation needs no apply. Reserved 'platform-' prefix, like the wildcard and the Grafana Cloud token. Null skips the whole credential plumbing, leaving a Secret created by hand in the shared-resources namespace as the alternative."
+  type        = string
+  default     = "platform-kargo-git"
+}
+
+variable "kargo_git_repo_url" {
+  description = "Delivery-plane repository the Git credential above is valid for. Must agree with repoURL in the OneK8s-argocd chart's values, which is what every Stage passes to the promotion task; Kargo lowercases both sides and strips a trailing '.git' before comparing them. Not a secret, which is why it is configuration here rather than a field of the vault object."
+  type        = string
+  default     = "https://github.com/olljanat-ai/OneK8s-argocd.git"
+}
+
 variable "kargo_extra_values" {
   description = "Extra Helm values for the Kargo chart, merged last so an environment can override anything kargo.tf sets."
   type        = any
