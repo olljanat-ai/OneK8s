@@ -109,12 +109,13 @@ locals {
   kargo_sso_enabled   = var.kargo_sso_client_id != null
   kargo_sso_tenant_id = coalesce(var.kargo_sso_tenant_id, data.azurerm_client_config.current.tenant_id)
 
-  # Entra ID, through Kargo's own OIDC support. Two client IDs on purpose: the
-  # UI redirects to the app registration's web platform, while `kargo login`
-  # opens a loopback redirect, which Entra only allows on a registration's
-  # "mobile and desktop" platform — the same registration serves both when it
-  # declares both, and var.kargo_sso_cli_client_id covers the case where it
-  # does not.
+  # Entra ID, through Kargo's own OIDC support. Two client IDs on purpose, and
+  # for a reason that is really about Entra's platform types: the UI is a
+  # static bundle that redeems its own code in the browser, so its redirect
+  # belongs to a "single-page application" platform, while `kargo login` opens
+  # a loopback redirect, which Entra allows only on a "mobile and desktop" one.
+  # A single registration declaring both serves both clients, and
+  # var.kargo_sso_cli_client_id covers the case where it does not.
   #
   # Group object IDs map to Kargo's four system roles. Those are cluster-wide
   # ("may create Projects", "may see everything"); who may promote a *stage* is

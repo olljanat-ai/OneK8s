@@ -138,7 +138,7 @@ of the request.
 
 | In the registration | Why |
 |---|---|
-| **Authentication → Web →** `https://kargo.onek8s.lol/login` | where the UI's browser is sent back to |
+| **Authentication → Single-page application →** `https://kargo.onek8s.lol/login` | where the UI's browser is sent back to. **Not** the *Web* platform — see below |
 | **Authentication → Mobile and desktop →** `http://localhost/auth/callback` | `kargo login --sso` listens on a loopback port; Entra allows an arbitrary port here only on this platform, and only for a public client |
 | **Token configuration → Add groups claim** → *Groups assigned to the application* (or *Security groups*), **ID** token, formatted as **Group ID** | `kargo_rbac_groups` is a list of group **object IDs**, matched against the `groups` claim. No claim, no roles — a valid sign-in that can see nothing |
 | **Token configuration → Add optional claim → ID →** `email` | `usernameClaim` is `email`, so this is the name on every Promotion Kargo records. Entra emits it only when asked, and only for a user who has a mail address; a directory of `.onmicrosoft.com` accounts with no mailbox will want `preferred_username` in `kargo.tf` instead |
@@ -161,6 +161,24 @@ exist on the resource '00000003-0000-0000-c000-000000000000'.
 
 The groups claim in the table above is what replaces it, and it needs no scope —
 Entra puts it in every ID token that registration issues.
+
+**The UI's redirect URI belongs on the *Single-page application* platform.**
+Kargo's UI is a static React bundle that runs the whole authorization code flow
+with PKCE in the browser — including the POST to `/token`, which therefore
+carries an `Origin` header. Entra only serves a cross-origin token redemption
+for that one client type; registered under *Web* it answers the redirect
+happily and then fails the exchange:
+
+```
+AADSTS9002326: Cross-origin token redemption is permitted only for the
+'Single-Page Application' client-type. Request origin: 'https://kargo.onek8s.lol'.
+```
+
+Entra will not hold the same URI on two platforms, so this is a move rather than
+an addition: delete it from *Web* first, then add it under *Single-page
+application*. The CLI's loopback URI stays where it is — `kargo login` redeems
+its code from the CLI process, with no browser and no origin, which is exactly
+what *Mobile and desktop* describes.
 
 **Prefer *Groups assigned to the application* to *Security groups*.** Entra
 replaces the claim with a `_claim_names` / `_claim_sources` pointer to Graph once
@@ -295,6 +313,7 @@ Common causes, in the order they usually happen:
 | the Application renders "image.tag is required" | nothing has been promoted to that stage yet — the seed file in `stages/` has an empty tag on purpose |
 | a promotion succeeds but the page is unchanged | the chart source's `targetRevision` moved; give the ApplicationSet's git generator a moment, or check its `revision` |
 | Entra refuses the sign-in with `AADSTS650053` | something is still requesting the `groups` scope — `api.oidc.additionalScopes` in `kargo_extra_values`, or a chart version whose default `kargo.tf` no longer overrides |
+| the browser returns from Entra and then shows `AADSTS9002326` | the UI's redirect URI is registered under *Web* rather than *Single-page application* |
 | sign-in works but everything is empty, or "you are not authorized" | the ID token carries no `groups` claim (not configured on *that* registration, or a group-overage `_claim_names` pointer), or `kargo_rbac_groups` holds a group's display name rather than its object ID — `kubectl -n kargo logs deploy/kargo-api` prints the claims it matched on |
 
 ## Known gaps

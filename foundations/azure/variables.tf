@@ -258,7 +258,7 @@ variable "kargo_admin_password_hash" {
 }
 
 variable "kargo_sso_client_id" {
-  description = "Application (client) ID of the Entra ID app registration users sign in to for the Kargo UI. Null leaves SSO off, in which case kargo_admin_password_hash is the only way in. Unlike Argo CD's, this registration needs no federated credential: Kargo verifies ID tokens rather than calling Graph, so it holds no client secret either."
+  description = "Application (client) ID of the Entra ID app registration users sign in to for the Kargo UI. Null leaves SSO off, in which case kargo_admin_password_hash is the only way in. Unlike Argo CD's, this registration needs no federated credential: Kargo verifies ID tokens rather than calling Graph, so it holds no client secret either — but its redirect URI has to sit on a 'single-page application' platform, because the UI redeems its code in the browser (docs/kargo.md)."
   type        = string
   default     = "b2533a51-853d-426f-aa1c-e4e2663563be"
 }
