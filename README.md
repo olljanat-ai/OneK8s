@@ -298,6 +298,9 @@ Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
 Design and trade-offs: [docs/architecture.md](docs/architecture.md).
 Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-namespace/README.md).
+How the Azure foundation is built from Microsoft's Azure Verified Modules, and
+what the prototype opts out of:
+[docs/azure-verified-modules.md](docs/azure-verified-modules.md).
 
 ## CI/CD
 

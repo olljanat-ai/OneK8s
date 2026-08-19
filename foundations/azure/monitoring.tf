@@ -30,49 +30,53 @@ locals {
 # --- Platform identity: UAMI + federated credential --------------------------
 # A second platform identity rather than a share of the ingress': the two
 # components are independently deployable, and each reads exactly one secret.
-resource "azurerm_user_assigned_identity" "observability" {
-  count = var.enable_observability ? 1 : 0
-
-  name                = "id-platform-observability-${local.name}"
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
-  tags                = local.tags
-}
-
-resource "azurerm_federated_identity_credential" "observability" {
-  count = var.enable_observability ? 1 : 0
-
-  name                      = "aks-platform-observability"
-  user_assigned_identity_id = azurerm_user_assigned_identity.observability[0].id
-  audience                  = ["api://AzureADTokenExchange"]
-  issuer                    = azurerm_kubernetes_cluster.this.oidc_issuer_url
-  subject                   = "system:serviceaccount:${local.observability_namespace}:${local.observability_service_account_name}"
-}
-
+# Built from the same Azure Verified Module, so identity, federated credential
+# and role assignment are one unit (ingress.tf says more about why).
+#
 # "Key Vault Secrets User" grants getSecret/readMetadata on the whole vault —
 # every tenant's secrets and the platform wildcard's private key — so the ABAC
 # condition narrows it to exactly the Grafana Cloud credentials.
-resource "azurerm_role_assignment" "observability_credentials_user" {
-  count = var.enable_observability ? 1 : 0
+module "observability_identity" {
+  source  = "Azure/avm-res-managedidentity-userassignedidentity/azurerm"
+  version = "0.5.2"
+  count   = var.enable_observability ? 1 : 0
 
-  scope                = azurerm_key_vault.this.id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.observability[0].principal_id
+  name                = "id-platform-observability-${local.name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  enable_telemetry    = var.enable_telemetry
+  tags                = local.tags
 
-  condition_version = "2.0"
-  condition         = <<-EOT
-    (
-      (
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
-      )
-      OR
-      (
-        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.grafana_cloud_secret_name}'
-      )
-    )
-  EOT
+  federated_identity_credentials = {
+    aks = {
+      name     = "aks-platform-observability"
+      audience = ["api://AzureADTokenExchange"]
+      issuer   = module.aks.oidc_issuer_profile_issuer_url
+      subject  = "system:serviceaccount:${local.observability_namespace}:${local.observability_service_account_name}"
+    }
+  }
+
+  role_assignments = {
+    credentials_user = {
+      role_definition_id_or_name = "Key Vault Secrets User"
+      scope                      = local.key_vault_id
+      description                = "Reads the Grafana Cloud credentials, and nothing else in the vault."
+      condition_version          = "2.0"
+      condition                  = <<-EOT
+        (
+          (
+            !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+            AND
+            !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
+          )
+          OR
+          (
+            @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.grafana_cloud_secret_name}'
+          )
+        )
+      EOT
+    }
+  }
 }
 
 # --- The collectors ----------------------------------------------------------
@@ -107,7 +111,7 @@ module "observability" {
       metadata = {
         name = local.observability_service_account_name
         annotations = {
-          "azure.workload.identity/client-id" = azurerm_user_assigned_identity.observability[0].client_id
+          "azure.workload.identity/client-id" = module.observability_identity[0].client_id
           "azure.workload.identity/tenant-id" = data.azurerm_client_config.current.tenant_id
         }
         labels = {
@@ -125,7 +129,7 @@ module "observability" {
         provider = {
           azurekv = {
             authType = "WorkloadIdentity"
-            vaultUrl = azurerm_key_vault.this.vault_uri
+            vaultUrl = local.key_vault_uri
             serviceAccountRef = {
               name = local.observability_service_account_name
             }
@@ -170,6 +174,6 @@ module "observability" {
   # above are applied, and the role assignment before the first read.
   depends_on = [
     helm_release.external_secrets,
-    azurerm_role_assignment.observability_credentials_user,
+    module.observability_identity,
   ]
 }

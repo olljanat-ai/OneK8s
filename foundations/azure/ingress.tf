@@ -26,50 +26,58 @@ locals {
 # Same shape as a tenant identity in modules/tenant-namespace/azure, pinned to
 # the ingress namespace's own ServiceAccount and to the one certificate. No
 # tenant identity can read it, and this one can read no tenant's secrets.
-resource "azurerm_user_assigned_identity" "ingress" {
-  count = var.enable_ingress ? 1 : 0
-
-  name                = "id-platform-ingress-${local.name}"
-  resource_group_name = azurerm_resource_group.this.name
-  location            = azurerm_resource_group.this.location
-  tags                = local.tags
-}
-
-resource "azurerm_federated_identity_credential" "ingress" {
-  count = var.enable_ingress ? 1 : 0
-
-  name                      = "aks-platform-ingress"
-  user_assigned_identity_id = azurerm_user_assigned_identity.ingress[0].id
-  audience                  = ["api://AzureADTokenExchange"]
-  issuer                    = azurerm_kubernetes_cluster.this.oidc_issuer_url
-  subject                   = "system:serviceaccount:${local.ingress_namespace}:${local.ingress_service_account_name}"
-}
-
+#
+# The Azure Verified Module for user-assigned identities carries all three
+# parts — the identity, the federated credential that lets a Kubernetes
+# ServiceAccount become it, and the role assignment that says what it may read
+# — so they are created, changed and destroyed as one unit instead of three
+# resources that have to agree with each other.
+#
 # "Key Vault Secrets User" grants getSecret/readMetadata on the whole vault —
 # every tenant's secrets — so the ABAC condition narrows it to exactly the
 # wildcard. A certificate is read through the secret of the same name, which
 # is why this is the secrets role and not a certificates one.
-resource "azurerm_role_assignment" "ingress_certificate_user" {
-  count = var.enable_ingress ? 1 : 0
+module "ingress_identity" {
+  source  = "Azure/avm-res-managedidentity-userassignedidentity/azurerm"
+  version = "0.5.2"
+  count   = var.enable_ingress ? 1 : 0
 
-  scope                = azurerm_key_vault.this.id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = azurerm_user_assigned_identity.ingress[0].principal_id
+  name                = "id-platform-ingress-${local.name}"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  enable_telemetry    = var.enable_telemetry
+  tags                = local.tags
 
-  condition_version = "2.0"
-  condition         = <<-EOT
-    (
-      (
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
-        AND
-        !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
-      )
-      OR
-      (
-        @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.ingress_certificate_name}'
-      )
-    )
-  EOT
+  federated_identity_credentials = {
+    aks = {
+      name     = "aks-platform-ingress"
+      audience = ["api://AzureADTokenExchange"]
+      issuer   = module.aks.oidc_issuer_profile_issuer_url
+      subject  = "system:serviceaccount:${local.ingress_namespace}:${local.ingress_service_account_name}"
+    }
+  }
+
+  role_assignments = {
+    certificate_user = {
+      role_definition_id_or_name = "Key Vault Secrets User"
+      scope                      = local.key_vault_id
+      description                = "Reads the platform wildcard certificate, and nothing else in the vault."
+      condition_version          = "2.0"
+      condition                  = <<-EOT
+        (
+          (
+            !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/getSecret/action'})
+            AND
+            !(ActionMatches{'Microsoft.KeyVault/vaults/secrets/readMetadata/action'})
+          )
+          OR
+          (
+            @Resource[Microsoft.KeyVault/vaults/secrets:name] StringEquals '${var.ingress_certificate_name}'
+          )
+        )
+      EOT
+    }
+  }
 }
 
 # --- The controller ----------------------------------------------------------
@@ -101,7 +109,7 @@ module "ingress" {
       metadata = {
         name = local.ingress_service_account_name
         annotations = {
-          "azure.workload.identity/client-id" = azurerm_user_assigned_identity.ingress[0].client_id
+          "azure.workload.identity/client-id" = module.ingress_identity[0].client_id
           "azure.workload.identity/tenant-id" = data.azurerm_client_config.current.tenant_id
         }
         labels = {
@@ -119,7 +127,7 @@ module "ingress" {
         provider = {
           azurekv = {
             authType = "WorkloadIdentity"
-            vaultUrl = azurerm_key_vault.this.vault_uri
+            vaultUrl = local.key_vault_uri
             serviceAccountRef = {
               name = local.ingress_service_account_name
             }
@@ -183,7 +191,7 @@ module "ingress" {
   # Edge route into it, so it has to exist first.
   depends_on = [
     helm_release.external_secrets,
-    azurerm_role_assignment.ingress_certificate_user,
+    module.ingress_identity,
     kubernetes_namespace_v1.portainer,
   ]
 }
