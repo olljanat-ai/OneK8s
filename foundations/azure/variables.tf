@@ -260,13 +260,13 @@ variable "kargo_admin_password_hash" {
 variable "kargo_sso_client_id" {
   description = "Application (client) ID of the Entra ID app registration users sign in to for the Kargo UI. Null leaves SSO off, in which case kargo_admin_password_hash is the only way in. Unlike Argo CD's, this registration needs no federated credential: Kargo verifies ID tokens rather than calling Graph, so it holds no client secret either."
   type        = string
-  default     = null
+  default     = "b2533a51-853d-426f-aa1c-e4e2663563be"
 }
 
 variable "kargo_sso_cli_client_id" {
   description = "Client ID `kargo login` uses. Defaults to kargo_sso_client_id, which is right when that registration also declares a 'mobile and desktop' platform with the loopback redirect the CLI needs; give a second registration here when it does not."
   type        = string
-  default     = null
+  default     = "f17b5094-6151-4f76-8c49-7128017cea65"
 }
 
 variable "kargo_sso_tenant_id" {
