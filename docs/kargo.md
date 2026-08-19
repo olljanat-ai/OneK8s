@@ -223,6 +223,38 @@ outputs); put it in the Project's own namespace instead to scope it to one
 project. A fine-grained PAT with *contents: read and write* on that one
 repository is enough; a GitHub App installation is the better long-lived answer.
 
+**Until it exists, promotions get as far as the push and stop there.** The
+delivery-plane repository is public, so `git-clone` succeeds anonymously and the
+first four steps of a promotion look healthy; `git-push` is where the absence
+shows up, as Git asking an unattended container for a username:
+
+```
+error pushing branch: ... fatal: could not read Username for
+'https://github.com': No such device or address
+```
+
+`repoURL` is matched against what the `Stage` passes to the promotion task —
+`repoURL` in the delivery-plane chart's values,
+`https://github.com/olljanat-ai/OneK8s-argocd.git`. Kargo lowercases the URL and
+strips any `.git` on both sides before comparing, so neither the suffix nor the
+capitals in `OneK8s` matter; the host and path do. Check the Secret is seen at
+all with:
+
+```bash
+kubectl -n kargo-shared-resources get secret \
+  -l kargo.akuity.io/cred-type=git \
+  -o custom-columns=NAME:.metadata.name,REPO:.data.repoURL
+
+kubectl -n kargo-shared-resources get secret onek8s-argocd-repo \
+  -o jsonpath='{.data.repoURL}' | base64 -d
+```
+
+A failed `Promotion` is terminal — Kargo does not retry it once the step has met
+its error threshold, and it does not re-promote the same Freight on its own. So
+after the Secret is in place, ask for the promotion again (`kargo promote`, the
+UI, or a fresh `Promotion` object); the failed one stays as the record that it
+was attempted.
+
 Nothing else is manual, and nothing else is a secret. Kargo's access to Argo CD
 is Kubernetes RBAC on `Application` resources, installed with its chart.
 
@@ -313,7 +345,9 @@ Common causes, in the order they usually happen:
 | Symptom | Usually |
 |---|---|
 | no Freight after a merge | the build pushed a tag the Warehouse's `tagRegexes` do not allow, the `selectionStrategy` is `SemVer` and the tag is not one, or the package is private |
-| a promotion fails at `git-push` | the Git credential is missing, unlabelled, or has no write access |
+| a promotion fails at `git-push` with `could not read Username for 'https://github.com'` | no credential matched, so the push went out anonymous: the Secret is missing, in the wrong namespace, unlabelled, or its `repoURL` is not this repository. Kargo lowercases and strips `.git` before comparing, so case and the suffix are not the problem |
+| a promotion fails at `git-push` with a 403 | the credential matched but may not write — the PAT lacks *contents: write*, or `main` is protected against a direct push |
+| a Stage's health is `Unknown` and it has no Freight | nothing has been promoted to it yet. `production` requests its Freight from `staging`, so it stays that way until a staging promotion succeeds — not a fault of its own |
 | a promotion fails at `argocd-update` | the Application is missing the `kargo.akuity.io/authorized-stage` annotation, or the spoke is not registered so no Application was generated |
 | the Application renders "image.tag is required" | nothing has been promoted to that stage yet — the seed file in `stages/` has an empty tag on purpose |
 | a promotion succeeds but the page is unchanged | the chart source's `targetRevision` moved; give the ApplicationSet's git generator a moment, or check its `revision` |
