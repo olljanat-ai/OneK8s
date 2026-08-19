@@ -86,7 +86,7 @@ enable_kargo        = true
 kargo_hostname      = "kargo.onek8s.lol"     # platform wildcard, A record by hand
 kargo_sso_client_id = "<app registration>"   # Entra ID, as Argo CD's UI uses
 kargo_rbac_groups   = {
-  admins           = ["<group object id>"]
+  admins           = ["<group object id>"]   # the same group Argo CD calls role:admin
   project_creators = ["<group object id>"]
   viewers          = ["<group object id>"]
 }
@@ -122,7 +122,12 @@ kargo_rbac_groups   = {
 - **`kargo_rbac_groups` is cluster-wide capability** ("may create Projects",
   "may see everything"). Who may promote *the hello application to production*
   is not here: it is a `Role` in the Project's namespace, and it lives beside the
-  Stage it guards.
+  Stage it guards. **Something has to be mapped**, and in `prototype` that is one
+  entry: the group Argo CD binds to `role:admin` is Kargo's `admins`, so one
+  group administers the whole delivery plane instead of two lists drifting apart.
+  Kargo grants an unmapped identity nothing whatsoever — not read, not the list
+  of Projects — so an empty `kargo_rbac_groups` is a working sign-in that can
+  see nothing.
 
 `enable_kargo` is ignored when `enable_argocd` is false — every Stage's health
 and its last promotion step is an Argo CD Application, so a Kargo with no Argo CD
@@ -314,7 +319,7 @@ Common causes, in the order they usually happen:
 | a promotion succeeds but the page is unchanged | the chart source's `targetRevision` moved; give the ApplicationSet's git generator a moment, or check its `revision` |
 | Entra refuses the sign-in with `AADSTS650053` | something is still requesting the `groups` scope — `api.oidc.additionalScopes` in `kargo_extra_values`, or a chart version whose default `kargo.tf` no longer overrides |
 | the browser returns from Entra and then shows `AADSTS9002326` | the UI's redirect URI is registered under *Web* rather than *Single-page application* |
-| sign-in works but everything is empty, or "you are not authorized" | the ID token carries no `groups` claim (not configured on *that* registration, or a group-overage `_claim_names` pointer), or `kargo_rbac_groups` holds a group's display name rather than its object ID — `kubectl -n kargo logs deploy/kargo-api` prints the claims it matched on |
+| sign-in works, then `projects.kargo.akuity.io is forbidden: list is not permitted` | the identity matched no entry in `kargo_rbac_groups`, and Kargo gives an unmapped user nothing — not even the read that lists Projects. Either the group is not mapped, or the ID token carries no `groups` claim (not configured on *that* registration, or a group-overage `_claim_names` pointer), or the mapping holds a display name where an object ID belongs |
 
 ## Known gaps
 
