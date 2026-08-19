@@ -525,7 +525,11 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
   holds the DNS-write permission, and the result lands in the secret backend
   every cloud's tenants already read from instead of in one cluster's etcd.
   The cost is that the certificate does not renew while the workflow is
-  broken, and nothing in the cluster notices.
+  broken, and nothing in the cluster notices. The one certificate this buys no
+  answer for is an in-cluster one that no public CA could issue anyway — the
+  certificate Kargo's admission webhooks present to the Kubernetes API server —
+  and `foundations/azure/kargo.tf` mints that one self-signed rather than
+  installing cert-manager for it (`docs/kargo.md`).
 - Authentication uses long-lived cloud credentials stored as GitHub secrets
   (azurerm `ARM_CLIENT_SECRET`, AWS access keys via
   `aws-actions/configure-aws-credentials`, a service account key via

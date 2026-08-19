@@ -33,5 +33,12 @@ terraform {
       source  = "hashicorp/random"
       version = "= 3.9.0"
     }
+    # Kargo's admission webhooks are served over TLS the API server has to
+    # trust, and this platform runs no cert-manager (docs/architecture.md).
+    # The certificate is minted here instead (kargo.tf).
+    tls = {
+      source  = "hashicorp/tls"
+      version = "= 4.1.0"
+    }
   }
 }

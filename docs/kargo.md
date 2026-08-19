@@ -95,6 +95,21 @@ kargo_rbac_groups   = {
 - **TLS terminates at Traefik**, as everywhere else: the API serves plain HTTP
   and is told that TLS is terminated upstream, so the URLs it renders and the
   address `kargo login` is pointed at are `https://`.
+- **Except for the admission webhooks, which need a certificate of their own.**
+  Kargo's `ValidatingWebhookConfiguration` is what enforces who may create a
+  `Promotion`, and the Kubernetes API server will only call it over TLS — at
+  `kargo-webhooks-server.kargo.svc`, a name the platform wildcard does not
+  cover and a request Traefik is nowhere near. The chart's answer is a
+  cert-manager `Certificate`, which is what an apply on a cluster without those
+  CRDs fails on; `kargo.tf` mints the same self-signed certificate itself
+  instead, ten years long, and pins its own PEM as the `caBundle` on every
+  webhook entry. No cert-manager, and no wildcard where a wildcard would not
+  work.
+- **The external webhooks server is off.** That is the *inbound* half — a public
+  endpoint for GitHub or Docker Hub to POST to so a Warehouse refreshes on a
+  push rather than on its interval. No `WebhookReceiver` is declared anywhere in
+  the delivery plane, so it would be a deployment and a route with no callers.
+  Turn it back on together with the first receiver.
 - **Entra ID is the way in.** The app registration needs no federated credential
   and no client secret — Kargo verifies the ID token rather than calling Graph —
   but it does need the loopback redirect on a *mobile and desktop* platform for
@@ -252,6 +267,11 @@ Common causes, in the order they usually happen:
   application with real versions should use `SemVer` with a `semverConstraint`
   per stage — the build workflow already publishes a semver tag on a `v*` git
   tag, so switching is a values change.
+- **The webhooks certificate renews only when somebody runs `terraform apply`.**
+  It is valid for ten years and an apply inside the last month of that replaces
+  it, so in practice the branch that expires it is a cluster nobody has applied
+  to in a decade. Nothing in the cluster would notice if that happened — the
+  same trade-off the platform wildcard makes (`docs/architecture.md`).
 - **The chart version is pinned by hand** (`kargo_chart_version`). Deliberate —
   a promotion engine that upgrades itself unannounced is one nobody can reason
   about — but it means somebody has to bump it.
