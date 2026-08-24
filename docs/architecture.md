@@ -339,6 +339,12 @@ all clouds" shape the tenants layer has, with the cloud as a key of
 `var.spokes` instead of a per-tenant attribute. All three — EKS, GKE and OKE
 — are registered.
 
+Kargo runs on the hub too, and not by coincidence: its promotion step reaches
+an Argo CD `Application` through its own Kubernetes client, so the promotion
+engine and the Application objects share a cluster while the workloads they
+deploy do not. That, and what it costs, is
+[ADR-0002](adr/0002-one-argo-cd-on-the-hub.md).
+
 Registration is a `cluster`-labelled Secret in the hub's `argocd` namespace
 whose credential is a `argocd-manager` ServiceAccount token minted on the
 spoke itself — not that cloud's admin kubeconfig, which would have to live on
