@@ -21,12 +21,15 @@ variable "state_home" {
 
 variable "spokes" {
   description = <<-EOT
-    Clusters to register with the Argo CD hub, keyed by cloud. The hub itself
+    Clusters to attach to the Argo CD hub, keyed by cloud. The hub itself
     (AKS, foundations/azure) is never listed: Argo CD always has the
-    in-cluster entry for the cluster it runs on.
+    in-cluster entry for the cluster it runs on, and its own
+    application-controller reconciles it.
 
-    An empty object registers nothing, which is what an environment whose
-    other foundations are not deployed yet wants:
+    Attaching a spoke installs an argocd-agent agent and a reconciler-only Argo
+    CD on it, and writes one Secret on the hub. An empty object attaches
+    nothing, which is what an environment whose other foundations are not
+    deployed yet wants:
 
       spokes = {
         aws = {}                                    # everything, everywhere
@@ -43,13 +46,31 @@ variable "spokes" {
     cluster_resources = optional(bool, true)
     project           = optional(string)
     labels            = optional(map(string), {})
+    # Per-spoke Helm overrides, for the two releases this stack installs on the
+    # cluster. This is where a spoke that needs node selectors, larger
+    # repo-server requests or a mirrored image registry says so, without every
+    # other spoke inheriting it.
+    agent_values  = optional(any, {})
+    argocd_values = optional(any, {})
   }))
   default = {}
 
   validation {
     condition     = alltrue([for c in keys(var.spokes) : contains(["aws", "gcp", "oci"], c)])
-    error_message = "Spokes are keyed by cloud, and the supported spokes are: aws, gcp, oci. (azure is the hub and registers itself.)"
+    error_message = "Spokes are keyed by cloud, and the supported spokes are: aws, gcp, oci. (azure is the hub and needs no agent.)"
   }
+}
+
+variable "agent_chart_version" {
+  description = "Version of the argocd-agent agent chart installed on every spoke. Keep it in step with the hub's argocd_agent_chart_version: principal and agent speak a versioned protocol, and this is the one pair of versions in the platform that has to move together."
+  type        = string
+  default     = "0.2.6"
+}
+
+variable "spoke_argocd_chart_version" {
+  description = "Version of the community Argo CD chart installed beside the agent on every spoke — application-controller, repo-server and redis, with no API server. It is unrelated to the hub's Argo CD, which is the Microsoft AKS extension and is versioned by its release train."
+  type        = string
+  default     = "10.4.0"
 }
 
 variable "platform_apps" {

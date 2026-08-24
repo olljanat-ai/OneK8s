@@ -57,9 +57,10 @@ possible (`cluster_role = "view"`) and turns parts of the Portainer UI into
 errors rather than into a read-only view, so it is a deliberate choice rather
 than a default.
 
-This is a wider grant than the `argocd-manager` ServiceAccount the Argo CD
-spoke registration creates, and the reason is the same difference in purpose:
-Argo CD applies a known set of manifests, Portainer is an interactive console.
+This is a wider grant than the ClusterRole `modules/argocd-spoke` binds to the
+spoke's Argo CD `application-controller`, and the reason is the same difference
+in purpose: Argo CD applies a known set of manifests, Portainer is an
+interactive console.
 
 ## Inputs worth knowing
 

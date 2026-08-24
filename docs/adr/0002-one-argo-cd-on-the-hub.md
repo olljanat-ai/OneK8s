@@ -2,6 +2,8 @@
 
 - Status: Accepted
 - Date: 2026-08-24
+- Amended by [ADR-0003](0003-spokes-connect-with-argocd-agent.md), which keeps
+  this decision and inverts how a spoke is reached
 
 ## Context
 
@@ -25,10 +27,16 @@ CD and let one Kargo drive them all.
 
 ## Decision
 
-**Argo CD runs on the AKS hub and nowhere else.** Every other cluster is
-registered with it as a spoke — a `ServiceAccount` on the spoke, a cluster
-`Secret` on the hub (`modules/argocd-spoke`) — and stays a plain cluster with
-no Argo CD components of its own.
+**There is one Argo CD anybody signs in to, and it runs on the AKS hub.** Every
+other cluster is attached to it as a spoke by `modules/argocd-spoke`.
+
+> Amended by [ADR-0003](0003-spokes-connect-with-argocd-agent.md). A spoke was
+> originally a plain cluster with no Argo CD components at all, reached by the
+> hub with a `ServiceAccount` bearer token; it now runs an argocd-agent agent
+> and a reconciler-only Argo CD, and opens the connection itself. Everything
+> this ADR decides is unaffected: Applications are still created on the hub, in
+> `argocd`, next to Kargo. Read the paragraphs below about "the spoke has no
+> Argo CD" as history.
 
 **Kargo runs on the same cluster as Argo CD**, which is what makes the release
 path work at all:
@@ -56,7 +64,9 @@ its Application object lives in `argocd` on AKS.
   consuming as a managed extension.
 - **One place to see what is deployed where.** The value of a fleet delivery
   plane is the fleet view; four Argo CDs is four views to reconcile by hand.
-- **The credential is minimal and symmetric.** A spoke is reached with a
+- **The credential is minimal and symmetric.** *(Superseded by ADR-0003: a
+  spoke now authenticates itself to the hub with a client certificate, rather
+  than the hub authenticating to the spoke.)* A spoke is reached with a
   ServiceAccount bearer token that carries exactly its `ClusterRole` and
   nothing else — the same mechanism on EKS, GKE and OKE — rather than a cloud
   admin credential sitting on the hub. See

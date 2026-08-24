@@ -87,9 +87,13 @@ module "ingress" {
   # health probing of the Service's own ports is the default.
   service_annotations = {}
 
-  # Portainer's Edge tunnel, when it is enabled: an extra TCP entrypoint on
-  # this Service's load balancer (portainer.tf builds both halves).
-  extra_ports = local.portainer_ingress_ports
+  # Two platform components need a raw TCP entrypoint on this Service's load
+  # balancer rather than an HTTP route, and each builds both halves next to
+  # itself: Portainer's Edge tunnel (portainer.tf) and the argocd-agent
+  # principal (argocd-agent.tf). The second is the one that must not have its
+  # TLS terminated here — its route is a passthrough, because the principal
+  # authenticates each agent by the client certificate on the connection.
+  extra_ports = merge(local.portainer_ingress_ports, local.argocd_agent_ingress_ports)
 
   # The certificate plumbing is applied with the release rather than as
   # kubernetes_manifest resources, which would need the External Secrets CRDs
@@ -175,7 +179,7 @@ module "ingress" {
         }]
       }
     },
-  ], local.portainer_ingress_objects)
+  ], local.portainer_ingress_objects, local.argocd_agent_ingress_objects)
 
   # The External Secrets CRDs and webhook have to be up before the objects
   # above are applied, and the role assignment before the first read. The
@@ -185,5 +189,10 @@ module "ingress" {
     helm_release.external_secrets,
     azurerm_role_assignment.ingress_certificate_user,
     kubernetes_namespace_v1.portainer,
+    # The Argo CD namespace is the extension's, and the agent route is applied
+    # into it for the same reason Portainer's is applied into its own: a
+    # same-namespace Service reference, so Traefik never needs
+    # allowCrossNamespace.
+    azurerm_kubernetes_cluster_extension.argocd,
   ]
 }

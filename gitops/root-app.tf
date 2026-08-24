@@ -8,6 +8,13 @@
 # one along its stages, is a commit in a repository this stack never reads, and
 # nothing about the delivery plane is configured by hand in the UI.
 #
+# Note where the Applications it generates for a spoke actually run. They are
+# created here, on the hub, and reconciled by that spoke's own Argo CD: the
+# argocd-agent principal routes each one to the agent named by its
+# spec.destination.name, and the agent makes a copy locally. Terraform's job is
+# unchanged, and so is the chart's — the only new thing passed down is the
+# label that tells the principal which Applications are an agent's.
+#
 #   root-app.tf ──▶ Application "platform-gitops"
 #                     └── OneK8s-argocd, path argocd
 #                           ├── AppProject onek8s-platform
@@ -72,6 +79,23 @@ locals {
     url = try(local.hub.kargo_url, null) == null ? "" : local.hub.kargo_url
   }
 
+  # How a spoke is reached, handed down so the delivery plane can label the
+  # objects that belong to one.
+  #
+  # The hub runs a full Argo CD (it deploys to itself as well as being the
+  # principal), so principal and agents filter on this label and everything
+  # without it stays with the hub's own application-controller. An
+  # ApplicationSet whose stage targets a spoke has to put it on the
+  # Applications it generates, and the AppProject has to carry it too or it is
+  # never distributed to the agent that has to validate against it.
+  #
+  # Empty when the hub has no principal, and then the chart labels nothing:
+  # there are no agents to route to.
+  hub_agent = {
+    enabled = local.hub_wired && try(local.hub.argocd_agent_enabled, false)
+    label   = try(local.hub.argocd_agent_label, "")
+  }
+
   hub_sql = {
     server   = try(local.hub.sql_server_fqdn, null) == null ? "" : local.hub.sql_server_fqdn
     database = try(local.hub.sql_database_name, null) == null ? "" : local.hub.sql_database_name
@@ -89,6 +113,7 @@ locals {
     tenant             = var.platform_apps.tenant
     sql                = local.hub_sql
     kargo              = local.hub_kargo
+    agent              = local.hub_agent
   }
 }
 

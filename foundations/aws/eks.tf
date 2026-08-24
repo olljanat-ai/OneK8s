@@ -24,8 +24,14 @@ resource "aws_eks_cluster" "this" {
   role_arn = aws_iam_role.cluster.arn
 
   vpc_config {
-    subnet_ids              = concat(aws_subnet.private[*].id, aws_subnet.public[*].id)
-    endpoint_public_access  = true
+    subnet_ids = concat(aws_subnet.private[*].id, aws_subnet.public[*].id)
+
+    # Private access is always on: it is how anything inside the VPC — the
+    # argocd-agent agent among them — reaches the API server. The public
+    # endpoint is what var.cluster_endpoint_public_access decides, and with the
+    # agent doing the applying from inside the cluster, GitOps no longer
+    # depends on it. Terraform still does; see the variable.
+    endpoint_public_access  = var.cluster_endpoint_public_access
     endpoint_private_access = true
   }
 

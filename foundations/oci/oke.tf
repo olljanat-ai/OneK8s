@@ -19,8 +19,12 @@ resource "oci_containerengine_cluster" "this" {
   }
 
   endpoint_config {
-    subnet_id            = oci_core_subnet.api.id
-    is_public_ip_enabled = true
+    subnet_id = oci_core_subnet.api.id
+    # The private endpoint in the VCN exists either way; this decides whether
+    # the API server also answers on a public IP. The argocd-agent agent on
+    # this cluster uses the in-cluster address and never needs the public one
+    # — Terraform does, which is why it defaults to true. See the variable.
+    is_public_ip_enabled = var.cluster_endpoint_public_access
   }
 
   cluster_pod_network_options {

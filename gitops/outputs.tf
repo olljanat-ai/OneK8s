@@ -7,12 +7,25 @@ locals {
 }
 
 output "hub_url" {
-  description = "Public URL of the Argo CD hub the spokes are registered with."
+  description = "Public URL of the Argo CD hub the spokes are attached to."
   value       = try(local.hub.argocd_url, null)
 }
 
+output "principal" {
+  description = "The argocd-agent principal every spoke's agent dials, and the one endpoint in this topology that has to be reachable from outside a cluster's own network. Null when the hub was applied without it."
+  value = local.hub_wired && try(local.hub.argocd_agent_enabled, false) ? {
+    address              = local.principal.address
+    port                 = local.principal.port
+    namespace            = local.principal.namespace
+    resource_proxy       = local.principal.resource_proxy_address
+    label_selector       = local.principal.label_selector
+    agent_chart_version  = var.agent_chart_version
+    spoke_argocd_version = var.spoke_argocd_chart_version
+  } : null
+}
+
 output "clouds" {
-  description = "Clouds registered as spokes in this environment."
+  description = "Clouds attached as spokes in this environment."
   value       = sort([for c in local.spoke_clouds : c if local.active[c]])
 }
 
@@ -38,17 +51,18 @@ output "application_host_pattern" {
 }
 
 output "spokes" {
-  description = "Per-spoke registration results, keyed by cloud (identical shape for every cloud). No credential is exported — the bearer token stays in the cluster Secret."
+  description = "Per-spoke results, keyed by cloud (identical shape for every cloud). No credential is exported — each agent's client certificate stays in the Secret on its own cluster. Note that \"server\" is the hub's resource proxy rather than the spoke's API endpoint: the hub no longer knows how to reach the spoke, and does not need to."
   value = merge([
     for cloud, instances in local.spoke_modules : {
       for key, s in instances : key => {
-        cloud           = cloud
-        name            = s.name
-        server          = s.server
-        secret_name     = s.secret_name
-        service_account = s.service_account
-        scope           = s.scope
-        labels          = s.labels
+        cloud       = cloud
+        name        = s.name
+        server      = s.server
+        secret_name = s.secret_name
+        agent       = s.agent
+        argocd      = s.argocd
+        scope       = s.scope
+        labels      = s.labels
       }
     }
   ]...)
