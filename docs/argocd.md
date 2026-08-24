@@ -40,7 +40,9 @@ The cost: the extension is in **public preview**, so it is pinned to the
 cannot take preview surface simply turns it off. Direct edits to the Argo CD
 ConfigMaps are not supported — change `var.argocd_extra_configuration` (or
 the defaults in `argocd.tf`) and re-apply, otherwise the extension reconciles
-your edit away.
+your edit away. Adding a setting that way works; *removing* one is the case
+that surprises people, because Azure merges rather than replaces — see
+*Removing a configuration setting*.
 
 ## How TLS gets onto the ingress
 
@@ -146,6 +148,12 @@ Kubernetes API under RBAC installed with its chart. So the platform ships with
 no Argo CD machine account at all — no token to mint, hand to a CI system,
 store in a repository secret, or rotate when somebody leaves.
 
+An environment built before that change still carries the `accounts.ci` key on
+its extension, because Azure keeps a configuration setting that is no longer
+sent rather than deleting it. `prototype` is one of those, which is why
+`argocd_retained_configuration_settings` names it — see *Removing a
+configuration setting*.
+
 Add one back only for a caller that genuinely has to talk to the Argo CD *API*:
 
 ```hcl
@@ -165,7 +173,56 @@ argocd account generate-token --account <name> --grpc-web --expires-in 90d
 
 Revoking is `argocd account delete-token --account <name> <id>`, with the IDs
 from `argocd account get --account <name>`; removing the account from
-`argocd_api_accounts` and applying invalidates every token it has.
+`argocd_api_accounts` and applying invalidates every token it has — **once the
+setting is really gone from the extension**, which is the next section.
+
+## Removing a configuration setting
+
+An AKS cluster extension does not replace its `configurationSettings` on an
+update, it **merges** them. A key that is absent from the map Terraform sends
+is left exactly as it was; nothing but reinstalling the extension clears one.
+
+Terraform cannot see that, so removing a setting from `argocd.tf` (or emptying
+`argocd_api_accounts`) produces a diff that never converges:
+
+```
+  # azurerm_kubernetes_cluster_extension.argocd[0] will be updated in-place
+  ~ configuration_settings = {
+      - "configs.cm.accounts\\.ci" = "apiKey" -> null
+    }
+```
+
+The apply succeeds, Azure keeps the key, the next refresh reads it back, and
+the same plan appears again. It is not a cosmetic loop: every apply sends an
+extension update, and an extension update is a **Helm upgrade of Argo CD on the
+hub** — the components restart, in-flight syncs are interrupted, and a Kargo
+promotion that lands in that window fails at `argocd-update`.
+
+So a setting has two states, and they are different pieces of work:
+
+| What you actually want | What to do |
+|---|---|
+| the setting may stay, we only want a clean plan | declare it in `argocd_retained_configuration_settings`, which is merged first and therefore cannot override anything the stack genuinely sets |
+| the setting must actually be gone from the cluster | reinstall the extension, then drop it from both maps |
+
+`prototype` is in the first state for one key: `configs.cm.accounts\.ci`, the
+token-only account described above. It is declared in
+`foundations/azure/envs/prototype.tfvars` with the value it already has, so
+plans are clean; the account carries no `g, ci, …` binding any more, so it
+falls through to `argocd_rbac_default_role` and any token minted for it before
+can read and nothing else.
+
+Reinstalling the extension is what the second state costs, and it is not a
+small hammer — the release namespace goes with it, **including every spoke's
+cluster Secret** (see *When a spoke disappears* below), so re-run the `gitops`
+stack afterwards:
+
+```bash
+cd foundations/azure
+terraform apply -replace='azurerm_kubernetes_cluster_extension.argocd[0]' \
+  -var-file=envs/prototype.tfvars
+cd ../../gitops && terraform apply -var-file=envs/prototype.tfvars
+```
 
 ## Operating it
 
@@ -224,7 +281,15 @@ first apply to sit in `Pending` for a few minutes while a node is added.
 - **Preview auto-upgrade.** With `argocd_extension_version` unset Azure
   installs the latest build of the release train and upgrades it in place.
   The 0.0.x → 1.0.0-preview jump already changed every configuration key
-  once; pin a version per environment if that risk is unacceptable.
+  once; pin a version per environment if that risk is unacceptable. An upgrade
+  that rebuilds the release rather than patching it also takes the release
+  namespace, and every spoke's cluster Secret sits in it — *When a spoke
+  disappears* is the recovery.
+- **A setting cannot be un-set in place.** Azure merges an extension's
+  configuration settings, so dropping one from this stack leaves it on the
+  cluster and leaves Terraform proposing a removal it cannot perform. The
+  workaround (`argocd_retained_configuration_settings`) makes plans honest
+  rather than making the setting go away; only a reinstall does that.
 - Argo CD has cluster-wide privileges on the cluster it runs on, which is a
   strictly larger blast radius than the per-tenant identities in
   [ADR-0001](adr/0001-per-tenant-identities-and-namespaced-secretstores.md).
@@ -395,6 +460,46 @@ selector like the above hits the spokes only. Deploying to the hub means naming
 it in a one-element `list` generator instead, which is what the `hello`
 application's staging stage does in
 [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd/blob/main/argocd/templates/applicationsets.yaml).
+
+### When a spoke disappears
+
+Registration is a Secret in the hub's `argocd` namespace, and that namespace
+belongs to the Argo CD extension. Anything that reinstalls the extension —
+`terraform apply -replace`, a change to `argocd_release_train` or
+`argocd_extension_version` (both `ForceNew`), a preview auto-upgrade that
+rebuilds the release — takes the namespace with it, and every spoke's cluster
+Secret with that. The `gitops` state still records the Secret, nothing on the
+hub logs anything, and the spokes are simply gone from Argo CD.
+
+What that looks like is *nothing at all*: an `ApplicationSet` whose cluster
+generator matches no cluster generates no `Application`, and generating zero of
+something is not an error. The `hello` application's production stage runs on
+the AWS spoke, so a lost registration shows up as an EKS cluster with no Argo CD
+workloads on it and a Kargo promotion failing at `argocd-update` with `unable to
+find Argo CD Application` ([kargo.md](kargo.md), *When a promotion cannot
+sync*).
+
+Check the hub, not the spoke:
+
+```bash
+kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=cluster \
+  -L onek8s.io/cloud,onek8s.io/environment
+```
+
+One Secret per registered spoke, labelled with the cloud and the environment the
+`ApplicationSet` selects on. If the row is missing, re-run the `gitops` stack —
+it recreates the ServiceAccount token on the spoke and the Secret on the hub:
+
+```bash
+cd gitops
+terraform apply -var-file=envs/prototype.tfvars
+```
+
+Argo CD picks the cluster up within seconds, the ApplicationSet generates the
+Application again, and it syncs to whatever the stage file in
+[OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) already names — a
+promotion that failed at `argocd-update` does not need to be repeated for the
+deployment to catch up, only for the `Promotion` record to be clean.
 
 ### What Argo CD deploys, and where that is configured
 

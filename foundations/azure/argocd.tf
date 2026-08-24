@@ -92,7 +92,29 @@ locals {
   # key* — an argocd-cm/argocd-cmd-params-cm entry — are escaped with a
   # backslash). var.argocd_extra_configuration is merged last so an
   # environment can override any of these without editing this file.
+  #
+  # var.argocd_retained_configuration_settings is merged FIRST, and exists
+  # because of one thing Azure does that Terraform's plan does not show:
+  # an extension update MERGES configurationSettings. A key that is absent
+  # from the map Terraform sends is left exactly as it was on the extension,
+  # not deleted — only reinstalling the extension clears one.
+  #
+  # So dropping a setting from this file does not remove it from the cluster.
+  # It makes every plan propose the same removal, every apply send the same
+  # update, and the next refresh read the key straight back out of Azure:
+  #
+  #   ~ configuration_settings = {
+  #       - "configs.cm.accounts\\.ci" = "apiKey" -> null
+  #     }
+  #
+  # That diff never converges, and it is not free: an extension update is a
+  # Helm upgrade of Argo CD on the hub, so a plan nobody reads carefully ends
+  # up restarting the delivery plane on every apply. Declaring the setting in
+  # var.argocd_retained_configuration_settings is how an environment writes
+  # down what its extension actually carries; being merged first, it can never
+  # override a setting this file or the environment genuinely declares.
   argocd_configuration = merge(
+    var.argocd_retained_configuration_settings,
     {
       # Redis HA is the extension's default and needs four nodes; the
       # prototype runs one.

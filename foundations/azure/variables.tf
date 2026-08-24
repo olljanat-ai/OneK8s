@@ -231,6 +231,26 @@ variable "argocd_extra_configuration" {
   default     = {}
 }
 
+variable "argocd_retained_configuration_settings" {
+  description = <<-EOT
+    Configuration settings that are already on this environment's Argo CD
+    extension and that the stack no longer generates, declared so Terraform
+    stops proposing a removal Azure will never perform.
+
+    An extension update MERGES configurationSettings: a key left out of the
+    map is kept as it was rather than deleted, and only reinstalling the
+    extension clears one. Undeclared, such a key comes back on every refresh
+    and every plan proposes the same "-> null" again — a diff that cannot
+    converge, and one whose apply is a Helm upgrade of Argo CD on the hub.
+
+    Merged FIRST, so it can never override a setting argocd.tf or
+    argocd_extra_configuration declares. See docs/argocd.md, "Removing a
+    configuration setting".
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 # --- Kargo --------------------------------------------------------------------
 variable "enable_kargo" {
   description = "Install Kargo on the hub: the promotion engine that moves an application's Freight along its stages and commits the result to the delivery-plane repository. Skipped automatically when enable_argocd is false — every Stage's health and last promotion step is an Argo CD Application."
