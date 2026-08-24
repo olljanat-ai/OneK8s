@@ -22,7 +22,7 @@ on the Azure cluster.
 │  └─────────────────────────────┘      │       gitops/ (cloud per spoke)               │
 │                                       │       ┌─────────────────────────────┐         │
 │                                       └──────▶│ Argo CD hub on AKS +        │         │
-│                                               │ EKS/GKE/OKE as spokes       │         │
+│                                               │ agents on EKS/GKE/OKE       │         │
 │                                               └─────────────────────────────┘         │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -33,7 +33,7 @@ on the Azure cluster.
 |---|---|---|---|
 | Foundations | `foundations/{azure,aws,gcp,oci}` | `foundations/<cloud>/<env>.tfstate` in the Azure Storage state home | independently |
 | Tenants | `tenants/` (one stack, all clouds; `cloud` is a per-tenant parameter) | `tenants/<env>.tfstate` in the Azure Storage state home | independently, **after** the foundations of the clouds its tenants use |
-| GitOps | `gitops/` (one stack, all clouds; `cloud` is a key of `var.spokes`) | `gitops/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (the hub) and the foundations of the clouds it registers |
+| GitOps | `gitops/` (one stack, all clouds; `cloud` is a key of `var.spokes`) | `gitops/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (the hub) and the foundations of the clouds it attaches |
 | Portainer | `portainer/` (one stack, all clouds; `cloud` is a key of `var.agents`) | `portainer/<env>.tfstate` in the Azure Storage state home | independently, **after** the Azure foundation (which runs the server) and the foundations of the clouds it onboards |
 
 **One state home.** Every stack — whichever cloud it provisions — keeps its
@@ -96,7 +96,7 @@ so in one message instead of a list of "Unsupported attribute" errors.
 | Platform ingress | **Traefik** + ESO (Key Vault) | **Traefik** + ESO (Secrets Manager) | **Traefik** + ESO (Secret Manager) | **Traefik** + ESO (Vault) |
 | Observability | **Grafana Alloy** + ESO (Key Vault) | **Grafana Alloy** + ESO (Secrets Manager) | **Grafana Alloy** + ESO (Secret Manager) | **Grafana Alloy** + ESO (Vault) |
 | Ingress DNS | manual records | manual records | manual records | manual records |
-| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub** | registered **spoke** | registered **spoke** | registered **spoke** |
+| GitOps | **Argo CD cluster extension** (`Microsoft.ArgoCD`) — the **hub**, plus the argocd-agent **principal** | **spoke**: agent + local Argo CD | **spoke**: agent + local Argo CD | **spoke**: agent + local Argo CD |
 | Application database | **Azure SQL** on the free offer, Entra-only auth (`sql.tf`) | — | — | — |
 | Fleet console | **Portainer BE** server (manages this cluster itself) | **Edge Agent** | **Edge Agent** | **Edge Agent** |
 
@@ -332,12 +332,12 @@ and the SSO app registration authenticates with the cluster's federated
 credential rather than a client secret. The directory objects themselves are
 created out of band and referenced by ID.
 
-That AKS cluster is the **hub**. The other clouds' clusters are registered
-with it as **spokes** by the `gitops/` stack, so there is one delivery plane
-for all four clouds rather than one Argo CD per cloud — the same "one stack,
-all clouds" shape the tenants layer has, with the cloud as a key of
-`var.spokes` instead of a per-tenant attribute. All three — EKS, GKE and OKE
-— are registered.
+That AKS cluster is the **hub**. The other clouds' clusters are attached to it
+as **spokes** by the `gitops/` stack, so there is one delivery plane for all
+four clouds rather than one Argo CD anybody signs in to per cloud — the same
+"one stack, all clouds" shape the tenants layer has, with the cloud as a key of
+`var.spokes` instead of a per-tenant attribute. All three — EKS, GKE and OKE —
+are attached.
 
 Kargo runs on the hub too, and not by coincidence: its promotion step reaches
 an Argo CD `Application` through its own Kubernetes client, so the promotion
@@ -345,15 +345,37 @@ engine and the Application objects share a cluster while the workloads they
 deploy do not. That, and what it costs, is
 [ADR-0002](adr/0002-one-argo-cd-on-the-hub.md).
 
-Registration is a `cluster`-labelled Secret in the hub's `argocd` namespace
-whose credential is a `argocd-manager` ServiceAccount token minted on the
-spoke itself — not that cloud's admin kubeconfig, which would have to live on
-the hub. It is the one authentication mode EKS, GKE and OKE all share, it
-carries exactly the rights of the ClusterRole granted next to it, and
-revoking a spoke is deleting one ServiceAccount. The Secret's labels
+**The spoke opens the connection, not the hub.** Each spoke runs an
+[argocd-agent](https://github.com/argoproj-labs/argocd-agent) agent that dials
+the **principal** on the hub — published at `argocd-agent.onek8s.lol:8443`, on
+the same ingress load balancer as everything else but with TLS *passed through*
+rather than terminated, because the principal authenticates each agent by the
+client certificate on the connection. Nothing on the hub ever calls a spoke's
+Kubernetes API, which is what lets a spoke's management API be private:
+`cluster_endpoint_public_access` on each foundation is the switch, and
+[ADR-0003](adr/0003-spokes-connect-with-argocd-agent.md) is why.
+
+```
+   Applications generated on the hub          the cluster they name
+   ────────────────────────────────           ──────────────────────
+   ApplicationSet ─▶ Application ─▶ principal ◀══ agent ══ EKS / GKE / OKE
+   (argocd, on AKS)  destination.name          (dials out)  local Argo CD
+                       = the agent's name                   applies it here
+```
+
+A spoke therefore runs a trimmed Argo CD of its own — `application-controller`,
+`repo-server`, `redis`, no API server and no ApplicationSet controller —
+because a managed agent hands its Applications to a local controller rather
+than applying them itself. Nothing about *where* an application is decided
+moves: that is still one hub, one UI, one repository.
+
+Attachment is still a `cluster`-labelled Secret in the hub's `argocd`
+namespace, but its `server` is the principal's resource proxy rather than the
+spoke's API endpoint, and its credential is a client certificate for that proxy
+rather than a cluster-admin token for the spoke. Its labels
 (`onek8s.io/cloud`, `onek8s.io/environment`, `onek8s.io/spoke`) are what an
-`ApplicationSet` cluster generator selects on, so "deploy this to every
-cloud" is one object. See [argocd.md](argocd.md) for the mechanics, the
+`ApplicationSet` cluster generator selects on, so "deploy this to every cloud"
+is one object. See [argocd.md](argocd.md) for the mechanics, the PKI, the
 scoping variables and the operational commands.
 
 What Argo CD *deploys* is version-controlled on the same terms, and in its own
@@ -457,8 +479,9 @@ cross-namespace references enabled.
 The licence and the initial admin password come out of the environment's Key
 Vault (`portainer-license`, `portainer-admin-password`), so a rebuild comes up
 licensed and already has the account the `portainer/` stack authenticates as.
-The agents get `cluster-admin` on their clusters — wider than Argo CD's
-`argocd-manager`, and inherent to what an interactive console does.
+The agents get `cluster-admin` on their clusters — wider than the
+application-controller Argo CD's agent installs beside itself, and inherent to
+what an interactive console does.
 [portainer.md](portainer.md).
 
 ## CI/CD
@@ -574,23 +597,28 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
   the deploy identity directory write permission, which is a larger grant
   than the platform otherwise needs; the cost is that nothing notices when
   one of those objects is deleted or renamed.
-- The AKS cluster is the only one running Argo CD, which makes it the hub for
-  the whole platform: losing it stops delivery on all four clouds. Workloads
-  keep running — Argo CD holds no state a spoke needs at runtime — but nothing
-  syncs until it is back. A cloud left out of `var.spokes` has an ingress
-  controller but no delivery plane at all.
-- A spoke's credential is a **long-lived ServiceAccount token** that
-  Terraform reads in order to write the hub's cluster Secret, so it lands in
-  `gitops/<env>.tfstate`. That state file is consequently as sensitive as a
-  cluster admin credential for every registered spoke, and the state home's
-  RBAC is the only thing protecting it; nothing rotates the token either.
-  Moving it out of state would mean CI minting tokens into Key Vault and an
-  `ExternalSecret` assembling the cluster Secret on the hub — one more
-  scheduled workflow to own, and the reason it was not done up front.
-- Hub → spoke traffic crosses the public internet: every foundation's API
-  server is public today. Private endpoints plus peering (or a tunnel) is the
-  prerequisite for anything beyond prototype, and no foundation has that
-  networking story yet.
+- The AKS cluster carries the whole control plane: losing it stops promotions,
+  the UI, and any change to what a spoke should run. It no longer stops
+  reconciliation — each spoke's own application-controller keeps its cluster
+  matching what it last received — but a cloud left out of `var.spokes` still
+  has an ingress controller and no delivery plane at all.
+- The argocd-agent **CA private key** is what every spoke's identity is signed
+  by, and it lives in the hub's `argocd-agent-ca` Secret, in
+  `foundations/azure/<env>.tfstate`, and in `gitops/<env>.tfstate` while it
+  signs. Anything holding it can mint an identity for any agent. It replaced
+  four cluster-admin bearer tokens in that same state file — less total
+  credential, but concentrated rather than spread, and the state home's RBAC is
+  still the only thing protecting it. Certificates renew by an apply a month
+  before expiry, and nothing warns first.
+- **Terraform still needs every spoke's API server**, even though GitOps no
+  longer does. The foundations, the tenants stack and `gitops` all call it from
+  wherever they run, so `cluster_endpoint_public_access` defaults to `true`;
+  turning it off is gated on running those stacks from inside each network
+  (a self-hosted runner, a bastion), which no environment has yet.
+- **Every spoke fetches its own charts** now, so the applications repository is
+  pulled by four repo-servers rather than one. A private repository would need
+  credentials on each of them; and a spoke costs 1–2 vCPU and 2–4 GB it did not
+  cost before.
 - The boundary between Terraform and GitOps is a convention. Tenant
   onboarding (namespaces, quotas, SecretStores) stays in Terraform and only
   workloads belong in Argo CD, but nothing prevents an Application from

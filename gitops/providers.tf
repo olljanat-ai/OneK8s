@@ -1,11 +1,19 @@
-# One kubernetes provider per cluster this stack touches: the hub (AKS) plus
-# every cloud that can be a spoke. Clouds not registered in this environment
-# are configured so that they never require credentials or network access
-# (their resource counts are all zero), so a run needs credentials only for
-# the clouds actually listed in var.spokes.
+# One kubernetes provider AND one helm provider per cluster this stack touches:
+# the hub (AKS) plus every cloud that can be a spoke. Clouds not attached in
+# this environment are configured so that they never require credentials or
+# network access (their resource counts are all zero), so a run needs
+# credentials only for the clouds actually listed in var.spokes.
 #
 # Azure credentials are always required — the hub runs on AKS and the state
 # home is Azure Storage — which is why azurerm needs no "inert" special-casing.
+#
+# Note what these credentials are now FOR. They install the agent and its Argo
+# CD on the spoke, and they are used by nothing afterwards: the running system
+# reaches the spoke over the connection the agent opens outwards. That is the
+# whole point of the refactor, and it is also the one thing standing between an
+# environment and a spoke API server with no public endpoint at all — Terraform
+# still has to reach it, from wherever it runs. See docs/argocd.md, "Making a
+# spoke's API server private".
 provider "azurerm" {
   features {}
 }
@@ -34,10 +42,11 @@ provider "google" {
 }
 
 # --- The hub -----------------------------------------------------------------
-# The cluster Secret that registers a spoke is an ordinary Secret in the hub's
+# The cluster Secret that attaches a spoke is an ordinary Secret in the hub's
 # Argo CD namespace, so this stack writes to AKS with the same cluster-local
 # admin credentials the tenants stack and the foundation's own add-on
-# bootstrap use.
+# bootstrap use. It also READS one Secret here — the argocd-agent CA, which
+# signs each agent's client certificates (main.tf).
 data "azurerm_kubernetes_cluster" "hub" {
   count = local.hub_wired ? 1 : 0
 
@@ -55,9 +64,11 @@ provider "kubernetes" {
 }
 
 # --- The spokes --------------------------------------------------------------
-# Registration is a one-off privileged act on the spoke (create a
-# ServiceAccount, grant it, read its token); everything Argo CD does
-# afterwards uses that token instead of these credentials.
+# Attaching a spoke is a one-off privileged act on it: install Argo CD and the
+# agent, and grant them. Nothing on the hub holds a credential for the spoke
+# afterwards, and nothing on the hub calls its API server — the agent's own
+# outbound connection carries everything, authenticated by a client certificate
+# that grants nothing on any cluster.
 data "aws_eks_cluster_auth" "spoke" {
   count = local.wired.aws ? 1 : 0
 
@@ -113,5 +124,50 @@ provider "kubernetes" {
         "--region", local.foundation.oci.region,
       ]
     }
+  }
+}
+
+# --- Helm, one configuration per cluster -------------------------------------
+# Same credentials as the kubernetes providers above, and inert for the same
+# reason on a cloud with no spoke: a provider whose resources all have count 0
+# is never configured, so no cluster is contacted and no CLI has to be present.
+provider "helm" {
+  alias = "aws"
+
+  kubernetes = {
+    host                   = try(local.foundation.aws.cluster_endpoint, null)
+    cluster_ca_certificate = try(base64decode(local.foundation.aws.cluster_ca_certificate), null)
+    token                  = try(data.aws_eks_cluster_auth.spoke[0].token, null)
+  }
+}
+
+provider "helm" {
+  alias = "gcp"
+
+  kubernetes = {
+    host                   = try("https://${local.foundation.gcp.cluster_endpoint}", null)
+    cluster_ca_certificate = try(base64decode(local.foundation.gcp.cluster_ca_certificate), null)
+    token                  = try(data.google_client_config.spoke[0].access_token, null)
+  }
+}
+
+provider "helm" {
+  alias = "oci"
+
+  kubernetes = {
+    host                   = try(local.foundation.oci.cluster_endpoint, null)
+    cluster_ca_certificate = try(base64decode(local.foundation.oci.cluster_ca_certificate), null)
+
+    # As above: no Terraform-native token source on OCI, so the OCI CLI mints
+    # one. Requires `oci` on PATH.
+    exec = local.wired.oci ? {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "oci"
+      args = [
+        "ce", "cluster", "generate-token",
+        "--cluster-id", local.foundation.oci.cluster_id,
+        "--region", local.foundation.oci.region,
+      ]
+    } : null
   }
 }

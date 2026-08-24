@@ -30,6 +30,27 @@ resource "google_container_cluster" "this" {
     channel = "REGULAR"
   }
 
+  # Whether the control plane answers on a public IP. Absent — the default —
+  # this is a public-endpoint cluster and nothing here changes; present, GKE
+  # gives the control plane a private endpoint only, reachable from the VPC and
+  # from nothing else. The argocd-agent agent runs inside that VPC and dials
+  # the hub outwards, so GitOps is unaffected either way; Terraform is not, and
+  # has to run from inside the network once this is on.
+  #
+  # Unlike the AWS and OCI switches, this one is NOT a flip on a live cluster:
+  # turning private nodes on changes how every node reaches the internet
+  # (Cloud NAT becomes a prerequisite for image pulls) and GKE rejects some of
+  # these transitions in place. Plan it as a rebuild.
+  dynamic "private_cluster_config" {
+    for_each = var.cluster_endpoint_public_access ? [] : [1]
+
+    content {
+      enable_private_nodes    = true
+      enable_private_endpoint = true
+      master_ipv4_cidr_block  = var.master_ipv4_cidr_block
+    }
+  }
+
   # We manage the node pool as a separate resource.
   remove_default_node_pool = true
   initial_node_count       = 1

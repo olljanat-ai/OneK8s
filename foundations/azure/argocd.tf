@@ -29,6 +29,11 @@ locals {
   argocd_service_name = "argocd-server"
   argocd_service_port = 80
 
+  # The extension's redis, under the same fixed release name. argocd-agent's
+  # principal proxies it (argocd-agent.tf), which is why the name is needed
+  # twice rather than only inside the chart.
+  argocd_redis_service_name = "argocd-redis"
+
   argocd_url = "https://${var.argocd_hostname}"
 
   # The SSO app registration is expected in the same directory as the deploy
@@ -131,6 +136,16 @@ locals {
       # stops issuing its own 307 redirect to HTTPS — without this, Traefik
       # and argocd-server redirect each other in a loop.
       "configs.params.server\\.insecure" = "true"
+
+      # Where argocd-server looks for redis. Left alone this is the
+      # extension's own "argocd-redis"; with argocd-agent installed it becomes
+      # the principal's redis proxy, which forwards the two key prefixes
+      # belonging to an agent-managed Application down that agent's connection
+      # and everything else straight through to the same redis. It is the one
+      # Argo CD setting the agent architecture needs, and without it the UI
+      # shows an agent's Applications with an empty resource tree while syncs
+      # carry on working. See argocd-agent.tf.
+      "configs.params.redis\\.server" = local.argocd_agent_enabled ? local.argocd_agent_redis_proxy_address : "${local.argocd_redis_service_name}:6379"
 
       # The chart's own Ingress stays off: the object below is the one that
       # carries the class, the host and (deliberately) no certificate. Two

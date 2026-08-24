@@ -50,7 +50,9 @@ three clouds.
 
 The Edge Agent dials *out*. It polls the Portainer URL over HTTPS and, only
 while an operator has that environment open, opens a reverse tunnel back to
-the same host. Nothing on a spoke has to be reachable from anywhere, and the
+the same host. Nothing on a spoke has to be reachable from anywhere — the same
+shape Argo CD's delivery plane now has, for the same reason (docs/argocd.md) —
+and the
 entire credential is one **Edge key** — a base64 blob holding the Portainer
 URL, the tunnel address, the tunnel server's fingerprint and the environment's
 ID. Deleting the environment on the server invalidates it.
@@ -247,9 +249,9 @@ published manifest, and what the product assumes. The agent is the operator's
 hands on that cluster: it lists and edits every namespaced object, streams
 logs, opens shells.
 
-That is a wider grant than the `argocd-manager` ServiceAccount the Argo CD
-spoke registration creates, and deliberately so: Argo CD applies a known set
-of manifests, Portainer is an interactive console. `cluster_role = "view"`
+That is a wider grant than the ClusterRole `modules/argocd-spoke` binds to the
+spoke's Argo CD `application-controller`, and deliberately so: Argo CD applies a
+known set of manifests, Portainer is an interactive console. `cluster_role = "view"`
 narrows it and turns parts of the UI into errors rather than into a read-only
 view — see [modules/portainer-agent/README.md](../modules/portainer-agent/README.md).
 

@@ -20,6 +20,21 @@ argocd_high_availability = false
 argocd_workload_identity_client_id = "eca6aad4-fd01-4c67-acb9-95b33d89c53b"
 argocd_sso_client_id               = "6598a87b-227b-4f20-9f3b-dbdd74604492"
 
+# argocd-agent: the principal, which is how the other three clouds attach to
+# this hub. Each of them runs an agent that dials this host and holds one
+# outbound gRPC connection open, so nothing here ever calls a spoke's
+# Kubernetes API and no spoke has to publish one (docs/argocd.md, "The spokes
+# come to the hub").
+#
+# The host is NOT covered by the platform wildcard, and that is deliberate: the
+# route is TLS passthrough, so the certificate an agent validates is the one
+# argocd-agent's own CA issues for this name — the principal has to see each
+# agent's client certificate to know which agent it is talking to. Its A record
+# is pointed at the ingress by hand like every other host, and the port is a
+# TCP entrypoint on the same load balancer.
+enable_argocd_agent   = true
+argocd_agent_hostname = "argocd-agent.onek8s.lol"
+
 # Kargo: the promotion engine in front of Argo CD (docs/kargo.md). The host is
 # covered by the same platform wildcard, and its A record is pointed at the
 # ingress by hand like every other one.

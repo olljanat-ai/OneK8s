@@ -72,3 +72,8 @@ output "observability_cluster_name" {
   description = "Value of the 'cluster' label this cluster's telemetry carries in Grafana Cloud, null when observability is disabled."
   value       = var.enable_observability ? local.observability_cluster_name : null
 }
+
+output "cluster_endpoint_public_access" {
+  description = "Whether this cluster's API server answers from the public internet. Argo CD no longer needs it to — the agent connects outwards — but Terraform still does, so turning it off means running the stacks from inside the network."
+  value       = var.cluster_endpoint_public_access
+}

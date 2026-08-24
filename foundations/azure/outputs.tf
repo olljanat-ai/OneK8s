@@ -134,3 +134,43 @@ output "environment" {
   description = "Environment this foundation was deployed for."
   value       = var.environment
 }
+
+output "argocd_agent_enabled" {
+  description = "Whether this hub runs the argocd-agent principal. False means the delivery plane has no way to attach a spoke: an agent has nothing to dial."
+  value       = local.argocd_agent_enabled
+}
+
+output "argocd_agent_address" {
+  description = "Host name an agent on another cloud dials to reach this hub. Null when the principal is not installed."
+  value       = local.argocd_agent_enabled ? local.argocd_agent_address : null
+}
+
+output "argocd_agent_port" {
+  description = "Port that host answers on. It is a TCP entrypoint on the ingress load balancer, passed through to the principal without TLS termination."
+  value       = local.argocd_agent_enabled ? var.argocd_agent_port : null
+}
+
+output "argocd_agent_namespace" {
+  description = "Namespace the principal runs in on the hub, which is Argo CD's own — it reads the Applications there and proxies the redis there."
+  value       = local.argocd_agent_enabled ? local.argocd_agent_namespace : null
+}
+
+output "argocd_agent_resource_proxy_address" {
+  description = "In-cluster address of the principal's resource proxy, as it appears in the 'server' field of every spoke's cluster Secret. Argo CD asks it for an agent-managed Application's live resources and the principal forwards the question down that agent's connection."
+  value       = local.argocd_agent_enabled ? local.argocd_agent_resource_proxy_address : null
+}
+
+output "argocd_agent_ca_secret" {
+  description = "Name of the Secret in the Argo CD namespace holding the argocd-agent certificate authority (tls.crt + tls.key). The gitops stack reads it back to sign each agent's client certificates; nothing exports the key itself."
+  value       = local.argocd_agent_enabled ? one(kubernetes_secret_v1.argocd_agent_ca[*].metadata[0].name) : null
+}
+
+output "argocd_agent_label_selector" {
+  description = "The label selector principal and agents filter on. Objects without it belong to this cluster's own application-controller, which is what lets the hub be both a principal and a deployment target."
+  value       = local.argocd_agent_enabled ? local.argocd_agent_label_selector : null
+}
+
+output "argocd_agent_label" {
+  description = "The label key half of the selector above, handed to the delivery-plane chart so the objects that belong to a spoke carry it."
+  value       = local.argocd_agent_enabled ? var.argocd_agent_label : null
+}

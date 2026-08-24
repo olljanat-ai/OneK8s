@@ -175,9 +175,9 @@ with Entra groups mapped to Argo CD roles and no client secret anywhere —
 the SSO app authenticates with the cluster's federated credential.
 
 That AKS cluster is the **hub**. The `gitops/` stack registers the other
-clouds' clusters as **spokes** — one Argo CD for all four clouds, no Argo CD
-components anywhere else — again as one stack, all clouds, with the cloud as
-a key of `var.spokes`:
+clouds' clusters as **spokes** — one Argo CD anybody signs in to, for all four
+clouds — again as one stack, all clouds, with the cloud as a key of
+`var.spokes`:
 
 ```hcl
 # gitops/envs/prototype.tfvars
@@ -188,13 +188,15 @@ spokes = {
 }
 ```
 
-Each spoke gets an `argocd-manager` ServiceAccount with a scoped ClusterRole
-on its own cluster, and the hub gets a labelled `cluster` Secret holding that
-token — so no cloud's admin kubeconfig ever lives on the hub, and an
-`ApplicationSet` cluster generator can select spokes by
-`onek8s.io/cloud` / `onek8s.io/environment`. EKS, GKE and OKE are all
-registered. Details, scoping and trade-offs:
-[docs/argocd.md](docs/argocd.md).
+Each spoke runs an [argocd-agent](https://github.com/argoproj-labs/argocd-agent)
+agent that **dials the hub outbound** and a reconciler-only Argo CD beside it,
+and the hub gets a labelled `cluster` Secret pointing at the agent's connection
+rather than at the spoke's API server. Nothing on the hub ever calls a spoke —
+which is what lets a spoke's management API be private
+(`cluster_endpoint_public_access`) — and an `ApplicationSet` cluster generator
+still selects spokes by `onek8s.io/cloud` / `onek8s.io/environment`. EKS, GKE
+and OKE are all attached. Details, scoping and trade-offs:
+[docs/argocd.md](docs/argocd.md), [ADR-0003](docs/adr/0003-spokes-connect-with-argocd-agent.md).
 
 Argo CD's own configuration is version-controlled too — in a repository of its
 own. Terraform creates exactly one object, a **root Application** pointing at

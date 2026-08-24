@@ -401,26 +401,35 @@ environment; it reads both out of the state home. A cloud left out of
 provider stays inert — so the run needs Azure credentials plus the
 credentials of the clouds actually registered.
 
-Creating a ClusterRole is a privileged act, so each cloud's deploy identity
-needs cluster-admin rights on its own spoke **for this run only** — an EKS
-access entry mapping to a cluster admin, `roles/container.admin` on GCP,
-`manage cluster-family` on OCI. Everything Argo CD does afterwards uses the
-`argocd-manager` token instead, never those credentials. The OCI spoke also
-needs the `oci` CLI on `PATH`, the way the tenants stack does: it is what
+Installing Argo CD and an agent is a privileged act, so each cloud's deploy
+identity needs cluster-admin rights on its own spoke **for this run only** — an
+EKS access entry mapping to a cluster admin, `roles/container.admin` on GCP,
+`manage cluster-family` on OCI. Nothing uses those credentials afterwards: the
+running system reaches the spoke over the connection the **agent opens
+outwards**, and the hub holds no credential for the spoke at all. The OCI spoke
+also needs the `oci` CLI on `PATH`, the way the tenants stack does: it is what
 mints the cluster token.
 
-Each spoke gets an `argocd-manager` ServiceAccount and a ClusterRole on its
-own cluster, and the hub gets a labelled `cluster` Secret carrying that
-token. Check the result:
+Each spoke gets an [argocd-agent](https://github.com/argoproj-labs/argocd-agent)
+agent and a reconciler-only Argo CD (`application-controller`, `repo-server`,
+`redis` — no API server) in its own `argocd` namespace, and the hub gets a
+labelled `cluster` Secret pointing at the principal's resource proxy. It also
+needs the hub applied with `enable_argocd_agent = true`, or there is nothing
+for the agents to dial. Check both ends:
 
 ```bash
+# on the hub: the entry, and who has connected
 kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=cluster \
   -L onek8s.io/cloud,onek8s.io/environment
+kubectl -n argocd logs deploy/argocd-agent-principal | grep -i "agent connected"
+
+# on the spoke: the agent, and the Argo CD it hands Applications to
+kubectl -n argocd get deploy --context <spoke>
 ```
 
-Or via Actions: **Deploy GitOps** → environment `prototype`. Scoping,
-fan-out with an `ApplicationSet` and the trade-offs (the token is long-lived
-and lands in state): [argocd.md](argocd.md).
+Or via Actions: **Deploy GitOps** → environment `prototype`. Scoping, fan-out
+with an `ApplicationSet`, the PKI and the trade-offs (a spoke now runs Argo CD;
+the CA key lands in state): [argocd.md](argocd.md).
 
 ### What the same run deploys
 

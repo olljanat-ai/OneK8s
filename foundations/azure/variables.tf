@@ -503,3 +503,97 @@ variable "ingress_dashboard_hostname" {
   type        = string
   default     = "azure-traefik.onek8s.lol"
 }
+
+# --- argocd-agent (the hub half: the principal) ------------------------------
+
+variable "enable_argocd_agent" {
+  description = "Install the argocd-agent principal beside Argo CD on the hub. It is how the other clouds' clusters attach to this one: each runs an agent that dials this endpoint outbound, so no spoke API server is ever called from here and none of them needs to be reachable from outside its own network. Requires enable_argocd and enable_ingress — the endpoint is a TCP entrypoint on the ingress load balancer. Turning it off leaves an environment with a hub and no spokes."
+  type        = bool
+  default     = true
+}
+
+variable "argocd_agent_hostname" {
+  description = "Public hostname the agents dial, e.g. 'argocd-agent.onek8s.lol'. Its A record is pointed at the ingress by hand like every other host here — but unlike them it does NOT use the platform wildcard certificate: the route is TLS passthrough and the principal serves a certificate from argocd-agent's own CA, issued for this name. Changing it reissues that certificate, so every agent has to be re-applied."
+  type        = string
+  default     = "argocd-agent.onek8s.lol"
+}
+
+variable "argocd_agent_port" {
+  description = "Port the agents dial on the ingress load balancer. 8443 rather than 443 because the platform's HTTPS entrypoint already owns 443 and terminates TLS there, which is exactly what this connection must not have done to it."
+  type        = number
+  default     = 8443
+}
+
+variable "argocd_agent_label" {
+  description = "Label key that marks an Argo CD object as an agent's. The principal and every agent filter on '<key>=true', so anything without it stays with this cluster's own application-controller — that separation is what lets one Argo CD both be the hub and deploy to itself. It must match the delivery-plane chart's agentLabel."
+  type        = string
+  default     = "onek8s.io/agent-managed"
+}
+
+variable "argocd_agent_chart_repository" {
+  description = "Helm repository holding the argocd-agent principal chart."
+  type        = string
+  default     = "oci://ghcr.io/argoproj-labs/argocd-agent"
+}
+
+variable "argocd_agent_chart_version" {
+  description = "Version of the argocd-agent principal chart. Pinned, and kept in step with the agent chart version the gitops stack installs on the spokes: principal and agent speak a versioned protocol to each other."
+  type        = string
+  default     = "0.3.2"
+}
+
+variable "argocd_agent_log_level" {
+  description = "Log level of the principal (trace, debug, info, warn, error)."
+  type        = string
+  default     = "info"
+}
+
+variable "argocd_agent_resources" {
+  description = "Resource requests/limits of the principal container. It holds one open stream per agent and proxies every live-resource query the UI makes, so it scales with the number of spokes rather than with what they run."
+  type        = any
+  default = {
+    requests = {
+      cpu    = "100m"
+      memory = "256Mi"
+    }
+    limits = {
+      memory = "1Gi"
+    }
+  }
+}
+
+variable "argocd_agent_ca_validity_hours" {
+  description = "Validity of the argocd-agent certificate authority. It signs the principal's server certificate and every agent's client certificate, so replacing it means re-applying the gitops stack to reissue all of them; ten years, renewed by an apply in the last of them."
+  type        = number
+  default     = 87600
+}
+
+variable "argocd_agent_ca_early_renewal_hours" {
+  description = "How long before the CA expires an apply replaces it. A year, because replacing it is the one change here that touches every spoke."
+  type        = number
+  default     = 8760
+}
+
+variable "argocd_agent_certificate_validity_hours" {
+  description = "Validity of the principal's server certificate and the resource proxy's, both signed by the CA above."
+  type        = number
+  default     = 8760
+}
+
+variable "argocd_agent_certificate_early_renewal_hours" {
+  description = "How long before those certificates expire an apply reissues them. The principal reads them from Secrets at startup, so a reissue also restarts it."
+  type        = number
+  default     = 720
+}
+
+variable "argocd_agent_extra_dns_names" {
+  description = "Extra subject alternative names on the principal's server certificate. Needed only when agents reach it by a second name — a private DNS zone, a service mesh gateway — beyond var.argocd_agent_hostname."
+  type        = list(string)
+  default     = []
+}
+
+variable "argocd_agent_extra_values" {
+  description = "Extra Helm values merged over the ones argocd-agent.tf builds for the principal (top-level keys win outright — the merge is not deep)."
+  type        = any
+  default     = {}
+}

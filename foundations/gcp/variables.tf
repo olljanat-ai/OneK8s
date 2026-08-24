@@ -130,3 +130,31 @@ variable "observability_collector_preset" {
   type        = string
   default     = "small"
 }
+
+variable "cluster_endpoint_public_access" {
+  description = <<-EOT
+    Whether this cluster's Kubernetes API server is reachable from the public
+    internet.
+
+    It used to have to be. Argo CD ran on the Azure hub and applied every
+    manifest to this cluster by calling this endpoint, so "false" meant no
+    delivery. That is no longer true: the cluster runs an argocd-agent agent
+    that dials the hub outwards and does the applying locally, so nothing
+    outside this network ever needs to call this API server for GitOps to work
+    (docs/argocd.md, "Making a spoke's API server private").
+
+    What still calls it is TERRAFORM — this stack, the tenants stack, and the
+    gitops stack when it installs or upgrades the agent. Setting this to false
+    therefore requires those runs to happen from inside the network (a
+    self-hosted runner, a bastion, a peered VNet), which no environment here
+    has yet. It defaults to true for that reason, and only for that reason.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "master_ipv4_cidr_block" {
+  description = "The /28 GKE puts the private control-plane endpoint in. Read only when cluster_endpoint_public_access is false, and it must not overlap the subnetwork or either secondary range in main.tf (10.30.0.0/20, 10.32.0.0/14, 10.36.0.0/20)."
+  type        = string
+  default     = "10.39.0.0/28"
+}
