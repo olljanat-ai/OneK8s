@@ -160,7 +160,7 @@ resource "azurerm_kubernetes_cluster_extension" "argocd" {
   count = var.enable_argocd ? 1 : 0
 
   name           = "argocd"
-  cluster_id     = azurerm_kubernetes_cluster.this.id
+  cluster_id     = module.aks.resource_id
   extension_type = "Microsoft.ArgoCD"
 
   # Leaving version unset lets Azure install the latest and auto-upgrade it

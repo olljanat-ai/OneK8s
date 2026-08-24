@@ -20,5 +20,5 @@ resource "helm_release" "external_secrets" {
     }
   })]
 
-  depends_on = [azurerm_kubernetes_cluster.this]
+  depends_on = [module.aks]
 }

@@ -1,4 +1,4 @@
-# Azure SQL Database on the **free offer**, and one logical server to hold it.
+# Azure SQL: one Entra-only logical server, and one database on it.
 #
 # What matters here is mostly what is *absent*: there is no administrator
 # login, no password, no connection string and no secret. The server is put
@@ -21,11 +21,14 @@
 #     principal that already exists — by default the identity running the
 #     deploy — exactly as the Argo CD SSO app registration is.
 #
-# The database itself is created with azapi rather than azurerm, because the
-# free offer is expressed by two ARM properties (useFreeLimit,
-# freeLimitExhaustionBehavior) that the pinned azurerm provider does not carry.
-# Same reason, and same shape, as the AKS managed namespace in
-# modules/tenant-namespace/azure.
+# The server comes from the Azure Verified Module for SQL servers, which also
+# owns its firewall rules and its audit diagnostics. The database does not: it
+# is created with azapi, because the free offer is expressed by two ARM
+# properties (useFreeLimit, freeLimitExhaustionBehavior) that neither the
+# azurerm provider nor the AVM module's `databases` input carries. Same reason,
+# and same shape, as the AKS managed namespace in modules/tenant-namespace/azure.
+# A production database with no free offer to express fits the module's own
+# `databases` input and belongs there instead.
 
 locals {
   sql_enabled = var.enable_sql
@@ -37,6 +40,20 @@ locals {
 
   # Bytes, because ARM counts database size in bytes and nothing else here does.
   sql_max_size_bytes = var.sql_max_size_gb * 1024 * 1024 * 1024
+
+  # Zone redundancy and geo-redundant backups are what a production database
+  # is expected to have, and are also exactly what the free offer does not
+  # include — so the offer, when it is asked for, wins over both rather than
+  # failing the apply with an ARM error that says neither.
+  sql_zone_redundant            = var.sql_use_free_limit ? false : var.sql_zone_redundant
+  sql_backup_storage_redundancy = var.sql_use_free_limit ? "Local" : var.sql_backup_storage_redundancy
+  # The module's `resource` output is the whole azurerm_mssql_server and is
+  # marked sensitive, but a host name is not a secret and every consumer of
+  # this stack reads it out of the state. Unwrapping it inside the comprehension
+  # keeps `null` — not an error — as the answer when SQL is off.
+  sql_server_fqdn = one([for server in module.sql_server : nonsensitive(server.resource.fully_qualified_domain_name)])
+  sql_server_id   = one(module.sql_server[*].resource_id)
+  sql_server_name = one(module.sql_server[*].resource_name)
 
   # The free-offer properties, as a list of either one object or none.
   #
@@ -58,8 +75,6 @@ locals {
       freeLimitExhaustionBehavior = var.sql_free_limit_exhaustion_behavior
     }
   ]
-
-  sql_server_fqdn = one(azurerm_mssql_server.this[*].fully_qualified_domain_name)
 }
 
 resource "random_string" "sql_suffix" {
@@ -72,14 +87,17 @@ resource "random_string" "sql_suffix" {
 
 # Logical server names are globally unique, like Key Vault names, so they carry
 # the same random suffix.
-resource "azurerm_mssql_server" "this" {
-  count = local.sql_enabled ? 1 : 0
+module "sql_server" {
+  source  = "Azure/avm-res-sql-server/azurerm"
+  version = "0.2.1"
+  count   = local.sql_enabled ? 1 : 0
 
   name                = "sql-${local.name}-${random_string.sql_suffix[0].result}"
-  location            = azurerm_resource_group.this.location
-  resource_group_name = azurerm_resource_group.this.name
-  version             = "12.0"
-  minimum_tls_version = "1.2"
+  location            = var.location
+  resource_group_name = module.resource_group.name
+  server_version      = "12.0"
+  enable_telemetry    = var.enable_telemetry
+  tags                = local.tags
 
   # Public endpoint, but nothing may reach it by default: there are no firewall
   # rules unless var.sql_firewall_rules asks for them, and the cluster gets in
@@ -87,22 +105,31 @@ resource "azurerm_mssql_server" "this" {
   # step up and is listed as a known gap in docs/db-hello-app.md — it needs
   # private DNS the platform does not run yet, and it would put the database
   # out of reach of the tenants deploy that bootstraps it.
-  public_network_access_enabled = true
+  public_network_access_enabled = var.sql_public_network_access_enabled
 
-  # Entra-only. With this set, azurerm rejects an administrator_login /
-  # administrator_login_password pair, which is the point: there is no SQL
-  # login on this server to leak, rotate or forget.
-  azuread_administrator {
+  # Entra-only. With this set there is no SQL login on this server to leak,
+  # rotate or forget, and the module omits the administrator_login pair.
+  azuread_administrator = {
     login_username              = var.sql_admin_login_username
     object_id                   = local.sql_admin_object_id
     tenant_id                   = data.azurerm_client_config.current.tenant_id
     azuread_authentication_only = true
   }
 
-  tags = local.tags
+  # Deliberately empty by default. The tenants deploy opens a rule for its own
+  # runner address and removes it again in the same run, so operating the
+  # database needs no standing exception; these are for the ones you want to
+  # keep (an office range, a jump host).
+  firewall_rules = var.sql_firewall_rules
+
+  # No diagnostic_settings here on purpose. Azure exposes no diagnostic log
+  # categories on a logical server — they live on the databases under it, and
+  # this stack's one database is created with azapi below because of the free
+  # offer. A production database created through the module's own `databases`
+  # input carries its diagnostics there.
 }
 
-# The free offer, in five properties.
+# The database, and the free offer, in five properties.
 #
 #   useFreeLimit                 100,000 vCore seconds + 32 GB a month, free,
 #                                for the lifetime of the subscription
@@ -125,8 +152,8 @@ resource "azapi_resource" "sql_database" {
 
   type      = "Microsoft.Sql/servers/databases@2023-08-01"
   name      = var.sql_database_name
-  parent_id = azurerm_mssql_server.this[0].id
-  location  = azurerm_resource_group.this.location
+  parent_id = local.sql_server_id
+  location  = var.location
   tags      = local.tags
 
   body = {
@@ -137,14 +164,12 @@ resource "azapi_resource" "sql_database" {
       capacity = var.sql_sku.capacity
     }
     properties = merge({
-      collation      = var.sql_collation
-      maxSizeBytes   = local.sql_max_size_bytes
-      autoPauseDelay = var.sql_auto_pause_delay_in_minutes
-      minCapacity    = var.sql_min_capacity
-      zoneRedundant  = false
-      # Local redundancy is not a choice on the free offer with AutoPause: geo
-      # and zone redundant backups are not part of it.
-      requestedBackupStorageRedundancy = "Local"
+      collation                        = var.sql_collation
+      maxSizeBytes                     = local.sql_max_size_bytes
+      autoPauseDelay                   = var.sql_auto_pause_delay_in_minutes
+      minCapacity                      = var.sql_min_capacity
+      zoneRedundant                    = local.sql_zone_redundant
+      requestedBackupStorageRedundancy = local.sql_backup_storage_redundancy
     }, local.sql_free_limit_properties...)
   }
 }
@@ -157,23 +182,13 @@ resource "azapi_resource" "sql_database" {
 # Pods on Azure CNI overlay SNAT to their node's address, which is in this
 # subnet, so a per-node rule is not needed and none of this depends on the pod
 # CIDR.
+#
+# No AVM module covers this: the SQL server module owns firewall rules but not
+# virtual network rules, so it stays a provider resource.
 resource "azurerm_mssql_virtual_network_rule" "aks" {
   count = local.sql_enabled ? 1 : 0
 
   name      = "aks-subnet"
-  server_id = azurerm_mssql_server.this[0].id
-  subnet_id = azurerm_subnet.aks.id
-}
-
-# Deliberately empty by default. The tenants deploy opens a rule for its own
-# runner address and removes it again in the same run, so operating the database
-# needs no standing exception; these are for the ones you want to keep (an
-# office range, a jump host).
-resource "azurerm_mssql_firewall_rule" "allowed" {
-  for_each = local.sql_enabled ? var.sql_firewall_rules : {}
-
-  name             = each.key
-  server_id        = azurerm_mssql_server.this[0].id
-  start_ip_address = each.value.start_ip_address
-  end_ip_address   = each.value.end_ip_address
+  server_id = local.sql_server_id
+  subnet_id = local.aks_subnet_id
 }

@@ -15,6 +15,12 @@ variable "name_prefix" {
   default     = "onek8s"
 }
 
+variable "enable_telemetry" {
+  description = "Let the Azure Verified Modules this stack is built from report anonymous deployment telemetry to Microsoft (aka.ms/avm/telemetryinfo). It identifies the modules and their versions, never the resources they create. Turn it off in an estate whose deployments are not allowed to reach anything outside the tenant."
+  type        = bool
+  default     = true
+}
+
 variable "kubernetes_version" {
   description = "AKS Kubernetes minor version (null = latest default for the region)."
   type        = string
@@ -22,15 +28,246 @@ variable "kubernetes_version" {
 }
 
 variable "system_node_count" {
-  description = "Number of nodes in the default (system) node pool."
+  description = "Number of nodes in the default (system) node pool. Three is the floor for a pool that has to survive a node being upgraded and a zone being lost at the same time; the prototype runs one."
   type        = number
-  default     = 2
+  default     = 3
 }
 
 variable "system_node_vm_size" {
   description = "VM size for the system node pool."
   type        = string
   default     = "Standard_D4s_v5"
+}
+
+variable "system_node_availability_zones" {
+  description = "Availability zones the system node pool is spread across. Empty places the nodes wherever the region does, which is the only option in a region without zones and the only sensible one on a single node."
+  type        = list(string)
+  default     = ["1", "2", "3"]
+}
+
+variable "system_node_os_sku" {
+  description = "OS image of the system nodes. Ubuntu is what AKS has always defaulted to and what every node-level tool assumes; AzureLinux is Microsoft's own and the smaller attack surface of the two."
+  type        = string
+  default     = "Ubuntu"
+
+  validation {
+    condition     = contains(["AzureLinux", "Ubuntu"], var.system_node_os_sku)
+    error_message = "system_node_os_sku must be AzureLinux or Ubuntu."
+  }
+}
+
+variable "system_node_os_disk_type" {
+  description = "OS disk of the system nodes: Ephemeral (local to the VM, faster, free) or Managed. Ephemeral needs a VM size with a local disk at least as large as the OS disk — a 'd' size such as Standard_D4ds_v5 — which neither the default size nor the burstable ones a lab runs on have."
+  type        = string
+  default     = "Managed"
+
+  validation {
+    condition     = contains(["Ephemeral", "Managed"], var.system_node_os_disk_type)
+    error_message = "system_node_os_disk_type must be Ephemeral or Managed."
+  }
+}
+
+variable "system_node_encryption_at_host_enabled" {
+  description = "Encrypt the node OS and temp disks on the host itself, on top of the platform-managed encryption of the disk at rest. Needs the EncryptionAtHost feature registered on the subscription and a VM size that supports it."
+  type        = bool
+  default     = true
+}
+
+# --- Cluster shape ------------------------------------------------------------
+variable "aks_sku_tier" {
+  description = "AKS control plane tier. Free carries no financially backed API server SLA and cannot report cost analysis; Standard is the floor for a cluster something depends on; Premium adds long-term support for a Kubernetes minor past its community window."
+  type        = string
+  default     = "Standard"
+
+  validation {
+    condition     = contains(["Free", "Standard", "Premium"], var.aks_sku_tier)
+    error_message = "aks_sku_tier must be Free, Standard or Premium."
+  }
+}
+
+variable "aks_local_accounts_enabled" {
+  description = "Keep the cluster's local (certificate) admin accounts. This stack's own Helm provider bootstraps the add-ons with them — External Secrets has to exist before anything can read the vault, and there is no identity to federate as until the cluster exists. Set it false once CI reaches the API server as an Entra principal instead; Entra ID with Azure RBAC is already configured either way."
+  type        = bool
+  default     = true
+}
+
+variable "aks_entra_authentication_enabled" {
+  description = "Integrate the cluster with Entra ID and use Azure RBAC for Kubernetes authorization, so that who may reach the API server is a directory role assignment rather than cluster state. Note that AKS cannot un-integrate a cluster afterwards: this is a one-way change on a cluster that already exists."
+  type        = bool
+  default     = true
+}
+
+variable "aks_admin_group_object_ids" {
+  description = "Entra ID group object IDs whose members are cluster administrators. With Azure RBAC for Kubernetes authorization on, everyone else needs an Azure role assignment on the cluster to reach the API server at all, and access is revoked by removing somebody from a group rather than by touching the cluster."
+  type        = list(string)
+  default     = []
+}
+
+variable "aks_authorized_ip_ranges" {
+  description = "CIDRs allowed to reach the API server. Empty leaves it reachable from anywhere, which is what deploys from hosted CI runners need; an estate with fixed egress addresses lists them here and the API server stops answering everyone else."
+  type        = list(string)
+  default     = []
+}
+
+variable "aks_upgrade_channel" {
+  description = "Which upgrades Azure applies without an apply. 'patch' keeps the cluster on a supported patch of the minor version pinned in kubernetes_version; 'stable'/'rapid' move minors on their own, and 'none' means every upgrade is a deliberate change here."
+  type        = string
+  default     = "patch"
+
+  validation {
+    condition     = contains(["node-image", "none", "patch", "rapid", "stable"], var.aks_upgrade_channel)
+    error_message = "aks_upgrade_channel must be one of node-image, none, patch, rapid or stable."
+  }
+}
+
+variable "aks_node_os_upgrade_channel" {
+  description = "How node OS updates are applied. NodeImage rolls the whole node image on Azure's weekly cadence; SecurityPatch applies security updates without changing the image; None leaves the nodes alone."
+  type        = string
+  default     = "NodeImage"
+
+  validation {
+    condition     = contains(["NodeImage", "None", "SecurityPatch", "Unmanaged"], var.aks_node_os_upgrade_channel)
+    error_message = "aks_node_os_upgrade_channel must be one of NodeImage, None, SecurityPatch or Unmanaged."
+  }
+}
+
+variable "aks_maintenance_window" {
+  description = "When Azure is allowed to apply the upgrades the channels above ask for. Both the cluster upgrade (weekly) and the node OS upgrade (daily) windows start here, so an unattended upgrade never lands in the middle of a business day."
+  type = object({
+    day_of_week    = optional(string, "Sunday")
+    start_time     = optional(string, "01:00")
+    duration_hours = optional(number, 4)
+    utc_offset     = optional(string, "+00:00")
+  })
+  default = {}
+
+  validation {
+    condition     = var.aks_maintenance_window.duration_hours >= 4 && var.aks_maintenance_window.duration_hours <= 24
+    error_message = "aks_maintenance_window.duration_hours must be between 4 and 24."
+  }
+}
+
+variable "aks_azure_policy_enabled" {
+  description = "Install the Azure Policy add-on (Gatekeeper). It is what evaluates the initiative assigned in policy.tf: without it the assignment reports nothing at all. Its three pods do not fit on a single burstable node, which is the only reason an environment turns it off."
+  type        = bool
+  default     = true
+}
+
+variable "aks_image_cleaner_interval_hours" {
+  description = "How often Image Cleaner sweeps unreferenced images off the nodes. A node that has pulled a year of image tags is a year of unpatched userland sitting on disk."
+  type        = number
+  default     = 168
+}
+
+variable "aks_node_resource_group_restriction_level" {
+  description = "Lockdown of the cluster's own node resource group. ReadOnly stops anything but AKS from changing the scale sets, load balancer and disks in it — an edit there is either reverted by the cluster's reconciler or, worse, kept."
+  type        = string
+  default     = "ReadOnly"
+
+  validation {
+    condition     = contains(["ReadOnly", "Unrestricted"], var.aks_node_resource_group_restriction_level)
+    error_message = "aks_node_resource_group_restriction_level must be ReadOnly or Unrestricted."
+  }
+}
+
+# --- Azure-native diagnostics -------------------------------------------------
+variable "enable_log_analytics" {
+  description = "Create a Log Analytics workspace and send the AKS control plane's logs and Key Vault's audit events to it. This is the half of observability no in-cluster collector can see — Grafana Cloud (monitoring.tf) still collects everything that runs inside the cluster."
+  type        = bool
+  default     = true
+}
+
+variable "log_analytics_sku" {
+  description = "Pricing SKU of the Log Analytics workspace."
+  type        = string
+  default     = "PerGB2018"
+}
+
+variable "log_analytics_retention_days" {
+  description = "How long the workspace keeps ingested data. 90 days is the usual floor for an audit trail an investigation might have to reach back into; 30 is the cheapest useful setting."
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.log_analytics_retention_days >= 30 && var.log_analytics_retention_days <= 730
+    error_message = "log_analytics_retention_days must be between 30 and 730."
+  }
+}
+
+variable "log_analytics_daily_quota_gb" {
+  description = "Ceiling on daily ingestion, in GB. Null means no cap, which is the right answer for an audit trail that has to be complete; a number stops ingestion for the rest of the day once it is reached, which caps the bill instead."
+  type        = number
+  default     = null
+}
+
+variable "aks_diagnostic_log_categories" {
+  description = "AKS control plane log categories sent to the workspace. Deliberately not 'allLogs': that adds kube-audit, which is every API call every controller makes — gigabytes a day, and almost entirely duplicated by kube-audit-admin, the same trail with the read verbs dropped."
+  type        = list(string)
+  default = [
+    "kube-apiserver",
+    "kube-audit-admin",
+    "kube-controller-manager",
+    "kube-scheduler",
+    "cluster-autoscaler",
+    "guard",
+  ]
+}
+
+variable "enable_defender" {
+  description = "Turn on Microsoft Defender for Containers on the cluster: runtime threat detection, reported into the same workspace as the control plane's logs. Priced per vCPU per hour, which is why it is a switch rather than always-on."
+  type        = bool
+  default     = true
+
+  validation {
+    condition     = !var.enable_defender || var.enable_log_analytics
+    error_message = "enable_defender needs enable_log_analytics: Defender reports into the Log Analytics workspace, and asking for it without one silently does nothing."
+  }
+}
+
+# --- Key Vault ----------------------------------------------------------------
+variable "key_vault_sku_name" {
+  description = "Key Vault SKU. Premium is HSM-backed; nothing in this platform asks for an HSM key today, but the SKU cannot be lowered afterwards and the difference is cents a month."
+  type        = string
+  default     = "premium"
+
+  validation {
+    condition     = contains(["standard", "premium"], var.key_vault_sku_name)
+    error_message = "key_vault_sku_name must be standard or premium."
+  }
+}
+
+variable "key_vault_purge_protection_enabled" {
+  description = "Make a deleted vault un-purgeable for the retention window: the name stays taken and the secrets stay recoverable. That is the right answer everywhere except a lab that is torn down and rebuilt under the same name."
+  type        = bool
+  default     = true
+}
+
+variable "key_vault_soft_delete_retention_days" {
+  description = "How long a deleted vault (and its secrets) can still be recovered. Between 7 and 90."
+  type        = number
+  default     = 90
+
+  validation {
+    condition     = var.key_vault_soft_delete_retention_days >= 7 && var.key_vault_soft_delete_retention_days <= 90
+    error_message = "key_vault_soft_delete_retention_days must be between 7 and 90."
+  }
+}
+
+variable "key_vault_public_network_access_enabled" {
+  description = "Leave the vault reachable over its public endpoint. External Secrets in the cluster and the deploy running on a hosted CI runner both need it today; turning it off needs a private endpoint and the private DNS this platform does not run yet."
+  type        = bool
+  default     = true
+}
+
+variable "key_vault_network_acls" {
+  description = "Firewall on the vault's public endpoint. Null — the default — means no firewall, which is what a cluster and a CI runner without fixed addresses need. Setting it also puts the Microsoft.KeyVault service endpoint on the AKS subnet, so the cluster can be allowed by subnet rather than by address."
+  type = object({
+    bypass                     = optional(string, "AzureServices")
+    default_action             = optional(string, "Deny")
+    ip_rules                   = optional(list(string), [])
+    virtual_network_subnet_ids = optional(list(string), [])
+  })
+  default = null
 }
 
 variable "vnet_cidr" {
@@ -339,9 +576,32 @@ variable "sql_admin_login_username" {
 }
 
 variable "sql_use_free_limit" {
-  description = "Put the database on the Azure SQL free offer: 100,000 vCore seconds and 32 GB of storage free per month. Up to 10 free databases per subscription, and the first one fixes the region for the rest."
+  description = "Put the database on the Azure SQL free offer: 100,000 vCore seconds and 32 GB of storage free per month. Up to 10 free databases per subscription, and the first one fixes the region for the rest. The offer excludes zone redundancy and geo-redundant backups, so asking for it overrides sql_zone_redundant and sql_backup_storage_redundancy rather than failing the apply."
+  type        = bool
+  default     = false
+}
+
+variable "sql_public_network_access_enabled" {
+  description = "Leave the logical server reachable over its public endpoint. Nothing may actually connect through it unless a firewall rule says so — the cluster gets in through the AKS subnet's service endpoint instead — but the tenants deploy, which bootstraps the database users, has no other route to it today."
   type        = bool
   default     = true
+}
+
+variable "sql_zone_redundant" {
+  description = "Spread the database's replicas across availability zones. Ignored when sql_use_free_limit is set, which excludes it."
+  type        = bool
+  default     = true
+}
+
+variable "sql_backup_storage_redundancy" {
+  description = "Where backups are kept: Geo (paired region), GeoZone, Zone or Local. Ignored when sql_use_free_limit is set, which allows only Local."
+  type        = string
+  default     = "Geo"
+
+  validation {
+    condition     = contains(["Geo", "GeoZone", "Local", "Zone"], var.sql_backup_storage_redundancy)
+    error_message = "sql_backup_storage_redundancy must be one of Geo, GeoZone, Local or Zone."
+  }
 }
 
 variable "sql_free_limit_exhaustion_behavior" {
@@ -467,9 +727,20 @@ variable "portainer_extra_flags" {
 }
 
 variable "enable_baseline_policy" {
-  description = "Assign the AKS pod security baseline policy initiative to the resource group."
+  description = "Assign the AKS pod security baseline policy initiative to the resource group. It is evaluated by the Azure Policy add-on (var.aks_azure_policy_enabled): assigned without it, the initiative reports nothing."
   type        = bool
   default     = true
+}
+
+variable "baseline_policy_effect" {
+  description = "What the baseline initiative does with a non-compliant workload. 'audit' records it; 'deny' refuses to admit it. Start on audit, and move an environment to deny once its own workloads are clean."
+  type        = string
+  default     = "audit"
+
+  validation {
+    condition     = contains(["audit", "deny", "disabled"], var.baseline_policy_effect)
+    error_message = "baseline_policy_effect must be audit, deny or disabled."
+  }
 }
 
 variable "tags" {

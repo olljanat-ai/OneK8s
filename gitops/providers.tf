@@ -45,13 +45,28 @@ data "azurerm_kubernetes_cluster" "hub" {
   resource_group_name = local.hub.resource_group_name
 }
 
+# AKS returns the cluster-local admin certificate under kube_admin_config on an
+# Entra-integrated cluster and under kube_config on one that is not — and the
+# block that does not apply comes back empty rather than absent. Picking the
+# first non-empty one means this stack does not have to know which shape the
+# foundation deployed.
+locals {
+  hub_kubeconfig = try(
+    coalescelist(
+      data.azurerm_kubernetes_cluster.hub[0].kube_admin_config,
+      data.azurerm_kubernetes_cluster.hub[0].kube_config,
+    )[0],
+    null,
+  )
+}
+
 provider "kubernetes" {
   alias = "azure"
 
-  host                   = try(data.azurerm_kubernetes_cluster.hub[0].kube_config[0].host, null)
-  cluster_ca_certificate = try(base64decode(data.azurerm_kubernetes_cluster.hub[0].kube_config[0].cluster_ca_certificate), null)
-  client_certificate     = try(base64decode(data.azurerm_kubernetes_cluster.hub[0].kube_config[0].client_certificate), null)
-  client_key             = try(base64decode(data.azurerm_kubernetes_cluster.hub[0].kube_config[0].client_key), null)
+  host                   = try(local.hub_kubeconfig.host, null)
+  cluster_ca_certificate = try(base64decode(local.hub_kubeconfig.cluster_ca_certificate), null)
+  client_certificate     = try(base64decode(local.hub_kubeconfig.client_certificate), null)
+  client_key             = try(base64decode(local.hub_kubeconfig.client_key), null)
 }
 
 # --- The spokes --------------------------------------------------------------
