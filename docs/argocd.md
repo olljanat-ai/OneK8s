@@ -375,6 +375,25 @@ Secret          argocd-manager-token ────▶ data.config.tlsClientConfig
 Argo CD has no API for adding a cluster: it lists the Secrets in its own
 namespace carrying that label, so writing the Secret *is* the registration.
 
+**A registered spoke has no `argocd` namespace, and that is not a fault.** It
+is the thing to know before diagnosing one, because "there is no Argo CD on
+that cluster" is what a *healthy* spoke looks like — Argo CD runs on the hub
+and reaches the spoke over the API with the token above. Everything that says
+a spoke is registered is either in `kube-system` on the spoke or in `argocd` on
+the hub, so the two questions are asked on two different clusters:
+
+```bash
+# on the spoke: the identity the hub acts as, and what it deployed there
+kubectl -n kube-system get sa argocd-manager
+kubectl -n kube-system get secret argocd-manager-token
+kubectl -n <tenant> get deploy,pod
+
+# on the hub: the registration itself, and the Applications generated from it
+kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=cluster \
+  -L onek8s.io/cloud,onek8s.io/environment
+kubectl -n argocd get applications -L onek8s.io/stage,onek8s.io/cloud
+```
+
 The credential is a ServiceAccount bearer token minted on the spoke, not the
 cloud's admin kubeconfig. Argo CD does support cloud-native credentials
 (`awsAuthConfig`, `execProviderConfig`), but each of them would need that
@@ -474,12 +493,14 @@ hub logs anything, and the spokes are simply gone from Argo CD.
 What that looks like is *nothing at all*: an `ApplicationSet` whose cluster
 generator matches no cluster generates no `Application`, and generating zero of
 something is not an error. The `hello` application's production stage runs on
-the AWS spoke, so a lost registration shows up as an EKS cluster with no Argo CD
-workloads on it and a Kargo promotion failing at `argocd-update` with `unable to
-find Argo CD Application` ([kargo.md](kargo.md), *When a promotion cannot
-sync*).
+the AWS spoke, so a lost registration shows up as an empty tenant namespace on
+EKS — the `hello` Deployment gone, everything else the foundation and the
+tenants stack put there untouched — and a Kargo promotion failing at
+`argocd-update` with `unable to find Argo CD Application`
+([kargo.md](kargo.md), *When a promotion cannot sync*).
 
-Check the hub, not the spoke:
+Check the hub, not the spoke — the spoke has no `argocd` namespace when it is
+healthy either, so its absence there says nothing:
 
 ```bash
 kubectl -n argocd get secret -l argocd.argoproj.io/secret-type=cluster \
