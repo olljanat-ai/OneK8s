@@ -388,6 +388,12 @@ terraform init -backend-config=backend/prototype.hcl
 terraform apply -var-file=envs/prototype.tfvars
 ```
 
+Re-run it whenever **either** side of a registration is rebuilt: the spoke's
+cluster, or the hub's Argo CD extension — a reinstall of that extension takes
+its release namespace and every spoke's cluster Secret with it, and a spoke
+Argo CD does not know about is one its stage's `ApplicationSet` silently
+generates nothing for ([argocd.md](argocd.md), *When a spoke disappears*).
+
 The run needs the hub's foundation (`foundations/azure`, applied with
 `enable_argocd = true`) plus each listed spoke's foundation to exist for this
 environment; it reads both out of the state home. A cloud left out of

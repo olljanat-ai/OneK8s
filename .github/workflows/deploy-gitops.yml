@@ -25,6 +25,16 @@ on:
         default: "prototype"
         type: choice
         options: [prototype, dev, staging, prod]
+      clouds:
+        description: >-
+          Which clouds' credentials the run needs — the spokes in
+          gitops/envs/<environment>.tfvars, plus Azure, which is always
+          required. "all" prepares every cloud and is right for an environment
+          that registers all three.
+        required: false
+        default: "all"
+        type: choice
+        options: [all, azure, aws, gcp, oci]
 
 permissions:
   contents: read
@@ -34,10 +44,18 @@ jobs:
     uses: ./.github/workflows/_terraform-deploy.yml
     with:
       stack: gitops
-      # All clouds at once: the run talks to the hub and to every spoke, so it
-      # needs every cloud's credentials and CLIs, and binds to the
-      # "gitops-<environment>" GitHub environment rather than a per-cloud one.
-      cloud: all
+      # The run talks to the hub and to every spoke, so it needs the
+      # credentials and CLIs of each cloud it registers. That set comes from
+      # var.spokes, which this workflow cannot read — hence an input, defaulting
+      # to "all". Narrow it for an environment that registers fewer clouds:
+      # "all" prepares GCP and OCI too, and the GCP step fails outright when no
+      # service-account key is configured, which would block a re-registration
+      # that has nothing to do with GCP.
+      #
+      # Azure is prepared whatever is chosen: it hosts both the hub and the
+      # state home. The job binds to the "gitops-<environment>" GitHub
+      # environment rather than a per-cloud one either way.
+      cloud: ${{ inputs.clouds || 'all' }}
       environment: ${{ inputs.environment || 'prototype' }}
       gh_environment: gitops-${{ inputs.environment || 'prototype' }}
     secrets: inherit

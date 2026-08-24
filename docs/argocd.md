@@ -301,7 +301,14 @@ first apply to sit in `Pending` for a few minutes while a node is added.
 
 ## AKS as the hub of a hub-spoke topology
 
-Argo CD runs on AKS and nowhere else. The other clouds' clusters are
+Argo CD runs on AKS and nowhere else, and Kargo runs beside it on the same
+cluster — that pairing is a decision with a reason, recorded in
+[ADR-0002](adr/0002-one-argo-cd-on-the-hub.md): Kargo's promotion step
+addresses an `Application` by name and namespace through its own Kubernetes
+client, so Kargo and the Application objects have to share a cluster. The
+workloads do not, which is the whole point of a spoke.
+
+The other clouds' clusters are
 registered with it as **spokes**, so there is one delivery plane for all four
 clouds rather than one Argo CD per cloud — the same "one stack, all clouds"
 shape the tenants layer already has, and one place to see what is deployed
