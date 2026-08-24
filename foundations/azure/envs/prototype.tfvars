@@ -89,6 +89,25 @@ argocd_rbac_group_roles = {
   "4301eb89-fc3d-4836-95d1-41b497f102ad" = "role:readonly"
 }
 
+# One setting this environment's extension carries that the stack no longer
+# generates: the token-only "ci" account, from the days when promoting to
+# production meant a workflow calling `argocd app sync` (docs/kargo.md).
+# argocd_api_accounts is empty now — but an Azure extension update cannot
+# remove a configuration setting, it merges — so the key stayed on the cluster,
+# every plan since has proposed the same removal, and every apply has been a
+# Helm upgrade of Argo CD that changed nothing and restarted the delivery
+# plane. Declaring it here is what ends that.
+#
+# The account keeps the one capability it ever had, "apiKey", and no role: with
+# no "g, ci, ..." line in the policy it falls through to
+# argocd_rbac_default_role, so a token minted for it before can read and
+# nothing else. To be rid of it for real the extension has to be reinstalled —
+# docs/argocd.md, "Removing a configuration setting" — and this block dropped
+# in the same change.
+argocd_retained_configuration_settings = {
+  "configs.cm.accounts\\.ci" = "apiKey"
+}
+
 # Grafana Cloud. This environment ships to the one stack every cloud writes to,
 # whose endpoints are the defaults in modules/platform-observability, and
 # enable_observability defaults to true — so there is nothing to set here. The

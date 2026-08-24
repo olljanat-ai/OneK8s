@@ -368,6 +368,11 @@ answer, and the fix is a `gitops` apply rather than anything here — step 5 of
 labels come from `modules/argocd-spoke`, so a Secret registered by hand instead
 is invisible to the selector however correct its contents are.
 
+A spoke that *used* to be there and is not any more usually means the Argo CD
+extension was reinstalled: the cluster Secrets live in the release namespace,
+so they go when it does. [argocd.md](argocd.md), *When a spoke disappears*, has
+that story and the one command that tells the two cases apart.
+
 Once the spoke is registered the ApplicationSet generates the Application, Argo
 CD syncs it to the commit the failed promotion already pushed, and production
 runs the promoted build. The `Promotion` stays `Failed` — that record is
