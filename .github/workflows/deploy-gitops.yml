@@ -34,7 +34,7 @@ on:
         required: false
         default: "all"
         type: choice
-        options: [all, azure, aws, gcp, oci]
+        options: [all, azure, aws] # , gcp, oci]
 
 permissions:
   contents: read
