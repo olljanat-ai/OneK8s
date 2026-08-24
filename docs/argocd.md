@@ -487,6 +487,17 @@ it in a one-element `list` generator instead, which is what the `hello`
 application's staging stage does in
 [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd/blob/main/argocd/templates/applicationsets.yaml).
 
+One rule when either of those sits inside a `matrix`, which is how a stage
+combines *what it runs* with *where it runs*: a generator may only refer to
+parameters produced by a generator **before** it. The controller interpolates
+every generator after the first with the first one's parameters before running
+it, so a `{{ .name }}` written into the cluster generator's own `values` is
+resolved against the wrong pass — and with `missingkey=error` that is not a
+late-resolved placeholder but a generator that produces nothing at all. Take the
+parameter in `spec.template`, where the halves have been merged.
+[kargo.md](kargo.md), *When a promotion cannot sync*, has what that costs and
+how to recognise it.
+
 ### When a spoke disappears
 
 Registration is a Secret in the hub's `argocd` namespace, and that namespace
@@ -503,8 +514,13 @@ something is not an error. The `hello` application's production stage runs on
 the AWS spoke, so a lost registration shows up as an empty tenant namespace on
 EKS — the `hello` Deployment gone, everything else the foundation and the
 tenants stack put there untouched — and a Kargo promotion failing at
-`argocd-update` with `unable to find Argo CD Application`
-([kargo.md](kargo.md), *When a promotion cannot sync*).
+`argocd-update` with `unable to find Argo CD Application`.
+
+An ApplicationSet whose generator *failed* leaves exactly the same absence
+behind, so read `status.conditions` on it before concluding that the spoke is
+gone: an `ErrorOccurred` there is a delivery-plane problem that no amount of
+registering will fix. [kargo.md](kargo.md), *When a promotion cannot sync*,
+tells the two apart.
 
 Check the hub, not the spoke — the spoke has no `argocd` namespace when it is
 healthy either, so its absence there says nothing:
