@@ -479,6 +479,31 @@ Terraform:
 `platform_apps = { enabled = false }` registers spokes without deploying
 anything. Full walkthrough: [hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md).
 
+### The same application, delivered by Flux
+
+AKS and EKS also run Flux, installed by their own foundations rather than by
+the `gitops/` stack — there is no hub on that plane and nothing to register.
+Each cluster reconciles its own directory of
+[OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) and deploys the
+same `hello` chart for `team-beta`:
+
+| Cluster | Host | What decides the build |
+|---|---|---|
+| AKS | https://azure-hello2.onek8s.lol | a commit in `clusters/azure/hello2-release.yaml` |
+| EKS | https://aws-hello2.onek8s.lol | a commit in `clusters/aws/hello2-release.yaml` |
+
+It needs the same three things as above, for `team-beta` this time: the public
+image, an A record per host (`azure-hello2`, `aws-hello2`), and the tenant's
+test secret — which means running the **Renew Certificate** workflow a second
+time with `tenant: team-beta`, since it writes one tenant's secret per run.
+
+Nothing here is ordered against the `gitops/` stack: Flux is part of the
+foundation, so it is installed before `tenants/` creates the namespace it
+deploys into, fails, retries, and comes up on its own once the tenant exists.
+`enable_fluxcd = false` on a foundation opts a cluster out.
+[fluxcd.md](fluxcd.md) is the comparison of the two planes and the operational
+commands for this one.
+
 ### The Azure SQL example
 
 The same run also deploys **db-hello** to the hub — and only to the hub —

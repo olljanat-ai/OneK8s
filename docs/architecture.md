@@ -5,7 +5,9 @@
 OneK8s provisions **cluster + secret-backend pairs** ("foundations") on
 Azure, AWS, GCP and OCI, onboards **tenants** onto those clusters with hard,
 cloud-enforced secret isolation, and delivers to all four from **one Argo CD**
-on the Azure cluster.
+on the Azure cluster — and, on AKS and EKS, from **a second, independent Flux
+per cluster** installed beside it so the two shapes can be compared while
+running (see *GitOps, again* below).
 
 ```
 ┌───── per environment: foundations per cloud, one tenants stack, one gitops stack ─────┐
@@ -378,6 +380,38 @@ promotion makes ([kargo.md](kargo.md)). One image, one chart, two clusters, and
 the only cloud-specific thing in it is the *name* of the secret it asks for.
 [hello-app.md](https://github.com/olljanat-ai/OneK8s-hello/blob/main/docs/hello-app.md).
 
+## GitOps, again: Flux per cluster, beside the hub
+
+AKS and EKS also run **Flux**, and it is arranged as the opposite of the above
+on purpose. There is no hub on that plane and nothing registered between the
+clusters: `modules/fluxcd` installs Flux from each foundation, and each cluster
+reconciles its own directory of
+[OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) —
+`clusters/azure`, `clusters/aws` — knowing nothing about the other.
+
+```
+Argo CD                                Flux
+one hub (AKS) + registered spokes      one install per cluster, nothing registered
+ApplicationSet fans one template out   each cluster reads its own path
+Kargo promotes between clusters        a person commits, per cluster
+hub down -> nothing deploys anywhere   one cluster stops; the other does not
+```
+
+The bootstrap is the same size as the Argo CD one and does the same job: three
+Terraform resources — the controllers, a `cluster-vars` ConfigMap of this
+cluster's own facts, and a `GitRepository` + `Kustomization` pointing at the
+repository — after which the cluster is Git. The ConfigMap is the counterpart
+of the Helm values `gitops/root-app.tf` hands the delivery-plane chart: it is
+what lets both clusters reconcile one shared application definition in which
+nothing names a cloud, through Flux's `postBuild` substitution.
+
+Flux delivers the same `hello` chart to a **different tenant** (`team-beta`) on
+`<cloud>-hello2.onek8s.lol`, so the two planes never manage the same object and
+the difference on a cluster is the delivery plane and nothing else. Both are
+installed on purpose and both stay: what is being compared, and what each side
+costs, is [fluxcd.md](fluxcd.md) and
+[ADR-0003](adr/0003-flux-per-cluster-beside-the-hub.md).
+
 ## Secret isolation (the core security invariant)
 
 A tenant reaches secrets only through this chain, and every link is scoped
@@ -574,6 +608,18 @@ The agents get `cluster-admin` on their clusters — wider than Argo CD's
   the deploy identity directory write permission, which is a larger grant
   than the platform otherwise needs; the cost is that nothing notices when
   one of those objects is deleted or renamed.
+- The Flux plane on AKS and EKS has **no tenant boundary**: its controllers
+  hold `cluster-admin`, where the Argo CD plane confines its Applications to
+  two repositories, one namespace and no cluster-scoped resources through the
+  `onek8s-platform` AppProject. Anything committed in OneK8s-fluxcd should be
+  read with that in mind, and closing it needs a tenant ServiceAccount with
+  deploy rights that `modules/tenant-namespace` does not grant
+  ([fluxcd.md](fluxcd.md), *Known gaps*).
+- Two delivery planes is two of everything to upgrade and watch: Argo CD on
+  AKS is Microsoft's to patch, both Flux installs are ours, pinned by chart
+  version per foundation. Running both is a deliberate, reversible experiment
+  ([ADR-0003](adr/0003-flux-per-cluster-beside-the-hub.md)) rather than the
+  end state — `enable_fluxcd = false` is the way back.
 - The AKS cluster is the only one running Argo CD, which makes it the hub for
   the whole platform: losing it stops delivery on all four clouds. Workloads
   keep running — Argo CD holds no state a spoke needs at runtime — but nothing
