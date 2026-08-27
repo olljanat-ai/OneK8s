@@ -69,6 +69,16 @@ locals {
     "onek8s.io/cloud"              = var.cloud
   }, var.labels)
 
+  # The flux2-sync chart stamps its own app.kubernetes.io/{instance,managed-by,
+  # part-of} and helm.sh/chart labels on the two objects it renders and then
+  # appends whatever it is given, verbatim. A key that collides is emitted
+  # twice, and a manifest with a duplicate mapping key is not a manifest the
+  # API server will take — so only the platform's own labels are handed to it.
+  sync_labels = {
+    for k, v in local.labels : k => v
+    if !startswith(k, "app.kubernetes.io/") && !startswith(k, "helm.sh/")
+  }
+
   # Requests only, and the same on every controller. Limits are left off on
   # purpose: a throttled kustomize-controller is a delivery plane that stops
   # reconciling under exactly the load that made it busy.
@@ -167,7 +177,7 @@ resource "helm_release" "sync" {
 
   values = [yamlencode({
     gitRepository = {
-      labels = local.labels
+      labels = local.sync_labels
       spec = {
         url      = var.repo_url
         interval = var.source_interval
@@ -183,7 +193,7 @@ resource "helm_release" "sync" {
     }
 
     kustomization = {
-      labels = local.labels
+      labels = local.sync_labels
       spec = {
         path     = "./${local.cluster_path}"
         interval = var.sync_interval
