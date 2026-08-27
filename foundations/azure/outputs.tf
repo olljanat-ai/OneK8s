@@ -139,7 +139,9 @@ output "environment" {
 # All null when enable_fluxcd is false. Nothing reads these — the Flux plane is
 # per cluster and has no equivalent of the gitops stack to consume them — so
 # they exist to answer "what is this cluster reconciling, and from where"
-# without a kubeconfig.
+# without a kubeconfig. The shapes match foundations/aws exactly, on purpose:
+# the installs differ (an Azure extension here, the community chart there) and
+# what they deliver must not.
 output "fluxcd_namespace" {
   description = "Namespace Flux runs in on this cluster (null when Flux is disabled)."
   value       = var.enable_fluxcd ? module.fluxcd[0].namespace : null
@@ -163,4 +165,14 @@ output "fluxcd_tenant" {
 output "fluxcd_cluster_vars" {
   description = "The facts this cluster hands to every manifest in the delivery-plane repository through Flux's postBuild substitution — the Terraform half of OneK8s-fluxcd's platform-contract.yaml (null when Flux is disabled). Names, a domain and a key prefix: none of it is a secret."
   value       = var.enable_fluxcd ? module.fluxcd[0].cluster_vars : null
+}
+
+output "fluxcd_install" {
+  description = "How Flux got onto this cluster (null when Flux is disabled). The Azure-managed extension here; the community chart on the clouds that have no such extension to take."
+  value       = var.enable_fluxcd ? module.fluxcd[0].install : null
+}
+
+output "fluxcd_multi_tenancy_enforced" {
+  description = "Whether the Flux extension's multi-tenancy is enforced on this cluster (null when Flux is disabled): no cross-namespace source references, and the controllers deploy as the flux-applier ServiceAccount rather than as themselves."
+  value       = var.enable_fluxcd ? module.fluxcd[0].multi_tenancy_enforced : null
 }

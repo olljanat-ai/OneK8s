@@ -112,6 +112,12 @@ variable "controller_resources" {
   default = {}
 }
 
+variable "applier_service_account" {
+  description = "ServiceAccount the delivery plane's Kustomizations and HelmReleases deploy as. It is created here with cluster-admin to match the account Azure's Flux extension creates and impersonates on AKS, so a manifest naming it means the same thing on either install."
+  type        = string
+  default     = "flux-applier"
+}
+
 variable "extra_cluster_vars" {
   description = <<-EOT
     Extra entries for the "cluster-vars" ConfigMap — the facts this cluster

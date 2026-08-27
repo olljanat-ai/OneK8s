@@ -1,9 +1,15 @@
 # Flux on the AKS cluster — the platform's second delivery plane, running
-# beside Argo CD rather than instead of it.
+# beside Argo CD rather than instead of it, and taken as the Azure-managed
+# cluster extension for the same reasons Argo CD is (argocd.tf): Azure owns the
+# manifests, the upgrades and the CVE patching, the install is visible in the
+# portal's GitOps blade, and Azure Policy can audit it. AKS is what the real
+# environments run; the other clouds run the community chart
+# (modules/fluxcd) and are where the platform proves the delivery plane is not
+# tied to Azure.
 #
-# This cluster therefore hosts both, and that is the experiment: the same
-# application, from the same chart in the same repository, delivered two ways
-# on one cluster and published on two hosts.
+# This cluster therefore hosts both planes, and that is the experiment: the
+# same application, from the same chart in the same repository, delivered two
+# ways on one cluster and published on two hosts.
 #
 #   azure-hello.onek8s.lol    Argo CD, hub-and-spoke, tenant team-alpha,
 #                             the build Kargo promoted into staging
@@ -17,20 +23,21 @@
 # between them: each reads OneK8s-fluxcd itself, and neither knows the other
 # exists. docs/fluxcd.md has the full comparison.
 #
-# Argo CD comes from the Microsoft-offered AKS extension (argocd.tf) while this
-# is a plain Helm install of the community chart, and deliberately so: EKS has
-# no such extension, and an Azure-managed Flux on one cluster against a Helm
-# Flux on the other would make every difference between the two ambiguous.
+# Unlike the Argo CD extension, this one enforces Flux's multi-tenancy by
+# default: an application's Flux objects all live in the configuration's
+# namespace and the workload is placed in the tenant's with targetNamespace.
+# The delivery-plane repository is written that way, and it costs the other
+# clusters nothing — which is why the default is kept rather than opted out of.
 module "fluxcd" {
   count  = var.enable_fluxcd ? 1 : 0
-  source = "../../modules/fluxcd"
+  source = "../../modules/fluxcd-aks"
 
   providers = {
-    helm       = helm
+    azurerm    = azurerm
     kubernetes = kubernetes
   }
 
-  cloud       = "azure"
+  cluster_id  = azurerm_kubernetes_cluster.this.id
   environment = var.environment
 
   repo_url = var.fluxcd_repo_url
@@ -38,8 +45,9 @@ module "fluxcd" {
   tenant   = var.fluxcd_tenant
   domain   = var.fluxcd_domain
 
-  flux_chart_version      = var.fluxcd_chart_version
-  flux_sync_chart_version = var.fluxcd_sync_chart_version
+  release_train         = var.fluxcd_release_train
+  extension_version     = var.fluxcd_extension_version
+  enforce_multi_tenancy = var.fluxcd_enforce_multi_tenancy
 
   # Nothing here depends on External Secrets, but the applications Flux
   # delivers do — they read the tenant's test secret through the namespaced

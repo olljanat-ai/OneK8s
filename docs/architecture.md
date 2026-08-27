@@ -384,7 +384,9 @@ the only cloud-specific thing in it is the *name* of the secret it asks for.
 
 AKS and EKS also run **Flux**, and it is arranged as the opposite of the above
 on purpose. There is no hub on that plane and nothing registered between the
-clusters: `modules/fluxcd` installs Flux from each foundation, and each cluster
+clusters: each foundation installs Flux on its own cluster — the Azure-managed
+`microsoft.flux` extension on AKS (`modules/fluxcd-aks`), the community chart
+where no such extension exists (`modules/fluxcd`) — and each cluster
 reconciles its own directory of
 [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) —
 `clusters/azure`, `clusters/aws` — knowing nothing about the other.
@@ -397,13 +399,23 @@ Kargo promotes between clusters        a person commits, per cluster
 hub down -> nothing deploys anywhere   one cluster stops; the other does not
 ```
 
-The bootstrap is the same size as the Argo CD one and does the same job: three
-Terraform resources — the controllers, a `cluster-vars` ConfigMap of this
-cluster's own facts, and a `GitRepository` + `Kustomization` pointing at the
-repository — after which the cluster is Git. The ConfigMap is the counterpart
-of the Helm values `gitops/root-app.tf` hands the delivery-plane chart: it is
-what lets both clusters reconcile one shared application definition in which
-nothing names a cloud, through Flux's `postBuild` substitution.
+The bootstrap is the same size as the Argo CD one and does the same job on both
+installs: the controllers, a `cluster-vars` ConfigMap of this cluster's own
+facts, and a `GitRepository` + `Kustomization` pointing at the repository —
+after which the cluster is Git. The ConfigMap is the counterpart of the Helm
+values `gitops/root-app.tf` hands the delivery-plane chart, and it comes from
+one module (`modules/fluxcd-cluster-vars`) that both installs call: two copies
+would be two contracts, and only one of them would be the one the repository's
+CI checks. That is what lets both clusters reconcile one shared application
+definition in which nothing names a cloud.
+
+The installs differ in one visible way. Azure's extension enforces Flux's
+multi-tenancy, so an application's Flux objects live in `flux-system`, the
+workload is placed in the tenant's namespace with `targetNamespace`, and
+everything deploys as the `flux-applier` account the extension creates —
+`modules/fluxcd` creates one of the same name so the manifests are unchanged on
+the other clouds. AKS is what the real environments run and is configured as
+one; the other clouds are where "cloud-agnostic" stays testable.
 
 Flux delivers the same `hello` chart to a **different tenant** (`team-beta`) on
 `<cloud>-hello2.onek8s.lol`, so the two planes never manage the same object and

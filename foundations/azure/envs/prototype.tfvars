@@ -136,5 +136,8 @@ argocd_retained_configuration_settings = {
 # secret is written by the Renew Certificate workflow run with tenant:
 # team-beta. The A record for azure-hello2 is pointed at the ingress by hand,
 # like every other host. See docs/fluxcd.md.
+# Taken as the Azure-managed microsoft.flux extension, on the Stable train with
+# no version pinned — so Azure patches Flux here the way it patches Argo CD.
+# EKS installs the same delivery plane from the community chart.
 enable_fluxcd = true
 fluxcd_tenant = "team-beta"

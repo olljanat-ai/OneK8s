@@ -102,3 +102,13 @@ output "fluxcd_cluster_vars" {
   description = "The facts this cluster hands to every manifest in the delivery-plane repository through Flux's postBuild substitution — the Terraform half of OneK8s-fluxcd's platform-contract.yaml (null when Flux is disabled). Names, a domain and a key prefix: none of it is a secret."
   value       = var.enable_fluxcd ? module.fluxcd[0].cluster_vars : null
 }
+
+output "fluxcd_install" {
+  description = "How Flux got onto this cluster (null when Flux is disabled): the community chart, where AKS takes the Azure-managed extension. Same delivery plane, same repository, two installs — which is what this cluster is here to prove."
+  value       = var.enable_fluxcd ? module.fluxcd[0].install : null
+}
+
+output "fluxcd_applier_service_account" {
+  description = "ServiceAccount the delivery plane deploys as on this cluster (null when Flux is disabled). Created to match the one Azure's Flux extension creates on AKS, so one manifest naming it works on either install."
+  value       = var.enable_fluxcd ? module.fluxcd[0].applier_service_account : null
+}

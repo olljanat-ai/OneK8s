@@ -482,8 +482,11 @@ anything. Full walkthrough: [hello-app.md](https://github.com/olljanat-ai/OneK8s
 ### The same application, delivered by Flux
 
 AKS and EKS also run Flux, installed by their own foundations rather than by
-the `gitops/` stack — there is no hub on that plane and nothing to register.
-Each cluster reconciles its own directory of
+the `gitops/` stack — there is no hub on that plane and nothing to register. On
+AKS it is the Azure-managed `microsoft.flux` extension (so it appears in the
+portal's GitOps blade, and `az k8s-configuration flux show` answers "is it
+syncing" without a kubeconfig); on EKS it is the community chart. Each cluster
+reconciles its own directory of
 [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) and deploys the
 same `hello` chart for `team-beta`:
 

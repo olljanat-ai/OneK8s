@@ -1,66 +1,29 @@
-# Flux, installed on ONE cluster, answering to nothing but Git.
+# Flux on one cluster, from the community chart — the portable half of the
+# platform's second delivery plane.
 #
-# This is the second delivery plane of the platform, and it is deliberately not
-# shaped like the first. Argo CD is a hub: it runs on AKS, every other cluster
-# is registered with it as a spoke (modules/argocd-spoke), and one
-# ApplicationSet on the hub fans an application out over all of them. Flux here
-# is the opposite arrangement — every cluster runs its own, reads the
-# delivery-plane repository itself, and knows about no other cluster:
+# AKS takes Flux as the Azure-managed extension (modules/fluxcd-aks), because
+# that is what the real environments run and Azure patches it. This module is
+# the same delivery plane for every cluster that has no such extension to take:
+# EKS today, GKE and OKE when they are registered. Both installs read the SAME
+# repository, are told the same things about their cluster
+# (modules/fluxcd-cluster-vars) and reconcile one shared application
+# definition — which is the point of having a portable half at all. If an
+# application only works on AKS, the platform has stopped being cloud-agnostic
+# and this module is where that shows up.
 #
-#   Argo CD                                Flux (this module)
-#   ───────────────────────────────        ─────────────────────────────────
-#   one hub (AKS) + spoke Secrets          one install per cluster, no Secrets
-#   ApplicationSet fans out                each cluster reads its own path
-#   Kargo promotes between clusters        a person commits, per cluster
-#   hub down = nothing deploys anywhere    one cluster stops; the rest do not
+#   helm_release "flux"       source-, kustomize- and helm-controller (+ CRDs)
+#   flux-applier              the identity the delivery plane deploys as, and
+#                             the counterpart of the ServiceAccount Azure's
+#                             extension creates and impersonates with
+#   cluster-vars (ConfigMap)  what this cluster tells the delivery plane about
+#                             itself
+#   helm_release "sync"       GitRepository -> the repository
+#                             Kustomization -> clusters/<cloud>
 #
-# Both planes deploy the same chart from the same applications repository, to
-# the same clusters, so the difference on the cluster is the delivery plane and
-# nothing else. See docs/fluxcd.md.
-#
-# What this module installs is the bootstrap and only the bootstrap — the exact
-# counterpart of the single root Application that gitops/root-app.tf plants on
-# the Argo CD hub:
-#
-#   helm_release "flux"          the controllers and their CRDs
-#   ConfigMap    cluster-vars    this cluster's own facts, for postBuild
-#                                substitution in the delivery-plane repository
-#   helm_release "sync"          GitRepository -> the repository
-#                                Kustomization -> clusters/<cloud>
-#
-# After the first apply, what this cluster runs is a commit in OneK8s-fluxcd.
+# The topology is the other half of the experiment: no hub, nothing registered
+# between clusters, every cluster reading Git for itself. See docs/fluxcd.md.
 locals {
   cluster_path = coalesce(var.cluster_path, "clusters/${var.cloud}")
-
-  # How THIS cloud's secret backend spells a tenant's slice of it, resolved
-  # here and handed over finished so that no manifest in the delivery-plane
-  # repository branches on the cloud it landed on. It is the same resolution
-  # the Argo CD side does in OneK8s-argocd's values.yaml, and the reason it is
-  # needed at all: Key Vault names are flat because every environment has its
-  # own vault, while Secrets Manager is account-wide, so a tenant's IAM role
-  # there is restricted to "<environment>/<tenant>/*"
-  # (modules/tenant-namespace/aws/main.tf).
-  secret_key_prefix = var.cloud == "aws" ? "${var.environment}/${var.tenant}/" : "${var.tenant}-"
-
-  # The variables every Flux Kustomization in the delivery-plane repository
-  # substitutes from. They are the cluster's own answer to "where did this
-  # land", which is exactly why they are not committed there: they differ per
-  # cluster and per environment, while one copy of an application definition
-  # serves all of them.
-  #
-  # The repository declares what it expects in platform-contract.yaml, and its
-  # CI renders every cluster against those declarations — so a key dropped here
-  # fails a pull request there rather than stopping a reconciliation nobody is
-  # watching.
-  cluster_vars = merge({
-    CLOUD             = var.cloud
-    ENVIRONMENT       = var.environment
-    TENANT            = var.tenant
-    DOMAIN            = var.domain
-    SECRET_KEY_PREFIX = local.secret_key_prefix
-    APPS_REPO_URL     = var.apps_repo_url
-    APPS_BRANCH       = var.apps_branch
-  }, var.extra_cluster_vars)
 
   labels = merge({
     "app.kubernetes.io/managed-by" = "terraform"
@@ -127,32 +90,73 @@ resource "helm_release" "flux" {
       create = var.enable_image_automation
     })
 
-    # Cluster-wide, which is what lets one Kustomization in flux-system deploy
-    # into a tenant's namespace. The narrower alternative — the chart's
-    # multi-tenancy lockdown, where every Kustomization must name a
-    # ServiceAccount in the namespace it deploys to — needs a tenant
-    # ServiceAccount with deploy rights that modules/tenant-namespace does not
-    # grant today. It is the one boundary the Argo CD side has and this one
-    # does not, and it is written down as such in docs/fluxcd.md rather than
-    # left to be discovered.
     watchAllNamespaces = true
   }, var.extra_values))]
 }
 
-# --- This cluster's facts ----------------------------------------------------
-# Written by Terraform, read by every Kustomization in the delivery-plane
-# repository (spec.postBuild.substituteFrom). The parallel on the Argo CD side
-# is gitops/root-app.tf handing the delivery-plane chart its Helm values:
-# environment, repositories, domain and tenant come from the platform, not from
-# a per-environment copy of the manifests.
-resource "kubernetes_config_map_v1" "cluster_vars" {
+# --- The identity the delivery plane deploys as -------------------------------
+# Azure's Flux extension creates a "flux-applier" ServiceAccount in the
+# configuration's namespace and has the controllers impersonate it; with the
+# configuration at cluster scope it can reach a tenant's namespace. Nothing in
+# the community chart does that, so the manifests in the delivery-plane
+# repository would name a ServiceAccount that exists on AKS and nowhere else.
+#
+# One of the same name is created here instead, so a Kustomization or
+# HelmRelease that says "serviceAccountName: flux-applier" means the same thing
+# on both installs and the shared definition stays shared.
+#
+# It is cluster-admin, matching the AKS configuration's "cluster" scope — and
+# it is where the tenant boundary would be narrowed if this plane ever needs
+# one: a per-tenant applier, bound in that tenant's namespace only, with a
+# namespace-scoped configuration to match (docs/fluxcd.md, Known gaps).
+resource "kubernetes_service_account_v1" "applier" {
   metadata {
-    name      = "cluster-vars"
+    name      = var.applier_service_account
     namespace = var.namespace
     labels    = local.labels
   }
 
-  data = local.cluster_vars
+  depends_on = [helm_release.flux]
+}
+
+resource "kubernetes_cluster_role_binding_v1" "applier" {
+  metadata {
+    name   = "onek8s-${var.applier_service_account}-${var.namespace}"
+    labels = local.labels
+  }
+
+  role_ref {
+    api_group = "rbac.authorization.k8s.io"
+    kind      = "ClusterRole"
+    name      = "cluster-admin"
+  }
+
+  subject {
+    kind      = "ServiceAccount"
+    name      = kubernetes_service_account_v1.applier.metadata[0].name
+    namespace = var.namespace
+  }
+}
+
+# --- This cluster's facts ----------------------------------------------------
+# The one thing that must be identical on both installs, so it is one module
+# rather than two copies: see modules/fluxcd-cluster-vars.
+module "cluster_vars" {
+  source = "../fluxcd-cluster-vars"
+
+  cloud       = var.cloud
+  environment = var.environment
+  tenant      = var.tenant
+  domain      = var.domain
+  namespace   = var.namespace
+
+  cluster_path            = local.cluster_path
+  apps_repo_url           = var.apps_repo_url
+  apps_branch             = var.apps_branch
+  applier_service_account = var.applier_service_account
+
+  extra_cluster_vars = var.extra_cluster_vars
+  labels             = local.labels
 
   # The namespace is the chart's.
   depends_on = [helm_release.flux]
@@ -160,8 +164,10 @@ resource "kubernetes_config_map_v1" "cluster_vars" {
 
 # --- The bootstrap ------------------------------------------------------------
 # Two objects: the repository, and the one path in it this cluster reconciles.
-# Named "flux-system" because that is the name Flux's own bootstrap uses and
-# what the delivery-plane repository's Kustomizations name as their sourceRef.
+# Named "flux-system" because that is the name Flux's own bootstrap uses, the
+# name the delivery-plane repository's Kustomizations give as their sourceRef —
+# and the name Azure gives the GitRepository its Flux configuration creates, so
+# one manifest serves both installs.
 #
 # A Helm release rather than kubernetes_manifest, and that is not a style
 # choice: GitRepository and Kustomization are CRDs installed by the release
@@ -209,12 +215,14 @@ resource "helm_release" "sync" {
     }
   })]
 
-  # The CRDs, then the variables, then the objects that need both. Without the
-  # ConfigMap first, the first reconcile of an application's Kustomization
-  # fails on a variable that is about to exist — Flux would retry it, but a
-  # cold apply should not leave an error behind for somebody to interpret.
+  # The CRDs, then the identity and the variables, then the objects that need
+  # all three. Without the ConfigMap first, the first reconcile of an
+  # application's Kustomization fails on a variable that is about to exist —
+  # Flux would retry it, but a cold apply should not leave an error behind for
+  # somebody to interpret.
   depends_on = [
     helm_release.flux,
-    kubernetes_config_map_v1.cluster_vars,
+    kubernetes_cluster_role_binding_v1.applier,
+    module.cluster_vars,
   ]
 }

@@ -30,8 +30,8 @@ anything cloud- or plane-specific.
 **Flux is installed on AKS and on EKS as two independent per-cluster
 delivery planes, alongside the Argo CD hub, and both planes stay.**
 
-- Each cluster runs its own Flux (`modules/fluxcd`, from `foundations/<cloud>`)
-  and reconciles its own directory of
+- Each cluster runs its own Flux, installed from its own foundation, and
+  reconciles its own directory of
   [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) —
   `clusters/azure`, `clusters/aws`. **Nothing is registered between clusters**:
   no hub, no cluster Secret, no credential pointing from one cluster at
@@ -39,6 +39,13 @@ delivery planes, alongside the Argo CD hub, and both planes stay.**
 - Flux delivers the same `hello` chart to a **different tenant**, `team-beta`,
   on hosts `<cloud>-hello2.onek8s.lol`. Argo CD keeps `team-alpha` and
   `<cloud>-hello.onek8s.lol`.
+- **The install is per cloud, the delivery plane is not.** AKS takes the
+  Azure-managed `microsoft.flux` extension (`modules/fluxcd-aks`); the clouds
+  that have no such extension install the same plane from the community chart
+  (`modules/fluxcd`). Both are handed their cluster's facts by ONE module
+  (`modules/fluxcd-cluster-vars`), produce a `GitRepository` and a
+  `Kustomization` under the same names, and reconcile the same shared
+  application definition.
 - **ADR-0002 is unchanged.** Argo CD remains the hub, Kargo remains the
   promotion engine, and the release path for `team-alpha` is untouched.
 - The two planes never manage the same object. They overlap only in that they
@@ -53,6 +60,14 @@ delivery planes, alongside the Argo CD hub, and both planes stay.**
 - **Independence is best measured with a tool built for it.** A second Argo CD
   per cluster would re-derive ADR-0002 rather than test it, and would carry the
   hub's assumptions into the experiment.
+- **AKS is the destination, the other clouds are the proof.** The real
+  environments this platform is a starting point for are AKS. Flux there should
+  therefore be what an AKS environment would actually run — a Microsoft-managed
+  extension Azure patches, visible in the portal's GitOps blade and auditable by
+  Azure Policy — for the same reasons `foundations/azure` takes Argo CD as an
+  extension. The community-chart install on the other clouds is what keeps the
+  claim of cloud-agnosticism testable rather than asserted: if an application
+  only works under the extension, that is a finding, and it surfaces on EKS.
 - **Different tenants, so neither plane can quietly heal or fight the other.**
   Two controllers with `prune` and `selfHeal` on one namespace would produce a
   loop that teaches nothing. `team-beta` already existed on both clusters.
@@ -67,15 +82,29 @@ delivery planes, alongside the Argo CD hub, and both planes stay.**
 
 ## Consequences
 
-- **Two delivery planes to operate, secure and upgrade.** Argo CD on AKS is a
-  Microsoft-managed extension; both Flux installs are ours, pinned by chart
-  version in `foundations/<cloud>/variables.tf`.
-- **The Flux plane has no tenant boundary today.** Its controllers hold
-  `cluster-admin`, where the Argo CD plane confines its Applications to two
-  repositories, one namespace and no cluster-scoped resources through the
-  `onek8s-platform` `AppProject`. This is the sharpest known gap and it is
-  recorded in [fluxcd.md](../fluxcd.md); anything committed in OneK8s-fluxcd
-  should be read with it in mind.
+- **Two delivery planes to operate, and Flux itself installed two ways.** Argo
+  CD on AKS and Flux on AKS are both Microsoft-managed extensions; the Flux on
+  every other cloud is ours, pinned by chart version in
+  `foundations/<cloud>/variables.tf`. Two installs can drift — in version, in
+  defaults, in what they enforce — and the one thing that must not drift, what
+  the delivery plane is told about a cluster, is a single module both call.
+- **The AKS extension's multi-tenancy shapes the repository.** It is enforced by
+  default and kept: an application's Flux objects live in the configuration's
+  namespace, the workload is placed with `targetNamespace`, and everything
+  deploys as the `flux-applier` account Azure creates. That costs the
+  community-chart install nothing — `modules/fluxcd` creates the same account —
+  so one definition still serves both clusters, but manifests written for a
+  plain Flux install do not drop in unchanged.
+- **The Flux plane still has no tenant boundary.** Nothing deploys as a
+  controller any more — multi-tenancy is enforced and the applier is named —
+  but that applier is cluster-scoped, because one configuration in
+  `flux-system` has to reach a tenant's namespace. The Argo CD plane confines
+  its Applications to two repositories, one namespace and no cluster-scoped
+  resources through the `onek8s-platform` `AppProject`; this one does not.
+  What closes it is now a known, small step rather than a redesign — a
+  namespace-scoped configuration per tenant — and it is written up in
+  [fluxcd.md](../fluxcd.md) with what it would additionally need from
+  `modules/tenant-namespace`.
 - **"Deploy this everywhere" costs one commit per cluster** on the Flux plane,
   against one commit on the Argo CD plane. That asymmetry is data, not a defect
   to engineer away — flattening it by adding a fan-out layer would rebuild the
@@ -117,7 +146,18 @@ long-lived cluster credential on the hub, where `modules/argocd-spoke` uses a
 ServiceAccount token minted on the spoke itself. Worth revisiting as a third
 configuration once the first two have been run for a while.
 
-**The `Microsoft.Flux` AKS extension on Azure, Helm on AWS.** Rejected: it
-would make the Azure and AWS Flux installs differ in the very dimension being
-measured. One module, two identical installs, is what makes a difference
-between the clusters attributable to the cluster.
+**One install everywhere — the community chart on AKS too.** Rejected, though
+it was the first shape this took. Identical installs make any AKS-vs-EKS
+difference attributable to the cluster rather than to the packaging, which is
+worth something to the experiment; but it also means the cluster the real
+environments run is configured in a way those environments would not choose,
+and it gives up Azure-owned patching, the portal's GitOps blade and Azure Policy
+auditing on exactly the cluster where they matter. The platform already takes
+Argo CD as an extension on AKS for those reasons, and taking Flux any other way
+would have been inconsistent with its own precedent.
+
+The cost is real and is accepted: the two installs can differ in version and in
+defaults, and one of those defaults — multi-tenancy — shaped the delivery-plane
+repository. It is contained by giving both installs one contract module and one
+set of object names, and by the repository's CI asserting the rules that
+default imposes.

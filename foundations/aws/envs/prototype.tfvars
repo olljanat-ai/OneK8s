@@ -24,6 +24,11 @@ node_desired_size   = 1
 # each reads OneK8s-fluxcd for itself, from clusters/aws and clusters/azure —
 # which is the arrangement being compared against hub-and-spoke.
 #
+# Installed from the community chart, where AKS takes the Azure-managed
+# microsoft.flux extension. That difference is deliberate and is the second
+# thing this cluster proves: the delivery plane is the repository and the
+# contract, not the install.
+#
 #   aws-hello.onek8s.lol    Argo CD + Kargo, team-alpha, promoted from staging
 #   aws-hello2.onek8s.lol   Flux,            team-beta,  committed here
 #

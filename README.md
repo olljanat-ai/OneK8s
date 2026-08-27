@@ -10,7 +10,7 @@ via External Secrets Operator and per-tenant workload identities.
 
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
-│   ├── azure/              #   AKS (Cilium, Workload Identity, Argo CD, Flux, Portainer) + Key Vault (RBAC/ABAC)
+│   ├── azure/              #   AKS (Cilium, Workload Identity, Argo CD + Flux extensions, Portainer) + Key Vault (RBAC/ABAC)
 │   │                       #   ...and Azure SQL on the free offer, Entra-only (sql.tf)
 │   ├── aws/                #   EKS (Cilium chaining, IRSA, Flux) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
@@ -26,8 +26,13 @@ via External Secrets Operator and per-tenant workload identities.
 │   │   ├── gcp/            #   GSA + WI binding + IAM condition
 │   │   └── oci/            #   workload-identity IAM policy + secret-name prefix
 │   ├── argocd-spoke/       # Registers one cluster as a spoke of the Argo CD hub
-│   ├── fluxcd/             # Installs Flux on ONE cluster — the second delivery
-│   │                       #   plane, per cluster and nobody's spoke
+│   ├── fluxcd/             # Installs Flux on ONE cluster from the community
+│   │                       #   chart — the second delivery plane, per cluster
+│   │                       #   and nobody's spoke
+│   ├── fluxcd-aks/         #   ...the same plane on AKS, as the Azure-managed
+│   │                       #   microsoft.flux extension
+│   ├── fluxcd-cluster-vars/#   what a cluster tells that plane about itself —
+│   │                       #   one contract, both installs
 │   └── portainer-agent/    # Installs the Portainer Edge Agent on one cluster
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
@@ -207,11 +212,13 @@ apply`, and nothing is clicked together in the UI.
 
 ### ...and Flux, in the opposite shape
 
-AKS and EKS **also** run [Flux](https://fluxcd.io), installed per cluster by
-`modules/fluxcd` and reading
-[OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) directly. There
-is no hub on that plane and nothing registered between the clusters: each
-reconciles its own directory, `clusters/azure` and `clusters/aws`.
+AKS and EKS **also** run [Flux](https://fluxcd.io), installed per cluster and
+reading [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd)
+directly. There is no hub on that plane and nothing registered between the
+clusters: each reconciles its own directory, `clusters/azure` and
+`clusters/aws`. On AKS it is the Azure-managed `microsoft.flux` extension
+(`modules/fluxcd-aks`), as Argo CD is; elsewhere it is the community chart
+(`modules/fluxcd`) — one repository and one contract behind both.
 
 Both planes are installed on purpose and both stay. They deliver the same
 `hello` chart to two different tenants, on two hosts per cluster, so the
