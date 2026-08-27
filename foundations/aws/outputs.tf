@@ -72,3 +72,33 @@ output "observability_cluster_name" {
   description = "Value of the 'cluster' label this cluster's telemetry carries in Grafana Cloud, null when observability is disabled."
   value       = var.enable_observability ? local.observability_cluster_name : null
 }
+
+# --- Flux ---------------------------------------------------------------------
+# All null when enable_fluxcd is false. Nothing reads these — the Flux plane is
+# per cluster and has no equivalent of the gitops stack to consume them — so
+# they exist to answer "what is this cluster reconciling, and from where"
+# without a kubeconfig.
+output "fluxcd_namespace" {
+  description = "Namespace Flux runs in on this cluster (null when Flux is disabled)."
+  value       = var.enable_fluxcd ? module.fluxcd[0].namespace : null
+}
+
+output "fluxcd_repo_url" {
+  description = "Delivery-plane repository this cluster's Flux reconciles (null when Flux is disabled). It reads it directly: on this plane the cluster is nobody's spoke."
+  value       = var.enable_fluxcd ? module.fluxcd[0].repo_url : null
+}
+
+output "fluxcd_cluster_path" {
+  description = "Path in that repository holding this cluster's objects — the only path Terraform points Flux at (null when Flux is disabled)."
+  value       = var.enable_fluxcd ? module.fluxcd[0].cluster_path : null
+}
+
+output "fluxcd_tenant" {
+  description = "Tenant namespace the applications Flux delivers are released into (null when Flux is disabled)."
+  value       = var.enable_fluxcd ? module.fluxcd[0].tenant : null
+}
+
+output "fluxcd_cluster_vars" {
+  description = "The facts this cluster hands to every manifest in the delivery-plane repository through Flux's postBuild substitution — the Terraform half of OneK8s-fluxcd's platform-contract.yaml (null when Flux is disabled). Names, a domain and a key prefix: none of it is a secret."
+  value       = var.enable_fluxcd ? module.fluxcd[0].cluster_vars : null
+}
