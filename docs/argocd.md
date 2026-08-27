@@ -5,6 +5,12 @@ cluster extension** (`Microsoft.ArgoCD`), not on a self-managed Helm release.
 It is deployed by `foundations/azure/argocd.tf` together with the ingress that
 publishes its UI on `https://argocd.onek8s.lol`.
 
+This is the platform's *first* delivery plane and the one every tenant
+application uses today. AKS and EKS additionally run a second one — Flux,
+installed per cluster with no hub and nothing registered between them — which
+delivers the same chart to a different tenant so the two shapes can be compared
+while running. Nothing below is affected by it: see [fluxcd.md](fluxcd.md).
+
 ```
                        ┌──────────────── AKS (foundations/azure) ───────────────┐
  argocd.onek8s.lol     │                                                        │

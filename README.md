@@ -10,9 +10,9 @@ via External Secrets Operator and per-tenant workload identities.
 
 ```
 ├── foundations/            # Cluster + "vault" pairs — deployed independently
-│   ├── azure/              #   AKS (Cilium, Workload Identity, Argo CD, Portainer) + Key Vault (RBAC/ABAC)
+│   ├── azure/              #   AKS (Cilium, Workload Identity, Argo CD + Flux extensions, Portainer) + Key Vault (RBAC/ABAC)
 │   │                       #   ...and Azure SQL on the free offer, Entra-only (sql.tf)
-│   ├── aws/                #   EKS (Cilium chaining, IRSA) + Secrets Manager CMK
+│   ├── aws/                #   EKS (Cilium chaining, IRSA, Flux) + Secrets Manager CMK
 │   ├── gcp/                #   GKE (Dataplane V2, Workload Identity) + Secret Manager
 │   └── oci/                #   OKE (VCN-native pods + Cilium, Workload Identity) + OCI Vault
 ├── modules/
@@ -26,6 +26,13 @@ via External Secrets Operator and per-tenant workload identities.
 │   │   ├── gcp/            #   GSA + WI binding + IAM condition
 │   │   └── oci/            #   workload-identity IAM policy + secret-name prefix
 │   ├── argocd-spoke/       # Registers one cluster as a spoke of the Argo CD hub
+│   ├── fluxcd/             # Installs Flux on ONE cluster from the community
+│   │                       #   chart — the second delivery plane, per cluster
+│   │                       #   and nobody's spoke
+│   ├── fluxcd-aks/         #   ...the same plane on AKS, as the Azure-managed
+│   │                       #   microsoft.flux extension
+│   ├── fluxcd-cluster-vars/#   what a cluster tells that plane about itself —
+│   │                       #   one contract, both installs
 │   └── portainer-agent/    # Installs the Portainer Edge Agent on one cluster
 ├── tenants/                # ONE stack for all clouds — deployed independently
 │   ├── envs/               #   <env>.tfvars: every tenant, each with cloud = "..."
@@ -203,15 +210,39 @@ the `ApplicationSet`s, and every `Application` they generate on the hub and on
 each spoke) is YAML there. Adding an application is a commit, not a `terraform
 apply`, and nothing is clicked together in the UI.
 
+### ...and Flux, in the opposite shape
+
+AKS and EKS **also** run [Flux](https://fluxcd.io), installed per cluster and
+reading [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd)
+directly. There is no hub on that plane and nothing registered between the
+clusters: each reconciles its own directory, `clusters/azure` and
+`clusters/aws`. On AKS it is the Azure-managed `microsoft.flux` extension
+(`modules/fluxcd-aks`), as Argo CD is; elsewhere it is the community chart
+(`modules/fluxcd`) — one repository and one contract behind both.
+
+Both planes are installed on purpose and both stay. They deliver the same
+`hello` chart to two different tenants, on two hosts per cluster, so the
+difference on the cluster is the delivery plane and nothing else:
+
+| Cluster | Argo CD + Kargo — `team-alpha` | Flux — `team-beta` |
+|---|---|---|
+| AKS | https://azure-hello.onek8s.lol | https://azure-hello2.onek8s.lol |
+| EKS | https://aws-hello.onek8s.lol | https://aws-hello2.onek8s.lol |
+
+What is being compared — a hub with a promotion engine against independent
+per-cluster reconcilers — and what it costs on each side:
+[docs/fluxcd.md](docs/fluxcd.md), [ADR-0003](docs/adr/0003-flux-per-cluster-beside-the-hub.md).
+
 ## Applications
 
-Three repositories, split by what changes for what reason:
+Four repositories, split by what changes for what reason:
 
 | Repository | Owns |
 |---|---|
 | **OneK8s** (here) | The clusters and the platform: foundations, tenants, the hub, the root Application |
 | [OneK8s-argocd](https://github.com/olljanat-ai/OneK8s-argocd) | **Where and when** an application is deployed: the `AppProject`, the ApplicationSets, and the Kargo `Warehouse` and `Stage`s that decide which build each cluster runs |
-| [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) | **What** is deployed: the example applications, their charts and their images |
+| [OneK8s-fluxcd](https://github.com/olljanat-ai/OneK8s-fluxcd) | The same question answered without a hub: one directory per cluster, and the commit that says which build that cluster runs |
+| [OneK8s-hello](https://github.com/olljanat-ai/OneK8s-hello) | **What** is deployed: the example applications, their charts and their images. Both delivery planes deploy these, unchanged |
 
 The example is **hello**: a minimal .NET 10 page showing a welcome message and
 the value of a test secret, read out of the host cloud's own secret backend
@@ -297,6 +328,7 @@ cloud, without four kubeconfigs. Details, prerequisites and trade-offs:
 Full setup (state bootstrap, GitHub secrets, environment protection):
 [docs/getting-started.md](docs/getting-started.md).
 Design and trade-offs: [docs/architecture.md](docs/architecture.md).
+The two delivery planes, side by side: [docs/fluxcd.md](docs/fluxcd.md).
 Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-namespace/README.md).
 
 ## CI/CD
@@ -305,7 +337,9 @@ Tenant module reference: [modules/tenant-namespace/README.md](modules/tenant-nam
   optional cloud plans (`ENABLE_CLOUD_PLANS=true`). The Helm side moved with
   the charts: OneK8s-argocd renders the delivery plane (and asserts that
   production still waits for a person, and can still only take what staging has
-  run), OneK8s-hello renders the application charts.
+  run), OneK8s-fluxcd renders every cluster's overlay the way its own Flux
+  would (and fails on a substitution variable this repository has stopped
+  writing), OneK8s-hello renders the application charts.
 - **Deploy Foundations / Deploy Tenants / Deploy GitOps / Deploy Portainer** —
   separate pipelines; the prototype environment deploys on merge to `main`,
   other environments via `workflow_dispatch`, authenticated with cloud

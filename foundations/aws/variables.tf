@@ -131,3 +131,50 @@ variable "observability_collector_preset" {
   type        = string
   default     = "small"
 }
+
+# --- Flux ---------------------------------------------------------------------
+# The platform's second delivery plane. Unlike Argo CD, which reaches this
+# cluster from the hub on AKS (gitops/, modules/argocd-spoke), Flux is
+# installed here and reads the delivery-plane repository itself — this cluster
+# is nobody's spoke on that plane. See docs/fluxcd.md.
+variable "enable_fluxcd" {
+  description = "Install Flux on this cluster and point it at the OneK8s-fluxcd repository. Independent of the Argo CD hub: this cluster keeps its spoke registration and gains a delivery plane of its own, which is exactly the arrangement being compared."
+  type        = bool
+  default     = true
+}
+
+variable "fluxcd_repo_url" {
+  description = "Delivery-plane repository this cluster's Flux reconciles."
+  type        = string
+  default     = "https://github.com/olljanat-ai/OneK8s-fluxcd.git"
+}
+
+variable "fluxcd_branch" {
+  description = "Branch of that repository this cluster follows."
+  type        = string
+  default     = "main"
+}
+
+variable "fluxcd_tenant" {
+  description = "Tenant namespace the applications Flux delivers are released into. team-beta by default, where Argo CD's example applications go to team-alpha: two delivery planes on one cluster are much easier to tell apart when they do not share a namespace. The namespace must exist — the tenants stack creates it."
+  type        = string
+  default     = "team-beta"
+}
+
+variable "fluxcd_domain" {
+  description = "Wildcard domain the applications Flux delivers are published under, as '<cloud>-<app>.<domain>'."
+  type        = string
+  default     = "onek8s.lol"
+}
+
+variable "fluxcd_chart_version" {
+  description = "Version of the community 'flux2' chart, which pins the Flux controllers and their CRDs."
+  type        = string
+  default     = "2.19.0"
+}
+
+variable "fluxcd_sync_chart_version" {
+  description = "Version of the community 'flux2-sync' chart — the GitRepository and Kustomization that bootstrap this cluster."
+  type        = string
+  default     = "1.15.0"
+}

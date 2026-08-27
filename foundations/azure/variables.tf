@@ -503,3 +503,57 @@ variable "ingress_dashboard_hostname" {
   type        = string
   default     = "azure-traefik.onek8s.lol"
 }
+
+# --- Flux ---------------------------------------------------------------------
+# The platform's second delivery plane, installed on this cluster and on EKS as
+# two independent copies — no hub, nothing registered between them. Here it is
+# the Azure-managed microsoft.flux extension, as Argo CD is; the other clouds
+# install the same delivery plane from the community chart. See docs/fluxcd.md
+# for why both planes are installed at once and what is being compared.
+variable "enable_fluxcd" {
+  description = "Install Flux on this cluster and point it at the OneK8s-fluxcd repository. Independent of enable_argocd: the two delivery planes are installed side by side on purpose, and either can be turned off without touching the other."
+  type        = bool
+  default     = true
+}
+
+variable "fluxcd_repo_url" {
+  description = "Delivery-plane repository this cluster's Flux reconciles."
+  type        = string
+  default     = "https://github.com/olljanat-ai/OneK8s-fluxcd.git"
+}
+
+variable "fluxcd_branch" {
+  description = "Branch of that repository this cluster follows."
+  type        = string
+  default     = "main"
+}
+
+variable "fluxcd_tenant" {
+  description = "Tenant namespace the applications Flux delivers are released into. team-beta by default, where Argo CD's example applications go to team-alpha: two delivery planes on one cluster are much easier to tell apart when they do not share a namespace. The namespace must exist — the tenants stack creates it."
+  type        = string
+  default     = "team-beta"
+}
+
+variable "fluxcd_domain" {
+  description = "Wildcard domain the applications Flux delivers are published under, as '<cloud>-<app>.<domain>'."
+  type        = string
+  default     = "onek8s.lol"
+}
+
+variable "fluxcd_release_train" {
+  description = "Release train of the microsoft.flux extension. Unlike the Argo CD extension, Flux on AKS is generally available, so 'Stable' rather than 'Preview'."
+  type        = string
+  default     = "Stable"
+}
+
+variable "fluxcd_extension_version" {
+  description = "Pin the Flux extension to a version (null = install the latest of the release train and let Azure auto-upgrade it, which is the reason for taking an extension in the first place)."
+  type        = string
+  default     = null
+}
+
+variable "fluxcd_enforce_multi_tenancy" {
+  description = "Keep the Flux extension's multi-tenancy enforcement, which is on by default: no cross-namespace source references, and the controllers deploy by impersonating the flux-applier ServiceAccount rather than as themselves. The delivery-plane repository is written for it. Setting it to false makes the controllers cluster-admin, as they are on the community-chart install the other clouds use."
+  type        = bool
+  default     = true
+}

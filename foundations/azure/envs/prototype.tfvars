@@ -122,3 +122,22 @@ argocd_retained_configuration_settings = {
 # grafana_cloud_metrics_url = "https://prometheus-prod-24-prod-eu-west-2.grafana.net/api/prom/push"
 # grafana_cloud_logs_url    = "https://logs-prod-012.grafana.net/loki/api/v1/push"
 # grafana_cloud_traces_url  = "https://tempo-prod-01-prod-eu-west-0.grafana.net:443"
+
+# Flux: the second delivery plane, on this cluster and on EKS as two
+# independent installs — no hub, nothing registered between them, and each one
+# reading OneK8s-fluxcd for itself. It runs beside Argo CD rather than instead
+# of it, which is the whole point: the same hello chart is delivered twice on
+# this cluster, to two tenants, on two hosts.
+#
+#   azure-hello.onek8s.lol    Argo CD + Kargo, team-alpha
+#   azure-hello2.onek8s.lol   Flux,            team-beta
+#
+# team-beta already exists here (tenants/envs/prototype.tfvars), and its test
+# secret is written by the Renew Certificate workflow run with tenant:
+# team-beta. The A record for azure-hello2 is pointed at the ingress by hand,
+# like every other host. See docs/fluxcd.md.
+# Taken as the Azure-managed microsoft.flux extension, on the Stable train with
+# no version pinned — so Azure patches Flux here the way it patches Argo CD.
+# EKS installs the same delivery plane from the community chart.
+enable_fluxcd = true
+fluxcd_tenant = "team-beta"

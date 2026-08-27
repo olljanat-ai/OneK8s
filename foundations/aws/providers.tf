@@ -24,3 +24,18 @@ provider "helm" {
     }
   }
 }
+
+# Same credentials as the helm provider, for the handful of plain Kubernetes
+# objects this stack owns (the ConfigMap of cluster facts modules/fluxcd hands
+# to Flux). Only ordinary resources are used, never kubernetes_manifest, so the
+# cluster has to be reachable at apply time but not at plan time.
+provider "kubernetes" {
+  host                   = aws_eks_cluster.this.endpoint
+  cluster_ca_certificate = base64decode(aws_eks_cluster.this.certificate_authority[0].data)
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", aws_eks_cluster.this.name]
+  }
+}
