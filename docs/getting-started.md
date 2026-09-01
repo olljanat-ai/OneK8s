@@ -250,6 +250,11 @@ must be in place around it, none of which this stack owns:
    Leave `argocd_sso_client_id` unset and the built-in admin account is the
    only way in.
 
+   That map is the delivery plane's one guest list: the same groups are
+   translated into Kargo's system roles (`role:readonly` → `viewers`, so a
+   group that reads Argo CD reads Kargo), which is why there is no second
+   list to fill in below. See [kargo.md](kargo.md#who-may-use-it).
+
 No machine account is created: nothing outside the cluster syncs an application,
 because promotion belongs to Kargo, which the same apply installs beside Argo CD
 (`enable_kargo`). Kargo needs one thing that is not configuration — a Git

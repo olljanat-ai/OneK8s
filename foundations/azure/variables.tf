@@ -295,11 +295,56 @@ variable "kargo_sso_tenant_id" {
   default     = null
 }
 
+variable "kargo_rbac_argocd_role_map" {
+  description = <<-EOT
+    Argo CD role -> the Kargo system roles it also grants, applied to every
+    entry of argocd_rbac_group_roles so that one grant covers both consoles: a
+    group Argo CD binds to `role:readonly` reads Kargo too, rather than signing
+    in and getting `projects.kargo.akuity.io is forbidden`.
+
+    A list rather than a single role because Kargo's system roles are not a
+    ladder: `project_creators` is the *minimal* user role plus "may create
+    Projects", not read-everything, so an Argo CD org-admin needs `viewers`
+    alongside it or it would see less than a read-only user does. A user's
+    permissions are the union of every ServiceAccount they match, which is
+    exactly how Kargo reads two roles on one group.
+
+    The result is unioned with kargo_rbac_groups, which stays the way to grant
+    a group Kargo alone cares about. An Argo CD role missing from this map
+    carries nothing over — adding a role to Argo CD must not silently grant
+    something in Kargo — so set this to {} to keep the two lists independent.
+
+    Note this covers *mapped groups only*. Argo CD additionally falls back to
+    argocd_rbac_default_role for an authenticated identity that matches no
+    group, and Kargo has no equivalent of that catch-all: it maps users to
+    ServiceAccounts by claim, so "everybody" is not something it can express.
+    A group that everyone is in, mapped here or in kargo_rbac_groups.viewers,
+    is how that same reach is granted.
+  EOT
+  type        = map(list(string))
+  default = {
+    "role:admin"     = ["admins"]
+    "role:org-admin" = ["project_creators", "viewers"]
+    "role:readonly"  = ["viewers"]
+  }
+
+  validation {
+    condition = alltrue([
+      for role in flatten(values(var.kargo_rbac_argocd_role_map)) :
+      contains(["admins", "project_creators", "users", "viewers"], role)
+    ])
+    error_message = "Values must be Kargo system roles: admins, project_creators, users, viewers."
+  }
+}
+
 variable "kargo_rbac_groups" {
   description = <<-EOT
-    Entra ID group object IDs bound to each of Kargo's four system roles. These
-    are cluster-wide capabilities — "may create Projects", "may see
-    everything" — and deliberately not the answer to "who may promote to
+    Entra ID group object IDs bound to each of Kargo's four system roles, on
+    top of whatever kargo_rbac_argocd_role_map carries over from
+    argocd_rbac_group_roles. Groups that hold a role in both consoles belong in
+    argocd_rbac_group_roles alone; this is for the ones Kargo alone cares
+    about. These are cluster-wide capabilities — "may create Projects", "may
+    see everything" — and deliberately not the answer to "who may promote to
     production": that is a Role in the Project's own namespace, which lives in
     the delivery-plane repository beside the Stage it guards, so a change to it
     is a reviewed commit rather than a `terraform apply`.

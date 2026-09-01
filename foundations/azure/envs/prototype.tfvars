@@ -39,24 +39,34 @@ argocd_sso_client_id               = "6598a87b-227b-4f20-9f3b-dbdd74604492"
 enable_kargo   = true
 kargo_hostname = "kargo.onek8s.lol"
 
-# Entra group object ID -> Kargo system role. These are cluster-wide
-# capabilities; who may promote the hello application to production is a Role
-# in that Project's namespace, and lives in OneK8s-argocd beside the Stage it
-# guards.
+# Kargo's cluster-wide roles are not listed here at all: they are derived from
+# argocd_rbac_group_roles below through kargo_rbac_argocd_role_map, whose
+# default translation is the one this environment wanted anyway —
 #
-# The same group that is role:admin in Argo CD below, so one group administers
-# the whole delivery plane rather than two lists drifting apart. Nothing else
-# is mapped yet, and Kargo grants an unmapped identity nothing at all — not
-# even the read that lists Projects, which is what a signed-in user with no
-# entry here runs into first ("projects.kargo.akuity.io is forbidden"). The two
-# remaining Argo CD groups are the obvious next entries when somebody who is
-# not a platform admin needs the UI:
+#   46a1d986-…  role:admin      -> admins                      administers both
+#   59a92e0b-…  role:org-admin  -> project_creators + viewers  reads, and may
+#                                                              create Projects
+#   4301eb89-…  role:readonly   -> viewers                     reads the
+#                                                              release path
 #
-#   project_creators = ["59a92e0b-f653-4d5d-bdba-473eb331a5be"]  # role:org-admin
-#   viewers          = ["4301eb89-fc3d-4836-95d1-41b497f102ad"]  # role:readonly
-kargo_rbac_groups = {
-  admins = ["46a1d986-c8a7-42d3-b2a4-a88f789f7ecc"]
-}
+# — so a person granted access to the delivery plane is granted it once. The
+# list used to be maintained twice and had already drifted: only the admins
+# group was mapped, which left everybody else with a valid Kargo sign-in that
+# could see nothing at all, since Kargo gives an unmapped identity not even the
+# read that lists Projects ("projects.kargo.akuity.io is forbidden").
+#
+# Argo CD's other half of read-only — argocd_rbac_default_role, which catches
+# an authenticated identity in none of these groups — has no Kargo counterpart:
+# Kargo matches users to roles by ID token claim, so there is no "everybody"
+# to bind. Whoever should read Kargo needs to be in a group that is mapped.
+#
+# kargo_rbac_groups remains, for a group only Kargo cares about:
+#
+#   kargo_rbac_groups = { viewers = ["<group object id>"] }
+#
+# Who may promote the hello application to production is not any of this: it is
+# a Role in that Project's namespace, and lives in OneK8s-argocd beside the
+# Stage it guards.
 
 # Azure SQL on the free offer: 100,000 vCore seconds and 32 GB a month, with
 # the database auto-pausing rather than billing when that runs out. Entra-only
