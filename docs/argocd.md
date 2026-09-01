@@ -126,6 +126,16 @@ Roles come out of two variables:
   same group cannot be bound twice. An authenticated identity in none of the
   mapped groups falls through to `argocd_rbac_default_role`, `role:readonly`.
 
+**This map also grants Kargo.** Argo CD and Kargo are two consoles onto one
+delivery plane, so access to it is granted once: `kargo_rbac_argocd_role_map`
+translates each Argo CD role into Kargo system roles (`role:admin` → `admins`,
+`role:org-admin` → `project_creators` + `viewers`, `role:readonly` →
+`viewers`), and a group bound here holds the matching role in both. A role missing from that map carries
+nothing over, and the fallback does not carry over at all — Kargo has no
+equivalent of `argocd_rbac_default_role`, so an identity that reads Argo CD only
+by falling through gets nothing in Kargo. See
+[kargo.md](kargo.md#who-may-use-it).
+
 The built-in `admin` account still exists. Set
 `argocd_extra_configuration = { "configs.cm.admin\\.enabled" = "false" }` to
 close it once group access is proven to work — do that only after signing in

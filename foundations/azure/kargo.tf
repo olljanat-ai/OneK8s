@@ -146,10 +146,13 @@ locals {
   # A single registration declaring both serves both clients, and
   # var.kargo_sso_cli_client_id covers the case where it does not.
   #
-  # Group object IDs map to Kargo's four system roles. Those are cluster-wide
-  # ("may create Projects", "may see everything"); who may promote a *stage* is
-  # not decided here at all — it is a Role in the Project's namespace, and so
-  # it lives in the delivery-plane repository with the Stage it guards.
+  # Group object IDs map to Kargo's four system roles, and most of them arrive
+  # from argocd_rbac_group_roles rather than being listed a second time (see
+  # kargo_inherited_rbac_groups below), so a group that reads Argo CD reads
+  # Kargo. Those roles are cluster-wide ("may create Projects", "may see
+  # everything"); who may promote a *stage* is not decided here at all — it is
+  # a Role in the Project's namespace, and so it lives in the delivery-plane
+  # repository with the Stage it guards.
   kargo_oidc = {
     enabled     = true
     issuerURL   = "https://login.microsoftonline.com/${local.kargo_sso_tenant_id}/v2.0"
@@ -185,15 +188,69 @@ locals {
     dex = { enabled = false }
   }
 
+  # Kargo's four system roles, in the order the chart names them. Written out
+  # because the derivation below has to produce a key for every one of them,
+  # including the ones nothing maps to.
+  kargo_system_roles = ["admins", "project_creators", "users", "viewers"]
+
+  # What var.kargo_rbac_groups says on its own, as a map rather than an object,
+  # so it can be indexed by role name below.
+  kargo_declared_rbac_groups = {
+    admins           = var.kargo_rbac_groups.admins
+    project_creators = var.kargo_rbac_groups.project_creators
+    users            = var.kargo_rbac_groups.users
+    viewers          = var.kargo_rbac_groups.viewers
+  }
+
+  # The same groups Argo CD binds, carried over to Kargo's equivalent role.
+  #
+  # Two consoles publish one delivery plane, and a person is granted access to
+  # it once: the group Argo CD calls role:readonly should be able to read the
+  # release path that produced what it is looking at, not sign in to Kargo and
+  # be told "projects.kargo.akuity.io is forbidden". Before this, that parity
+  # was a comment in an environment's tfvars asking somebody to keep two lists
+  # in step by hand — and the prototype's had already drifted: three groups in
+  # argocd_rbac_group_roles, one in kargo_rbac_groups.
+  #
+  # So argocd_rbac_group_roles is the single list of who is who, and
+  # var.kargo_rbac_argocd_role_map says what each Argo CD role means to Kargo.
+  # An Argo CD role with no entry in that map (a custom p-line role that is
+  # about repositories, say) carries nothing over, which is why the map is
+  # configuration rather than a fixed translation: adding a role to Argo CD
+  # must not silently grant anything in Kargo.
+  #
+  # One Argo CD role may name several Kargo roles, because Kargo's four are not
+  # a ladder: project_creators is the *minimal* user role plus "may create
+  # Projects", so an Argo CD org-admin is mapped to viewers as well or it would
+  # read less of Kargo than a role:readonly user does.
+  kargo_inherited_rbac_groups = {
+    for role in local.kargo_system_roles :
+    role => [
+      for group, argocd_role in var.argocd_rbac_group_roles :
+      group if contains(lookup(var.kargo_rbac_argocd_role_map, argocd_role, []), role)
+    ]
+  }
+
+  # The union, not an override: kargo_rbac_groups stays the way to grant a
+  # group Kargo alone cares about, and a group that arrives from both sides is
+  # listed once. A group mapped to two Kargo roles ends up in both, which is
+  # what Kargo does with it anyway — a user's permissions are the union of
+  # every ServiceAccount they match, so the wider role simply wins.
+  #
+  # sort() only so a plan does not churn on map iteration order.
+  kargo_effective_rbac_groups = {
+    for role in local.kargo_system_roles :
+    role => sort(distinct(concat(
+      local.kargo_declared_rbac_groups[role],
+      local.kargo_inherited_rbac_groups[role],
+    )))
+  }
+
   # An empty group list must not render as an empty claim, which Kargo would
   # read as "this claim matches nothing" — the key is left out instead.
   kargo_group_claims = {
-    for role, groups in {
-      admins           = var.kargo_rbac_groups.admins
-      project_creators = var.kargo_rbac_groups.project_creators
-      users            = var.kargo_rbac_groups.users
-      viewers          = var.kargo_rbac_groups.viewers
-    } : role => length(groups) > 0 ? { groups = groups } : {}
+    for role, groups in local.kargo_effective_rbac_groups :
+    role => length(groups) > 0 ? { groups = groups } : {}
   }
 
   kargo_values = {

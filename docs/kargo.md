@@ -86,11 +86,6 @@ enable_kargo                     = true
 kargo_hostname                   = "kargo.onek8s.lol"   # platform wildcard, A record by hand
 kargo_sso_client_id              = "<app registration>" # Entra ID, as Argo CD's UI uses
 kargo_git_credential_secret_name = "platform-kargo-git"  # Key Vault, read by External Secrets
-kargo_rbac_groups = {
-  admins           = ["<group object id>"] # the same group Argo CD calls role:admin
-  project_creators = ["<group object id>"]
-  viewers          = ["<group object id>"]
-}
 ```
 
 - **TLS terminates at Traefik**, as everywhere else: the API serves plain HTTP
@@ -124,25 +119,67 @@ kargo_rbac_groups = {
   platform: `kargo.tf` builds a platform identity, an ESO `SecretStore` and an
   `ExternalSecret` that assembles the Secret Kargo looks up, so the PAT reaches
   neither Terraform's state nor a plan output. See *The one credential*.
-- **`kargo_rbac_groups` is cluster-wide capability** ("may create Projects",
-  "may see everything"). Who may promote *the hello application to production*
-  is not here: it is a `Role` in the Project's namespace, and it lives beside the
-  Stage it guards. **Something has to be mapped**, and in `prototype` that is one
-  entry: the group Argo CD binds to `role:admin` is Kargo's `admins`, so one
-  group administers the whole delivery plane instead of two lists drifting apart.
-  Kargo grants an unmapped identity nothing whatsoever — not read, not the list
-  of Projects — so an empty `kargo_rbac_groups` is a working sign-in that can
-  see nothing.
+- **Who may use Kargo is not configured here.** It is derived from
+  `argocd_rbac_group_roles`, so the group that reads Argo CD reads Kargo and
+  there is no second list to keep in step. See *Who may use it* below.
 
 `enable_kargo` is ignored when `enable_argocd` is false — every Stage's health
 and its last promotion step is an Argo CD Application, so a Kargo with no Argo CD
 would have nothing to promote onto.
 
+## Who may use it
+
+Argo CD and Kargo are two consoles onto one delivery plane, so a person is
+granted access to it **once**. `argocd_rbac_group_roles` is that one list, and
+`kargo_rbac_argocd_role_map` says what each Argo CD role means to Kargo:
+
+| Argo CD role | Kargo system roles | What that is |
+|---|---|---|
+| `role:admin` | `admins` | Everything, cluster-wide. Administers both consoles. |
+| `role:org-admin` | `project_creators` + `viewers` | Read-only cluster-wide, plus create `Project`s (and admin the ones they create). |
+| `role:readonly` | `viewers` | Read-only, cluster-wide — the release path, the Freight, the promotion history. No `Secret`s. |
+
+So the group that reads Argo CD reads Kargo, with no second list to keep in
+step. Nothing else carries over: an Argo CD role absent from the map grants
+nothing in Kargo, which is the point — adding a custom `p, role:…` line to Argo
+CD must not silently hand out cluster-wide reads on the promotion engine. Set
+the map to `{}` to sever the link entirely.
+
+One Argo CD role maps to a *list* because Kargo's four roles are not a ladder:
+`project_creators` is the minimal `users` role plus "may create Projects", not
+read-everything, so an org-admin mapped to it alone would see less of Kargo than
+a read-only user does. Kargo takes the union of every `ServiceAccount` an
+identity matches, so naming two roles is simply two matches.
+
+`kargo_rbac_groups` still exists and is **unioned** with what is derived, for a
+group only Kargo cares about:
+
+```hcl
+kargo_rbac_groups = { viewers = ["<group object id>"] }
+```
+
+Two caveats worth knowing before somebody reports that they cannot see
+anything:
+
+- **Kargo has no `policy.default`.** Argo CD's read-only reach has two halves:
+  the groups bound to `role:readonly`, and `argocd_rbac_default_role`, which
+  catches every authenticated identity in *none* of the mapped groups. Only the
+  first half has a Kargo counterpart. Kargo maps users to `ServiceAccount`s by
+  matching ID token claims, and there is no claim that means "everybody", so an
+  unmapped identity gets nothing whatsoever — not read, not even the list of
+  `Project`s (`projects.kargo.akuity.io is forbidden`). Whoever should read
+  Kargo has to be **in a group that is mapped**.
+- **These are cluster-wide capabilities.** Who may promote *the hello
+  application to production* is not here at all: it is a `Role` in that
+  Project's namespace, and it lives in the delivery-plane repository beside the
+  Stage it guards, so changing it is a reviewed commit rather than an apply.
+  `viewers` reads that Stage; it does not open its gate.
+
 ## The app registration
 
 Kargo talks to Entra ID directly — no Dex, no client secret, no Graph call. It
 requests `openid profile email`, reads the ID token that comes back, and matches
-its claims against `kargo_rbac_groups`. Everything it needs, therefore, has to
+its claims against the group mapping above. Everything it needs, therefore, has to
 already be *in that token*, which is a property of the registration rather than
 of the request.
 
@@ -150,7 +187,7 @@ of the request.
 |---|---|
 | **Authentication → Single-page application →** `https://kargo.onek8s.lol/login` | where the UI's browser is sent back to. **Not** the *Web* platform — see below |
 | **Authentication → Mobile and desktop →** `http://localhost/auth/callback` | `kargo login --sso` listens on a loopback port; Entra allows an arbitrary port here only on this platform, and only for a public client |
-| **Token configuration → Add groups claim** → *Groups assigned to the application* (or *Security groups*), **ID** token, formatted as **Group ID** | `kargo_rbac_groups` is a list of group **object IDs**, matched against the `groups` claim. No claim, no roles — a valid sign-in that can see nothing |
+| **Token configuration → Add groups claim** → *Groups assigned to the application* (or *Security groups*), **ID** token, formatted as **Group ID** | The role mapping is a list of group **object IDs**, matched against the `groups` claim. No claim, no roles — a valid sign-in that can see nothing |
 | **Token configuration → Add optional claim → ID →** `email` | `usernameClaim` is `email`, so this is the name on every Promotion Kargo records. Entra emits it only when asked, and only for a user who has a mail address; a directory of `.onmicrosoft.com` accounts with no mailbox will want `preferred_username` in `kargo.tf` instead |
 
 No client secret, no implicit grant, and no API permission beyond the delegated
@@ -458,7 +495,7 @@ Common causes, in the order they usually happen:
 | a promotion succeeds but the page is unchanged | the chart source's `targetRevision` moved; give the ApplicationSet's git generator a moment, or check its `revision` |
 | Entra refuses the sign-in with `AADSTS650053` | something is still requesting the `groups` scope — `api.oidc.additionalScopes` in `kargo_extra_values`, or a chart version whose default `kargo.tf` no longer overrides |
 | the browser returns from Entra and then shows `AADSTS9002326` | the UI's redirect URI is registered under *Web* rather than *Single-page application* |
-| sign-in works, then `projects.kargo.akuity.io is forbidden: list is not permitted` | the identity matched no entry in `kargo_rbac_groups`, and Kargo gives an unmapped user nothing — not even the read that lists Projects. Either the group is not mapped, or the ID token carries no `groups` claim (not configured on *that* registration, or a group-overage `_claim_names` pointer), or the mapping holds a display name where an object ID belongs |
+| sign-in works, then `projects.kargo.akuity.io is forbidden: list is not permitted` | the identity matched no group in `argocd_rbac_group_roles` (through `kargo_rbac_argocd_role_map`) or `kargo_rbac_groups`, and Kargo gives an unmapped user nothing — not even the read that lists Projects. Note that falling back the way Argo CD does is not available here: `argocd_rbac_default_role` has no Kargo counterpart (*Who may use it*). Otherwise: the Argo CD role the group holds is not in the map, or the ID token carries no `groups` claim (not configured on *that* registration, or a group-overage `_claim_names` pointer), or the mapping holds a display name where an object ID belongs |
 
 ## Known gaps
 
@@ -489,3 +526,10 @@ Common causes, in the order they usually happen:
 - **The chart version is pinned by hand** (`kargo_chart_version`). Deliberate —
   a promotion engine that upgrades itself unannounced is one nobody can reason
   about — but it means somebody has to bump it.
+- **Read access matches Argo CD only for *mapped* groups.** A group bound to
+  `role:readonly` is now a Kargo `viewer` automatically, but Argo CD's other
+  half — `argocd_rbac_default_role`, which catches an authenticated identity in
+  no group at all — has no counterpart: Kargo matches users to roles by ID
+  token claim and there is no claim meaning "everybody" (*Who may use it*). So
+  somebody who reads Argo CD only by falling through still sees nothing in
+  Kargo. Closing it means a group everyone is in, mapped like any other.
